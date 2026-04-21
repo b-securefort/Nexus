@@ -1,0 +1,148 @@
+Manual findings but it is expected that Nexus should be able to do these
+1. Easily run az cli commands, Az powershell commands, Azure resource graph query.
+It shouldnt give answer like this, it should try and execute the get commands after asking me 
+
+Current Output:
+Me:
+check the number of subscriptions in my azure environment
+Nexus:
+search_kb
+completed
+I couldn’t find any KB documentation that explains how to check the number of Azure subscriptions in your environment.
+
+If you want, I can:
+- search Microsoft Learn for the exact Azure CLI / PowerShell steps, or
+- help you with the general approach right here.
+
+Common ways to check:
+- **Azure portal**: Search for **Subscriptions**
+- **Azure CLI**: `az account list --output table`
+- **PowerShell**: `Get-AzSubscription`
+
+KB source checked:
+- No relevant KB match found.
+
+2. Should be able to connect to Microsoft docs MCP and Azure MCP
+3. Check commands from Microsoft docs if it doesnt know the syntax, or if it goes wrong in the first attempt
+
+================================================================================
+E2E TEST RESULTS — 20 Chat Scenarios (2026-04-21)
+================================================================================
+14 OK | 4 Timed Out (approval-blocked) | 1 Content Filter | 1 Skipped (empty)
+Avg response: ~8.5s for non-approval tools, ~120s+ for approval-blocked
+Tools used: search_kb(15), read_learnings(9), fetch_ms_docs(7), az_resource_graph(7), read_kb_file(2), update_learnings(1)
+
+── BUGS ─────────────────────────────────────────────────────────────────────────
+
+BUG-1: Approval-requiring tools block the SSE stream indefinitely
+  Tests 6,7,8,14 all timed out at ~120s. When the agent calls az_cli or run_shell,
+  the SSE stream hangs at `approval_required` and the client can't approve
+  because it's still reading the same stream. The approval event arrives but
+  events=[]: the test client never saw it because httpx iter_lines() didn't
+  flush the approval event before blocking on the next read.
+  ROOT CAUSE: The test script's parse_sse approach reads the full stream
+  synchronously. But more importantly, the backend blocks the SSE generator
+  on `await wait_for_approval()`, so the approval_required event and
+  subsequent events are in the same HTTP response. The client must approve
+  via a *separate* HTTP call while the stream is still open. The test script
+  (and potentially the terminal client) need to handle SSE in a separate thread.
+  IMPACT: Terminal client will also hang on approval if not threaded.
+  FIX NEEDED: Terminal client main.py must read SSE in a background thread
+  so it can prompt for approval and POST the resolution while the stream
+  continues. The e2e test script also needs this pattern.
+
+BUG-2: Content filter on repeated characters (5000x 'x')
+  Test 20 sent 5000 'x' chars — Azure OpenAI flagged it as violence:high and
+  returned content_filter error. The backend propagates this as an SSE error
+  event but doesn't sanitize or provide a user-friendly message.
+  FIX NEEDED: Catch content_filter errors in orchestrator and return a
+  friendlier message like "Your message was flagged by content filtering.
+  Please rephrase." Also consider adding input length validation at the API
+  layer (e.g., max 4000 chars).
+
+── ISSUES ───────────────────────────────────────────────────────────────────────
+
+ISSUE-1: Agent never calls az_cli proactively for simple queries
+  Tests 6 ("What is my current Azure CLI account?") and 7 ("What is the date?")
+  should have triggered az_cli or run_shell calls, but they timed out — meaning
+  the agent *did* try to call them (approval-blocked). This is actually correct
+  behavior — it's using the right tools. The problem is only the test harness.
+  STATUS: Working as designed, just needs the approval flow fix (BUG-1).
+
+ISSUE-2: Cost query (Test 8) hangs on approval
+  "Show me the cost summary for last month" — the agent tried to call a tool
+  that requires approval (likely az_cli for cost management). Same as BUG-1.
+  The agent correctly follows the tool hierarchy (tried az_resource_graph
+  first per the hierarchy, then fell back to az_cli for cost data which
+  requires approval). This is correct behavior blocked by BUG-1.
+
+ISSUE-3: Agent calls read_learnings + fetch_ms_docs before every Azure query
+  Tests 4,5,9,10,13,16 all show read_learnings as the first tool call, then
+  often fetch_ms_docs before the actual query. This adds 2-4s overhead per
+  request. Consider:
+  a) Injecting learnings into the system prompt (already done — so the
+     explicit read_learnings call is redundant)
+  b) Only calling fetch_ms_docs when the agent doesn't know the syntax
+  IMPACT: Performance — avg 10-15s for Azure queries vs 4-6s for KB queries.
+
+ISSUE-4: Test 15 ("What skills are available?") doesn't know about skills
+  The agent searched the KB 3 times but couldn't find skill info. Skills are
+  a system concept, not a KB topic. The agent should use introspection to
+  list available tools/skills, or we need a tool that lists them.
+  FIX: Add a `list_skills` tool or add skill info to the system prompt.
+
+── ENHANCEMENTS ─────────────────────────────────────────────────────────────────
+
+ENH-1: Add input validation at API layer
+  - Max message length (e.g., 4000 chars)
+  - Reject empty messages with a 400 error
+  - Currently empty messages are only caught client-side
+
+ENH-2: Reduce redundant read_learnings calls
+  Learnings are already injected into the system prompt via get_learnings_content().
+  The agent still calls read_learnings explicitly because the learning policy
+  says "Always check read_learnings before executing commands." This is
+  wasteful since the content is already in the system prompt.
+  FIX: Update the system prompt learning policy to say "Learnings are already
+  loaded above — do NOT call read_learnings unless you need to verify the
+  latest content after updating."
+
+ENH-3: Friendlier content filter error messages
+  When Azure OpenAI returns a content_filter error, show a user-friendly
+  message instead of the raw API error JSON.
+
+ENH-4: Add skill/tool introspection tool
+  Agent can't answer "what skills are available?" — needs a list_skills
+  or list_available_tools tool, or inject this info into the system prompt.
+
+ENH-5: Terminal client needs threaded SSE for approval flow
+  The terminal client's chat_stream() is synchronous — it will hang when
+  an approval is required, same as the test script. Needs to read SSE in
+  a background thread and prompt for approval inline.
+
+── POSITIVE FINDINGS ────────────────────────────────────────────────────────────
+
+GOOD-1: Resource Graph is used correctly as first choice
+  Tests 4,5,9,10,13,16 all used az_resource_graph for read queries. The tool
+  hierarchy (Resource Graph > Az CLI > REST API) is being followed.
+
+GOOD-2: Multi-tool orchestration works well
+  Test 13 ("What Azure services are deployed?") used 7 tools in sequence:
+  read_learnings → search_kb → fetch_ms_docs → search_kb → read_kb_file
+  → az_resource_graph → update_learnings. Complex multi-step reasoning works.
+
+GOOD-3: KB search and retrieval works correctly
+  Tests 1,2,3 all returned accurate KB content. The search found relevant
+  docs and the agent summarized them well.
+
+GOOD-4: MS docs lookup works
+  Tests 4,5,11 successfully used fetch_ms_docs to look up Azure CLI syntax
+  before executing commands. The "check docs first" policy is being followed.
+
+GOOD-5: Learnings system works end-to-end
+  Test 12 read learnings successfully, Test 13 wrote a new learning after
+  discovering Azure services. The self-learning loop is functional.
+
+GOOD-6: Conversation continuity works
+  Test 18 (follow-up "Tell me more") correctly used the previous conversation
+  context and expanded on the earlier response.

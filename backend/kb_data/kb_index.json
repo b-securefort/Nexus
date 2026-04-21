@@ -1,0 +1,26 @@
+[
+  {
+    "path": "kb/adrs/adr-001-multi-region.md",
+    "title": "ADR 001: Multi-Region Active-Active Architecture",
+    "summary": "Decision to run active-active across East US 2 and West Europe with Azure Front Door",
+    "tags": ["azure", "multi-region", "adr", "architecture"]
+  },
+  {
+    "path": "kb/patterns/circuit-breaker.md",
+    "title": "Circuit Breaker Pattern",
+    "summary": "Circuit breaker pattern for preventing cascading failures in distributed systems",
+    "tags": ["pattern", "resilience", "circuit-breaker"]
+  },
+  {
+    "path": "kb/runbooks/incident-response.md",
+    "title": "Incident Response Runbook",
+    "summary": "Step-by-step incident response process with severity levels and Azure CLI commands",
+    "tags": ["runbook", "incident", "operations"]
+  },
+  {
+    "path": "kb/platform/azure-overview.md",
+    "title": "Azure Platform Overview",
+    "summary": "Core Azure services, naming conventions, resource groups, and tagging standards",
+    "tags": ["azure", "platform", "standards"]
+  }
+]

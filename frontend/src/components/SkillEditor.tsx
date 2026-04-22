@@ -80,12 +80,12 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-lg font-semibold text-zinc-100">
+      <h2 className="text-lg font-semibold text-base-100">
         {isEdit ? "Edit Skill" : "Create Skill"}
       </h2>
 
       {error && (
-        <div className="flex items-center gap-2 bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-sm text-red-300">
+        <div className="flex items-center gap-2 bg-red-950/40 border border-red-800/40 rounded-xl px-3 py-2.5 text-sm text-red-300">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}
         </div>
@@ -93,7 +93,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
 
       {/* Name */}
       <div>
-        <label className="block text-sm font-medium text-zinc-400 mb-1">
+        <label className="block text-sm font-medium text-base-400 mb-1">
           Name (slug)
         </label>
         <input
@@ -104,16 +104,16 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
           placeholder="my-architect"
           pattern="^[a-z0-9][a-z0-9-]{0,63}$"
           required
-          className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 text-sm"
+          className="w-full bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2.5 text-base-100 placeholder-base-600 focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 text-sm"
         />
-        <p className="text-xs text-zinc-500 mt-1">
+        <p className="text-xs text-base-600 mt-1.5">
           Lowercase alphanumeric + hyphens, 1-64 chars
         </p>
       </div>
 
       {/* Display name */}
       <div>
-        <label className="block text-sm font-medium text-zinc-400 mb-1">
+        <label className="block text-sm font-medium text-base-400 mb-1">
           Display Name
         </label>
         <input
@@ -123,13 +123,13 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
           placeholder="My Architect"
           maxLength={100}
           required
-          className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          className="w-full bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2.5 text-base-100 placeholder-base-600 focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 text-sm"
         />
       </div>
 
       {/* Description */}
       <div>
-        <label className="block text-sm font-medium text-zinc-400 mb-1">
+        <label className="block text-sm font-medium text-base-400 mb-1">
           Description
         </label>
         <input
@@ -138,13 +138,13 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
           onChange={(e) => setDescription(e.target.value)}
           placeholder="A brief description of what this skill does"
           maxLength={500}
-          className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          className="w-full bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2.5 text-base-100 placeholder-base-600 focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 text-sm"
         />
       </div>
 
       {/* Tools */}
       <div>
-        <label className="block text-sm font-medium text-zinc-400 mb-2">
+        <label className="block text-sm font-medium text-base-400 mb-2">
           Tools
         </label>
         <div className="space-y-2">
@@ -157,10 +157,10 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
                 type="checkbox"
                 checked={selectedTools.includes(tool.name)}
                 onChange={() => toggleTool(tool.name)}
-                className="mt-1 rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500"
+                className="mt-1 rounded border-base-600 bg-base-800 text-accent focus:ring-accent"
               />
               <div>
-                <span className="text-sm text-zinc-200 font-mono">
+                <span className="text-sm text-base-200 font-mono">
                   {tool.name}
                 </span>
                 {tool.requires_approval && (
@@ -168,7 +168,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
                     requires approval
                   </span>
                 )}
-                <p className="text-xs text-zinc-500">{tool.description}</p>
+                <p className="text-xs text-base-500">{tool.description}</p>
               </div>
             </label>
           ))}
@@ -177,10 +177,10 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
 
       {/* System prompt */}
       <div>
-        <label className="block text-sm font-medium text-zinc-400 mb-1">
+        <label className="block text-sm font-medium text-base-400 mb-1">
           System Prompt
         </label>
-        <p className="text-xs text-zinc-500 mb-2">
+        <p className="text-xs text-base-500 mb-2">
           Tip: draft in your editor of choice, paste here
         </p>
         <textarea
@@ -190,7 +190,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
           maxLength={32000}
           required
           rows={15}
-          className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm resize-y"
+          className="w-full bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2.5 text-base-100 placeholder-base-600 focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 font-mono text-sm resize-y"
           style={{ minHeight: "400px" }}
         />
       </div>
@@ -200,7 +200,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
         <button
           type="submit"
           disabled={saving}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+          className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
         >
           <Save className="w-4 h-4" />
           {saving ? "Saving..." : "Save"}
@@ -208,7 +208,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
         <button
           type="button"
           onClick={onCancel}
-          className="flex items-center gap-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 px-4 py-2 rounded-lg transition-colors text-sm"
+          className="flex items-center gap-2 bg-base-800 hover:bg-base-700 text-base-300 px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm"
         >
           <X className="w-4 h-4" />
           Cancel

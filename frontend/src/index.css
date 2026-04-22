@@ -1,2 +1,154 @@
 ﻿@import 'tailwindcss';
 @plugin '@tailwindcss/typography';
+
+/* ── Color system ──
+   Change these values to re-theme the entire app.
+   Current: Vercel (pure neutral + brand blue)
+*/
+@theme {
+  /* Base neutral scale (pure black → white, no warmth/coolness) */
+  --color-base-50: #ffffff;
+  --color-base-100: #fafafa;
+  --color-base-200: #ededed;
+  --color-base-300: #a1a1a1;
+  --color-base-400: #888888;
+  --color-base-500: #666666;
+  --color-base-600: #444444;
+  --color-base-700: #333333;
+  --color-base-800: #1a1a1a;
+  --color-base-900: #111111;
+  --color-base-950: #000000;
+
+  /* Accent (Vercel blue) */
+  --color-accent: #0070f3;
+  --color-accent-hover: #3291ff;
+  --color-accent-light: #3291ff;
+}
+
+/* ── Design tokens ── */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* ── Base refinements ── */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.011em;
+}
+
+/* ── Scrollbar refinement (dark chrome) ── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-base-400) 18%, transparent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-base-400) 32%, transparent);
+}
+
+/* ── Button press feedback ── */
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* ── Smooth reveal for elements ── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Dropdown/popover enter ── */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Subtle breathing glow for streaming cursor ── */
+@keyframes softPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 200ms var(--ease-out) both;
+}
+
+.animate-scale-in {
+  animation: scaleIn 150ms var(--ease-out) both;
+}
+
+.animate-soft-pulse {
+  animation: softPulse 1s ease-in-out infinite;
+}
+
+/* ── Stagger children ── */
+.stagger-children > * {
+  animation: fadeInUp 250ms var(--ease-out) both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 160ms; }
+
+/* ── Prose refinements for assistant messages ── */
+.prose-chat {
+  --tw-prose-headings: var(--color-base-200);
+  --tw-prose-body: var(--color-base-300);
+  --tw-prose-bold: var(--color-base-200);
+  --tw-prose-code: var(--color-base-400);
+  line-height: 1.65;
+}
+.prose-chat pre {
+  background: var(--color-base-950);
+  border: 1px solid color-mix(in srgb, var(--color-base-700) 50%, transparent);
+  border-radius: 8px;
+}
+.prose-chat code:not(pre code) {
+  background: color-mix(in srgb, var(--color-base-700) 50%, transparent);
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+  font-size: 0.875em;
+}
+.prose-chat table {
+  border-collapse: collapse;
+}
+.prose-chat th,
+.prose-chat td {
+  border-color: color-mix(in srgb, var(--color-base-700) 50%, transparent);
+}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  [role="button"]:not(:disabled):active {
+    transform: none;
+  }
+  .animate-fade-in-up,
+  .animate-scale-in,
+  .stagger-children > * {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

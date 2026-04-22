@@ -45,11 +45,11 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
   const seconds = remaining % 60;
 
   return (
-    <div className="bg-amber-900/20 border border-amber-600/50 rounded-lg p-4 space-y-3">
+    <div className="bg-amber-950/30 border border-amber-700/30 rounded-xl p-5 space-y-3.5">
       {/* Header */}
-      <div className="flex items-center gap-2 text-amber-400">
+      <div className="flex items-center gap-2.5 text-amber-400">
         <ShieldAlert className="w-5 h-5" />
-        <span className="font-semibold">Approval Required</span>
+        <span className="font-semibold text-sm tracking-tight">Approval Required</span>
         <span className="ml-auto flex items-center gap-1 text-sm text-amber-500">
           <Clock className="w-3.5 h-3.5" />
           {minutes}:{seconds.toString().padStart(2, "0")}
@@ -58,32 +58,32 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
 
       {/* Tool name */}
       <div>
-        <span className="text-zinc-400 text-sm">Tool: </span>
+        <span className="text-base-400 text-sm">Tool: </span>
         <span className="font-mono text-sm text-amber-300">{approval.tool_name}</span>
       </div>
 
       {/* Reason */}
       {approval.reason && (
         <div>
-          <span className="text-zinc-400 text-sm">Reason: </span>
-          <span className="text-zinc-200 text-sm">{approval.reason}</span>
+          <span className="text-base-400 text-sm">Reason: </span>
+          <span className="text-base-200 text-sm">{approval.reason}</span>
         </div>
       )}
 
       {/* Command */}
       <div>
-        <span className="text-zinc-400 text-sm">Command:</span>
-        <pre className="mt-1 bg-zinc-900 rounded p-3 text-sm text-zinc-200 font-mono overflow-x-auto whitespace-pre-wrap">
+        <span className="text-base-400 text-sm">Command:</span>
+        <pre className="mt-1.5 bg-base-900/80 rounded-lg p-3 text-sm text-base-200 font-mono overflow-x-auto whitespace-pre-wrap">
           {formatCommand(approval.tool_name, approval.args)}
         </pre>
       </div>
 
       {/* Buttons */}
-      <div className="flex gap-3">
+      <div className="flex gap-3 pt-1">
         <button
           onClick={() => onAction("approve")}
           disabled={remaining === 0}
-          className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-zinc-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+          className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
         >
           <Check className="w-4 h-4" />
           Approve
@@ -91,7 +91,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         <button
           onClick={() => onAction("deny")}
           disabled={remaining === 0}
-          className="flex items-center gap-2 bg-red-700 hover:bg-red-600 disabled:bg-zinc-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+          className="flex items-center gap-2 bg-red-800 hover:bg-red-700 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
         >
           <X className="w-4 h-4" />
           Deny

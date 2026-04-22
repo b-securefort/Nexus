@@ -35,13 +35,13 @@ export function SkillPicker() {
       <button
         onClick={() => !locked && setOpen(!open)}
         disabled={locked}
-        className="flex items-center gap-2 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors min-w-[200px]"
+        className="flex items-center gap-2 bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2 text-sm text-base-200 hover:bg-base-800 disabled:opacity-50 disabled:cursor-not-allowed transition-[background-color,transform] duration-150 min-w-[200px]"
       >
-        <Sparkles className="w-4 h-4 text-blue-400" />
+        <Sparkles className="w-4 h-4 text-accent-light" />
         <span className="flex-1 text-left truncate">
           {selected ? selected.display_name : "Select a skill..."}
         </span>
-        {!locked && <ChevronDown className="w-4 h-4 text-zinc-400" />}
+        {!locked && <ChevronDown className="w-4 h-4 text-base-400" />}
       </button>
 
       {open && (
@@ -50,10 +50,10 @@ export function SkillPicker() {
             className="fixed inset-0 z-10"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute top-full left-0 mt-1 w-64 bg-zinc-800 border border-zinc-600 rounded-lg shadow-xl z-20 overflow-hidden">
+          <div className="absolute top-full left-0 mt-1.5 w-64 bg-base-800 border border-base-700/60 rounded-xl shadow-2xl shadow-black/30 z-20 overflow-hidden animate-scale-in origin-top-left">
             {sharedSkills.length > 0 && (
               <>
-                <div className="px-3 py-1.5 text-xs font-medium text-zinc-500 uppercase tracking-wider bg-zinc-900">
+                <div className="px-3 py-2 text-[11px] font-medium text-base-500 uppercase tracking-wider bg-base-900/80">
                   Shared (Team)
                 </div>
                 {sharedSkills.map((skill) => (
@@ -63,13 +63,13 @@ export function SkillPicker() {
                       setSelectedSkillId(skill.id);
                       setOpen(false);
                     }}
-                    className="w-full text-left px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-2.5 text-sm text-base-200 hover:bg-base-700/60 flex items-center gap-2.5 transition-colors duration-100"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                    <Sparkles className="w-3.5 h-3.5 text-accent-light" />
                     <div>
                       <div>{skill.display_name}</div>
                       {skill.description && (
-                        <div className="text-xs text-zinc-500 truncate">
+                        <div className="text-xs text-base-500 truncate">
                           {skill.description}
                         </div>
                       )}
@@ -81,7 +81,7 @@ export function SkillPicker() {
 
             {personalSkills.length > 0 && (
               <>
-                <div className="px-3 py-1.5 text-xs font-medium text-zinc-500 uppercase tracking-wider bg-zinc-900">
+                <div className="px-3 py-2 text-[11px] font-medium text-base-500 uppercase tracking-wider bg-base-900/80">
                   My Skills
                 </div>
                 {personalSkills.map((skill) => (
@@ -91,13 +91,13 @@ export function SkillPicker() {
                       setSelectedSkillId(skill.id);
                       setOpen(false);
                     }}
-                    className="w-full text-left px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-2.5 text-sm text-base-200 hover:bg-base-700/60 flex items-center gap-2.5 transition-colors duration-100"
                   >
                     <UserIcon className="w-3.5 h-3.5 text-green-400" />
                     <div>
                       <div>{skill.display_name}</div>
                       {skill.description && (
-                        <div className="text-xs text-zinc-500 truncate">
+                        <div className="text-xs text-base-500 truncate">
                           {skill.description}
                         </div>
                       )}
@@ -108,7 +108,7 @@ export function SkillPicker() {
             )}
 
             {skills.length === 0 && (
-              <div className="px-3 py-4 text-sm text-zinc-500 text-center">
+              <div className="px-3 py-4 text-sm text-base-500 text-center">
                 No skills available
               </div>
             )}

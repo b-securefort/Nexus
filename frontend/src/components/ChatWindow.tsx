@@ -195,14 +195,17 @@ export function ChatWindow() {
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
         {messages.length === 0 && !isStreaming && (
-          <div className="flex items-center justify-center h-full text-zinc-500">
-            <div className="text-center">
-              <h2 className="text-xl font-semibold mb-2">Start a conversation</h2>
-              <p className="text-sm">
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center max-w-sm">
+              <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-5">
+                <Send className="w-5 h-5 text-accent-light" />
+              </div>
+              <h2 className="text-lg font-medium text-base-300 tracking-tight mb-2">Start a conversation</h2>
+              <p className="text-sm text-base-500 leading-relaxed">
                 {selectedSkillId
-                  ? "Type a message to begin."
+                  ? "Type a message below to begin."
                   : "Select a skill from the dropdown above, then type a message."}
               </p>
             </div>
@@ -221,22 +224,24 @@ export function ChatWindow() {
 
         {/* Streaming assistant content */}
         {streamingContent && (
-          <div className="flex justify-start">
-            <div className="bg-zinc-800 rounded-lg px-4 py-3 max-w-[80%] text-zinc-100 whitespace-pre-wrap">
+          <div className="flex justify-start animate-fade-in-up">
+            <div className="bg-base-800/80 rounded-xl px-4 py-3 max-w-[80%] text-base-100 whitespace-pre-wrap text-sm leading-relaxed">
               {streamingContent}
-              <span className="inline-block w-2 h-4 bg-blue-400 animate-pulse ml-1" />
+              <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
             </div>
           </div>
         )}
 
         {/* Pending approval */}
         {pendingApproval && (
-          <ApprovalCard approval={pendingApproval} onAction={handleApproval} />
+          <div className="animate-fade-in-up">
+            <ApprovalCard approval={pendingApproval} onAction={handleApproval} />
+          </div>
         )}
 
         {/* Error */}
         {error && (
-          <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-300">
+          <div className="bg-red-950/40 border border-red-800/40 rounded-xl px-4 py-3 text-red-300 text-sm animate-fade-in-up">
             {error}
           </div>
         )}
@@ -245,8 +250,8 @@ export function ChatWindow() {
       </div>
 
       {/* Input area */}
-      <div className="border-t border-zinc-700 p-4">
-        <div className="flex gap-2">
+      <div className="border-t border-base-800/80 px-6 py-4">
+        <div className="flex gap-3 max-w-4xl mx-auto">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -254,17 +259,17 @@ export function ChatWindow() {
             placeholder={
               pendingApproval
                 ? "Waiting for approval decision..."
-                : "Type your message... (Shift+Enter for newline)"
+                : "Type your message..."
             }
             disabled={isStreaming || !!pendingApproval}
             rows={1}
-            className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-4 py-3 text-zinc-100 placeholder-zinc-500 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-            style={{ minHeight: "48px", maxHeight: "200px" }}
+            className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 text-sm leading-relaxed"
+            style={{ minHeight: "44px", maxHeight: "200px" }}
           />
           <button
             onClick={handleSend}
             disabled={!canSend}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded-lg px-4 py-3 transition-colors"
+            className="bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150"
           >
             {isStreaming ? (
               <Loader2 className="w-5 h-5 animate-spin" />

@@ -6,22 +6,24 @@ import { Link } from "react-router-dom";
 
 export function ChatPage() {
   return (
-    <div className="flex h-screen bg-zinc-900 text-zinc-100">
+    <div className="flex h-screen bg-base-950 text-base-100">
       {/* Sidebar */}
-      <div className="w-64 bg-zinc-900 border-r border-zinc-700 flex flex-col">
-        <div className="p-3 border-b border-zinc-700">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold text-zinc-100">Nexus</span>
+      <div className="w-64 bg-base-950 border-r border-base-800/80 flex flex-col">
+        <div className="px-4 py-4 border-b border-base-800/80">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center">
+              <Sparkles className="w-4 h-4 text-accent-light" />
+            </div>
+            <span className="font-semibold text-base-100 tracking-tight">Nexus</span>
           </div>
         </div>
         <div className="flex-1 overflow-hidden">
           <ConversationList />
         </div>
-        <div className="p-3 border-t border-zinc-700">
+        <div className="px-4 py-3 border-t border-base-800/80">
           <Link
             to="/skills"
-            className="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="flex items-center gap-2 text-sm text-base-500 hover:text-base-300 transition-colors"
           >
             <Settings className="w-4 h-4" />
             Manage Skills
@@ -30,9 +32,9 @@ export function ChatPage() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col bg-base-900">
         {/* Header */}
-        <div className="h-14 border-b border-zinc-700 flex items-center px-4 gap-4">
+        <div className="h-14 border-b border-base-800/80 flex items-center px-5 gap-4">
           <SkillPicker />
         </div>
 

@@ -45,3 +45,8 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: az_resource_graph
 - **Details**: A query against ResourceContainers for microsoft.resources/subscriptions failed when projecting `state` because that field is not present for subscription records in this environment. The corrected query was `ResourceContainers | where type == 'microsoft.resources/subscriptions' | project subscriptionId, name, tenantId | order by name asc`. Resource Graph was the fastest/simplest approach and should be preferred over Az CLI for listing subscriptions.
 
+## [best-practice] For AI model counts, query deployment child resources first
+- **Date**: 2026-04-22 21:40 UTC
+- **Tool**: az_rest_api
+- **Details**: When asked how many AI models are deployed across subscriptions, do not stop at listing AI hosting resources (Cognitive Services accounts or ML workspaces). The correct first pass is to enumerate Microsoft.CognitiveServices/accounts/{account}/deployments for each OpenAI/AIServices account and count the deployment child resources, separating Succeeded/Enabled from Disabled. Resource Graph is useful for finding the parent accounts, but it does not reliably expose the deployment layer.
+

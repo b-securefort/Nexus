@@ -110,10 +110,10 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} gap-2`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} gap-3 animate-fade-in-up`}>
       {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mt-1">
-          <Bot className="w-4 h-4 text-white" />
+        <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
+          <Bot className="w-3.5 h-3.5 text-accent-light" />
         </div>
       )}
 
@@ -121,10 +121,10 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
         {/* Message content */}
         {message.content && (
           <div
-            className={`rounded-lg px-4 py-3 ${
+            className={`rounded-xl px-4 py-3 ${
               isUser
-                ? "bg-blue-600 text-white whitespace-pre-wrap"
-                : "bg-zinc-800 text-zinc-100 prose prose-invert prose-sm max-w-none"
+                ? "bg-accent text-white text-sm leading-relaxed whitespace-pre-wrap"
+                : "bg-base-800/80 text-base-100 prose prose-invert prose-sm prose-chat max-w-none"
             }`}
           >
             {isUser ? (
@@ -150,19 +150,19 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
           return (
             <div
               key={tc.call_id}
-              className={`bg-zinc-800/50 border rounded-lg overflow-hidden ${
+              className={`bg-base-800/40 border rounded-xl overflow-hidden transition-[border-color] duration-200 ${
                 hasError
-                  ? "border-red-700/60"
+                  ? "border-red-800/50"
                   : isDone
-                  ? "border-zinc-700/60"
+                  ? "border-base-700/50"
                   : isExecuting
-                  ? "border-yellow-700/40"
-                  : "border-blue-700/40"
+                  ? "border-yellow-700/30"
+                  : "border-accent/30"
               }`}
             >
               <button
                 onClick={() => onToggleToolCall(tc.call_id)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700/50 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-base-300 hover:bg-base-700/50 transition-colors duration-100"
               >
                 {/* Status icon */}
                 {isDone ? (
@@ -174,15 +174,15 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
                 ) : isExecuting ? (
                   <Play className="w-3.5 h-3.5 text-yellow-400 animate-pulse flex-shrink-0" />
                 ) : (
-                  <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
+                  <Loader2 className="w-3.5 h-3.5 text-accent-light animate-spin flex-shrink-0" />
                 )}
 
                 {/* Tool name */}
-                <span className="font-mono text-xs text-zinc-400">{tc.name}</span>
+                <span className="font-mono text-xs text-base-400">{tc.name}</span>
 
                 {/* Command preview */}
                 {cmd && (
-                  <span className="text-xs text-zinc-300 truncate max-w-[60%]" title={cmd}>
+                  <span className="text-xs text-base-300 truncate max-w-[60%]" title={cmd}>
                     {cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd}
                   </span>
                 )}
@@ -204,12 +204,12 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
               </button>
 
               {showExpanded && (
-                <div className="border-t border-zinc-700 px-3 py-2 text-xs space-y-2">
+                <div className="border-t border-base-700/50 px-3 py-2.5 text-xs space-y-2.5">
                   {/* Command */}
                   {cmd && (
                     <div>
-                      <div className="text-zinc-500 mb-1">Command:</div>
-                      <pre className="bg-zinc-900 rounded p-2 overflow-x-auto text-zinc-200 font-mono text-sm whitespace-pre-wrap">
+                      <div className="text-base-500 mb-1">Command:</div>
+                      <pre className="bg-base-900/80 rounded-lg p-2.5 overflow-x-auto text-base-200 font-mono text-sm whitespace-pre-wrap">
                         {cmd}
                       </pre>
                     </div>
@@ -217,8 +217,8 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
 
                   {/* Reason (for approval tools) */}
                   {tc.args.reason && (
-                    <div className="text-zinc-400">
-                      <span className="text-zinc-500">Reason: </span>
+                    <div className="text-base-400">
+                      <span className="text-base-500">Reason: </span>
                       {String(tc.args.reason)}
                     </div>
                   )}
@@ -230,9 +230,9 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
                         <Loader2 className="w-3 h-3 animate-spin" />
                         Live output:
                       </div>
-                      <pre className="bg-zinc-900 rounded p-2 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap text-zinc-300 font-mono text-[11px]">
+                      <pre className="bg-base-900/80 rounded-lg p-2.5 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap text-base-300 font-mono text-[11px]">
                         {tc.streamingOutput}
-                        <span className="inline-block w-1.5 h-3 bg-yellow-400 animate-pulse ml-0.5" />
+                        <span className="inline-block w-1.5 h-3 bg-yellow-400 rounded-sm animate-soft-pulse ml-0.5" />
                       </pre>
                     </div>
                   )}
@@ -240,12 +240,12 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
                   {/* Final result */}
                   {tc.result && (
                     <div>
-                      <div className={`mb-1 ${hasError ? "text-red-400" : "text-zinc-500"}`}>
+                      <div className={`mb-1 ${hasError ? "text-red-400" : "text-base-500"}`}>
                         {hasError ? "Error:" : "Output:"}
                       </div>
                       <pre
-                        className={`bg-zinc-900 rounded p-2 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap ${
-                          hasError ? "text-red-300" : "text-zinc-300"
+                        className={`bg-base-900/80 rounded-lg p-2.5 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap ${
+                          hasError ? "text-red-300" : "text-base-300"
                         }`}
                       >
                         {tc.result}
@@ -260,8 +260,8 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
       </div>
 
       {isUser && (
-        <div className="w-8 h-8 rounded-full bg-zinc-600 flex items-center justify-center flex-shrink-0 mt-1">
-          <User className="w-4 h-4 text-white" />
+        <div className="w-7 h-7 rounded-lg bg-base-700/60 flex items-center justify-center flex-shrink-0 mt-1">
+          <User className="w-3.5 h-3.5 text-base-400" />
         </div>
       )}
     </div>

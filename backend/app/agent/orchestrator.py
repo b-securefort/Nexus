@@ -52,12 +52,27 @@ def _get_openai_client() -> AzureOpenAI:
     )
 
 
+def _tool_needs_approval(tool: Tool, args: dict) -> bool:
+    """Check if a tool invocation requires user approval.
+    
+    Supports both static (requires_approval attribute) and dynamic
+    approval (e.g., az_rest_api where GET is safe but mutations need approval).
+    """
+    if hasattr(tool, '_needs_approval'):
+        # Pass the discriminator field (method for REST, action for DevOps)
+        key = args.get("method") or args.get("action") or "GET"
+        return tool._needs_approval(key)
+    return tool.requires_approval
+
+
 def _compose_system_prompt(skill: Skill, user: User) -> str:
     """Compose the final system prompt per §11.6."""
     from app.tools.learn_tool import get_learnings_content
+    from app.tools.az_login_check import get_az_context_prompt
 
     kb_summary = get_index_summary()
     learnings = get_learnings_content()
+    az_context = get_az_context_prompt()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     parts = [
@@ -81,11 +96,22 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
     parts.append(
         f"\nCurrent user: {user.display_name} ({user.email})\n"
         f"Current date: {now}\n\n"
+        f"{az_context}\n\n"
         "## Tool hierarchy\n"
         "Always prefer tools in this order when querying Azure resources:\n"
-        "1. **`az_resource_graph`** (KQL) — fastest, read-only, no approval needed. Use this first for any resource queries.\n"
-        "2. **`az_cli`** or PowerShell via `run_shell` — use when Resource Graph can't do the operation (writes, management commands, cost data).\n"
-        "3. **REST API via `az rest`** — last resort when neither of the above supports the operation.\n"
+        "1. **`az_resource_graph`** (KQL) — fastest, read-only, no approval. Use first for resource queries.\n"
+        "2. **`az_cost_query`** — cost/usage data. No approval.\n"
+        "3. **`az_monitor_logs`** — Log Analytics KQL queries. No approval.\n"
+        "4. **`az_advisor`** / **`az_policy_check`** — recommendations and compliance. No approval.\n"
+        "5. **`az_cli`** — general Azure operations. Requires approval for mutations.\n"
+        "6. **`az_rest_api`** — direct ARM REST calls. GET=no approval, mutations=approval.\n"
+        "7. **`az_devops`** — Azure DevOps pipelines/PRs/builds. Read=no approval, mutations=approval.\n"
+        "8. **`run_shell`** — PowerShell/shell commands. Always requires approval.\n\n"
+        "Other tools:\n"
+        "- **`network_test`** — DNS/port checks, NSG rules. No approval.\n"
+        "- **`generate_file`** — Write files to output/ sandbox. No approval.\n"
+        "- **`diagram_gen`** — Generate Mermaid diagrams. No approval.\n"
+        "- **`web_fetch`** — Fetch web page content. No approval.\n"
         "Before running any command, call `fetch_ms_docs` to verify the correct syntax.\n\n"
         "## Retry policy\n"
         "When a tool call fails, you MUST try at least 3 different approaches before giving up:\n"
@@ -495,7 +521,7 @@ async def handle_chat(
                 tool = next((t for t in tools if t.name == func_name), None)
                 if not tool:
                     tool_result = f"Error: Unknown tool '{func_name}'"
-                elif tool.requires_approval:
+                elif _tool_needs_approval(tool, func_args):
                     # Create approval
                     approval = create_pending_approval(
                         session=session,
@@ -547,6 +573,11 @@ async def handle_chat(
 
                 # Multi-strategy retry: track failures and escalate
                 if func_name in _COMMAND_TOOLS and tool_result.startswith("Error"):
+                    # Auth errors — clear cache so next attempt re-checks
+                    if "az login" in tool_result or "not logged in" in tool_result.lower():
+                        from app.tools.az_login_check import clear_login_cache
+                        clear_login_cache()
+
                     # Track this failure
                     failure_tracker[func_name] = failure_tracker.get(func_name, 0) + 1
                     if func_name not in failure_history:

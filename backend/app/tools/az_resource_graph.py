@@ -10,7 +10,8 @@ import subprocess
 import sys
 
 from app.auth.models import User
-from app.tools.base import Tool
+from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,14 @@ class AzResourceGraphTool(Tool):
         "Execute a read-only Azure Resource Graph (ARG) query using Kusto Query Language (KQL). "
         "Use this to explore, count, or list Azure resources across subscriptions. "
         "Examples: count VMs, list storage accounts, find resources by tag, check RBAC assignments. "
-        "This is read-only and does NOT require user approval."
+        "This is read-only and does NOT require user approval.\n\n"
+        "IMPORTANT KQL syntax rules for Resource Graph:\n"
+        "- Do NOT use 'let' variables or 'datatable()' — they cause ParserFailure.\n"
+        "- For ID filtering, use inline literals: where id in~ ('id1','id2',...)\n"
+        "- For subscriptions/RGs, query 'ResourceContainers' (not 'Resources').\n"
+        "- Use 'isnotempty(resourceGroup)' to filter out subscription-level resources.\n"
+        "- Use tostring() for nested properties: tostring(properties.encryption.services.blob.enabled)\n"
+        "- 'dynamic()' is not supported — use literal values only."
     )
     parameters_schema = {
         "type": "object",
@@ -46,7 +54,8 @@ class AzResourceGraphTool(Tool):
                     "KQL query for Azure Resource Graph. Examples:\n"
                     "- 'Resources | summarize count() by type | order by count_ desc'\n"
                     "- 'ResourceContainers | where type == \"microsoft.resources/subscriptions\"'\n"
-                    "- 'Resources | where type == \"microsoft.compute/virtualmachines\" | project name, resourceGroup, location'"
+                    "- 'Resources | where type =~ \"microsoft.compute/virtualmachines\" | project name, resourceGroup, location'\n"
+                    "- 'Resources | where isnotempty(resourceGroup) | summarize count() by resourceGroup'"
                 ),
             },
             "subscriptions": {
@@ -60,6 +69,11 @@ class AzResourceGraphTool(Tool):
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
+        # Pre-check Azure login state
+        login_err = require_az_login()
+        if login_err:
+            return login_err
+
         query = args.get("query", "")
         if not query:
             return "Error: query is required"
@@ -83,6 +97,7 @@ class AzResourceGraphTool(Tool):
                 text=True,
                 timeout=30,
                 shell=(sys.platform == "win32"),
+                **SUBPROCESS_FLAGS,
             )
 
             if result.returncode != 0:

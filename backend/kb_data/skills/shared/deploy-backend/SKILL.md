@@ -3,10 +3,14 @@ display_name: Deploy Backend
 description: Deploy the Nexus FastAPI backend to Azure Container Apps
 tools:
   - az_cli
+  - az_rest_api
+  - az_devops
   - run_shell
   - read_kb_file
   - search_kb
   - az_resource_graph
+  - az_cost_query
+  - az_monitor_logs
   - fetch_ms_docs
   - read_learnings
   - update_learnings

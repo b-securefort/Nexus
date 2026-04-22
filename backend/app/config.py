@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     TOOL_SHELL_ENABLED: bool = True
     TOOL_AZ_CLI_ENABLED: bool = True
     TOOL_MS_DOCS_ENABLED: bool = True
+    TOOL_AZ_COST_ENABLED: bool = True
+    TOOL_AZ_MONITOR_ENABLED: bool = True
+    TOOL_AZ_REST_ENABLED: bool = True
+    TOOL_GENERATE_FILE_ENABLED: bool = True
+    TOOL_AZ_DEVOPS_ENABLED: bool = True
+    TOOL_AZ_POLICY_ENABLED: bool = True
+    TOOL_AZ_ADVISOR_ENABLED: bool = True
+    TOOL_NETWORK_TEST_ENABLED: bool = True
+    TOOL_DIAGRAM_GEN_ENABLED: bool = True
+    TOOL_WEB_FETCH_ENABLED: bool = True
     TOOL_APPROVAL_TIMEOUT_SECONDS: int = 600
 
     # Backup

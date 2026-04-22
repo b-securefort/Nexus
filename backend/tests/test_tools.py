@@ -19,10 +19,13 @@ _USER = User(oid="test-user", email="test@test.com", display_name="Test")
 class TestToolRegistry:
     def test_init_tools_registers_all(self):
         init_tools()
-        assert len(TOOL_REGISTRY) == 8
+        assert len(TOOL_REGISTRY) == 18
         expected = {
             "read_kb_file", "search_kb", "fetch_ms_docs", "run_shell",
-            "az_cli", "az_resource_graph", "read_learnings", "update_learnings",
+            "az_cli", "az_resource_graph", "az_cost_query", "az_monitor_logs",
+            "az_rest_api", "generate_file", "az_devops", "az_policy_check",
+            "az_advisor", "network_test", "diagram_gen", "web_fetch",
+            "read_learnings", "update_learnings",
         }
         assert set(TOOL_REGISTRY.keys()) == expected
 

@@ -10,7 +10,8 @@ import threading
 from typing import Generator
 
 from app.auth.models import User
-from app.tools.base import Tool
+from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,11 @@ class AzCliTool(Tool):
     requires_approval = True
 
     def execute(self, args: dict, user: User) -> str:
+        # Pre-check Azure login state
+        login_err = require_az_login()
+        if login_err:
+            return login_err
+
         az_args = args.get("args", [])
         if not isinstance(az_args, list):
             return "Error: args must be a list of strings"
@@ -64,6 +70,7 @@ class AzCliTool(Tool):
                 text=True,
                 timeout=60,
                 shell=(sys.platform == "win32"),
+                **SUBPROCESS_FLAGS,
             )
 
             output = f"Exit code: {result.returncode}\n"
@@ -86,6 +93,12 @@ class AzCliTool(Tool):
             return f"Error: {str(e)}"
 
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
+        # Pre-check Azure login state
+        login_err = require_az_login()
+        if login_err:
+            yield login_err
+            return login_err
+
         az_args = args.get("args", [])
         if not isinstance(az_args, list):
             yield "Error: args must be a list of strings"
@@ -100,6 +113,7 @@ class AzCliTool(Tool):
                 stderr=subprocess.PIPE,
                 text=True,
                 shell=(sys.platform == "win32"),
+                **SUBPROCESS_FLAGS,
             )
 
             output_lines: list[str] = []

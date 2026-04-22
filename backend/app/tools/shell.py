@@ -5,13 +5,12 @@ Shell tool — runs commands with user approval.
 import logging
 import os
 import subprocess
-import tempfile
 import threading
 from pathlib import Path
 from typing import Generator
 
 from app.auth.models import User
-from app.tools.base import Tool
+from app.tools.base import SUBPROCESS_FLAGS, Tool
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +18,20 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_SIZE = 8192
 
 
+# Working directory = backend project root (where output/ lives)
+_WORK_DIR = Path(__file__).resolve().parent.parent.parent
+
+
 class RunShellTool(Tool):
     name = "run_shell"
-    description = "Execute a shell command. Requires explicit user approval before execution. Returns stdout, stderr, and exit code."
+    description = (
+        "Execute a shell or PowerShell command. Requires explicit user approval before execution. "
+        "Returns stdout, stderr, and exit code. "
+        "IMPORTANT: To run PowerShell cmdlets or .ps1 scripts, you MUST set shell='powershell'. "
+        "The default shell is cmd (Windows) / bash (Linux) which cannot run PowerShell syntax. "
+        "The working directory is the backend project root, so files in output/ are accessible "
+        "(e.g. .\\output\\scripts\\my-script.ps1)."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -33,6 +43,12 @@ class RunShellTool(Tool):
                 "type": "string",
                 "description": "Brief explanation of why this command needs to be run",
             },
+            "shell": {
+                "type": "string",
+                "enum": ["default", "powershell"],
+                "description": "Which shell to use. 'default' uses cmd (Windows) or bash (Linux/macOS). 'powershell' uses PowerShell.",
+                "default": "default",
+            },
             "timeout_seconds": {
                 "type": "integer",
                 "description": "Timeout in seconds (default 30, max 120)",
@@ -43,30 +59,48 @@ class RunShellTool(Tool):
     }
     requires_approval = True
 
+    def _build_cmd(self, command: str, shell_type: str):
+        """Return (cmd, shell_flag) for subprocess."""
+        if shell_type == "powershell":
+            # Use pwsh if available, else powershell.exe
+            import shutil
+            ps = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+            return [ps, "-NoProfile", "-NonInteractive", "-Command", command], False
+        return command, True
+
     def execute(self, args: dict, user: User) -> str:
         command = args.get("command", "")
+        shell_type = args.get("shell", "default")
         timeout = min(args.get("timeout_seconds", 30), 120)
 
-        # Create per-conversation working directory
-        work_dir = Path(tempfile.gettempdir()) / "team-architect" / "shell"
-        work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = _WORK_DIR
 
-        # Minimal safe environment
+        # Build environment
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": str(work_dir),
+            "HOME": os.environ.get("HOME", str(work_dir)),
             "TERM": "dumb",
         }
+        # PowerShell needs extra env vars on Windows
+        if shell_type == "powershell":
+            for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+                        "SystemRoot", "ProgramFiles", "PSModulePath"):
+                val = os.environ.get(key)
+                if val:
+                    env[key] = val
+
+        cmd, use_shell = self._build_cmd(command, shell_type)
 
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                cmd,
+                shell=use_shell,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 cwd=str(work_dir),
                 env=env,
+                **SUBPROCESS_FLAGS,
             )
 
             output = f"Exit code: {result.returncode}\n"
@@ -89,26 +123,35 @@ class RunShellTool(Tool):
 
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
         command = args.get("command", "")
+        shell_type = args.get("shell", "default")
         timeout = min(args.get("timeout_seconds", 30), 120)
 
-        work_dir = Path(tempfile.gettempdir()) / "team-architect" / "shell"
-        work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = _WORK_DIR
 
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": str(work_dir),
+            "HOME": os.environ.get("HOME", str(work_dir)),
             "TERM": "dumb",
         }
+        if shell_type == "powershell":
+            for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+                        "SystemRoot", "ProgramFiles", "PSModulePath"):
+                val = os.environ.get(key)
+                if val:
+                    env[key] = val
+
+        cmd, use_shell = self._build_cmd(command, shell_type)
 
         try:
             proc = subprocess.Popen(
-                command,
-                shell=True,
+                cmd,
+                shell=use_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(work_dir),
                 env=env,
+                **SUBPROCESS_FLAGS,
             )
 
             output_lines: list[str] = []

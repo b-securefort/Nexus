@@ -6,8 +6,18 @@ tools:
   - search_kb
   - fetch_ms_docs
   - az_resource_graph
+  - az_cost_query
+  - az_monitor_logs
   - az_cli
+  - az_rest_api
   - run_shell
+  - generate_file
+  - az_devops
+  - az_policy_check
+  - az_advisor
+  - network_test
+  - diagram_gen
+  - web_fetch
   - read_learnings
   - update_learnings
 ---

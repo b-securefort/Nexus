@@ -292,3 +292,28 @@ After implementing new tools, update these skill definitions:
 9. `network_test` (connectivity debugging)
 10. `az_advisor` (free optimization insights)
 11. `web_fetch` (general research)
+
+---
+
+## Future: AWS Support
+
+### What it does
+Add dedicated AWS tools similar to the Azure toolset — enabling Nexus to query and manage AWS resources.
+
+### Tools to build
+| Tool | Approval | Purpose |
+|------|----------|---------|
+| `aws_cli` | **Yes** | Run AWS CLI commands (like `az_cli`) |
+| `aws_resource_query` | No | Read-only resource queries via boto3 (like `az_resource_graph`) |
+| `aws_cost_explorer` | No | AWS Cost Explorer queries (like `az_cost_query`) |
+| `aws_cloudwatch` | No | CloudWatch Logs/Metrics queries (like `az_monitor_logs`) |
+
+### Prerequisites
+- AWS CLI installed and configured (`aws configure`)
+- boto3 Python package
+- IAM credentials with appropriate read permissions
+
+### Notes
+- The tool registry, approval gating, retry logic, and skill system are cloud-agnostic — no architectural changes needed
+- Can reuse `run_shell` for AWS CLI in the interim
+- New skills (e.g., `aws-architect`) would scope tool access to AWS-only tools

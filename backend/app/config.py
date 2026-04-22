@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     TOOL_AZ_REST_ENABLED: bool = True
     TOOL_GENERATE_FILE_ENABLED: bool = True
     TOOL_AZ_DEVOPS_ENABLED: bool = True
+    AZ_DEVOPS_ORG: str = ""
+    AZ_DEVOPS_PROJECT: str = ""
     TOOL_AZ_POLICY_ENABLED: bool = True
     TOOL_AZ_ADVISOR_ENABLED: bool = True
     TOOL_NETWORK_TEST_ENABLED: bool = True

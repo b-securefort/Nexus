@@ -40,3 +40,8 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: run_shell
 - **Details**: A PowerShell command that piped `az graph query ... | Out-String` failed with `Cannot run a document in the middle of a pipeline`. The correct approach is to assign the az output to a variable first (for example `$json = az graph query ... -o json`) and then process `$json`, rather than piping the az executable directly.
 
+## [syntax-fix] Resource Graph subscription query should not project nonexistent state field
+- **Date**: 2026-04-22 20:54 UTC
+- **Tool**: az_resource_graph
+- **Details**: A query against ResourceContainers for microsoft.resources/subscriptions failed when projecting `state` because that field is not present for subscription records in this environment. The corrected query was `ResourceContainers | where type == 'microsoft.resources/subscriptions' | project subscriptionId, name, tenantId | order by name asc`. Resource Graph was the fastest/simplest approach and should be preferred over Az CLI for listing subscriptions.
+

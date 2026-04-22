@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from app.auth.models import User
+from app.config import get_settings
 from app.tools.base import SUBPROCESS_FLAGS, Tool
 from app.tools.az_cli import _find_az
 
@@ -17,16 +18,25 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_SIZE = 16384
 
 # Actions that are read-only
-_SAFE_ACTIONS = {"list_pipelines", "list_builds", "list_prs", "list_work_items", "show_pipeline", "show_build", "show_pr"}
+_SAFE_ACTIONS = {
+    "list_projects", "list_pipelines", "list_builds", "list_prs",
+    "list_work_items", "show_pipeline", "show_build", "show_pr",
+    "show_work_item", "list_wikis", "show_wiki_page",
+}
 
 
 class AzDevOpsTool(Tool):
     name = "az_devops"
     description = (
-        "Query Azure DevOps for pipelines, builds, pull requests, and work items. "
+        "Query Azure DevOps for projects, pipelines, builds, pull requests, and work items. "
         "Read-only queries (list/show) do not require approval. "
         "Mutation actions (trigger_build, create_pr) require approval. "
-        "Requires the azure-devops CLI extension."
+        "Requires the azure-devops CLI extension. "
+        "The default organization is pre-configured — you do NOT need to supply it unless querying a different org. "
+        "Use list_projects first to discover available projects, then drill into pipelines/builds/work items. "
+        "Use show_work_item with a work item ID to get full details including description, acceptance criteria, and child tasks. "
+        "Use list_wikis to discover wikis in a project, then show_wiki_page to read wiki page content. "
+        "Use path '/' with show_wiki_page to get the root page and see all sub-pages."
     )
     parameters_schema = {
         "type": "object",
@@ -34,20 +44,22 @@ class AzDevOpsTool(Tool):
             "action": {
                 "type": "string",
                 "enum": [
+                    "list_projects",
                     "list_pipelines", "show_pipeline",
                     "list_builds", "show_build", "trigger_build",
                     "list_prs", "show_pr", "create_pr",
-                    "list_work_items",
+                    "list_work_items", "show_work_item",
+                    "list_wikis", "show_wiki_page",
                 ],
                 "description": "The DevOps action to perform.",
             },
             "organization": {
                 "type": "string",
-                "description": "Azure DevOps organization URL (e.g., https://dev.azure.com/myorg). Required if not configured via az devops configure.",
+                "description": "Azure DevOps organization URL. Only needed to override the default.",
             },
             "project": {
                 "type": "string",
-                "description": "Azure DevOps project name. Required for most operations.",
+                "description": "Azure DevOps project name. Required for most operations (not needed for list_projects).",
             },
             "pipeline_id": {
                 "type": "integer",
@@ -61,6 +73,18 @@ class AzDevOpsTool(Tool):
                 "type": "integer",
                 "description": "Pull request ID for show_pr.",
             },
+            "work_item_id": {
+                "type": "integer",
+                "description": "Work item ID for show_work_item. Returns full details including description, acceptance criteria, history, and child links.",
+            },
+            "wiki_name": {
+                "type": "string",
+                "description": "Wiki name or ID for show_wiki_page. Use list_wikis to discover available wikis.",
+            },
+            "wiki_path": {
+                "type": "string",
+                "description": "Wiki page path for show_wiki_page. Use '/' for root page (shows table of contents). Example: '/Architecture/Overview'.",
+            },
             "branch": {
                 "type": "string",
                 "description": "Branch name for trigger_build or create_pr.",
@@ -72,6 +96,16 @@ class AzDevOpsTool(Tool):
             "title": {
                 "type": "string",
                 "description": "Title for create_pr.",
+            },
+            "wiql": {
+                "type": "string",
+                "description": (
+                    "Custom WIQL query for list_work_items. If omitted, uses a default query "
+                    "that lists recent user stories and tasks. Example: "
+                    "\"SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType] "
+                    "FROM workitems WHERE [System.WorkItemType] IN ('User Story','Task','Bug') "
+                    "AND [System.State] <> 'Closed' ORDER BY [System.ChangedDate] DESC\""
+                ),
             },
             "top": {
                 "type": "integer",
@@ -89,16 +123,25 @@ class AzDevOpsTool(Tool):
         """Dynamic approval: safe actions don't need it."""
         return method_or_action not in _SAFE_ACTIONS
 
-    def execute(self, args: dict, user: User) -> str:
-        action = args.get("action", "")
-        org = args.get("organization", "")
-        project = args.get("project", "")
-        top = args.get("top", 10)
-
+    def _get_org_project(self, args: dict) -> tuple[list[str], list[str]]:
+        """Resolve org and project from args, falling back to config defaults."""
+        settings = get_settings()
+        org = args.get("organization", "") or settings.AZ_DEVOPS_ORG
+        project = args.get("project", "") or settings.AZ_DEVOPS_PROJECT
         org_args = ["--org", org] if org else []
         project_args = ["-p", project] if project else []
+        return org_args, project_args
 
-        if action == "list_pipelines":
+    def execute(self, args: dict, user: User) -> str:
+        action = args.get("action", "")
+        top = args.get("top", 10)
+
+        org_args, project_args = self._get_org_project(args)
+
+        if action == "list_projects":
+            cmd = [_find_az(), "devops", "project", "list", "--top", str(top), "--output", "json"] + org_args
+
+        elif action == "list_pipelines":
             cmd = [_find_az(), "pipelines", "list", "--top", str(top), "--output", "json"] + org_args + project_args
         elif action == "show_pipeline":
             pid = args.get("pipeline_id")
@@ -141,10 +184,42 @@ class AzDevOpsTool(Tool):
                 "--output", "json",
             ] + org_args + project_args
         elif action == "list_work_items":
-            # Work items need a WIQL query
+            wiql = args.get("wiql") or (
+                "SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType],"
+                "[System.AssignedTo],[System.IterationPath] "
+                "FROM workitems "
+                "WHERE [System.TeamProject] = @project "
+                "AND [System.WorkItemType] IN ('User Story','Task','Bug','Feature','Epic') "
+                "AND [System.State] <> 'Removed' "
+                "ORDER BY [System.ChangedDate] DESC"
+            )
             cmd = [
                 _find_az(), "boards", "query",
-                "--wiql", "SELECT [System.Id],[System.Title],[System.State] FROM workitems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC",
+                "--wiql", wiql,
+                "--output", "json",
+            ] + org_args + project_args
+        elif action == "show_work_item":
+            wid = args.get("work_item_id")
+            if not wid:
+                return "Error: work_item_id is required for show_work_item"
+            cmd = [
+                _find_az(), "boards", "work-item", "show",
+                "--id", str(wid),
+                "--expand", "all",
+                "--output", "json",
+            ] + org_args
+        elif action == "list_wikis":
+            cmd = [_find_az(), "devops", "wiki", "list", "--output", "json"] + org_args + project_args
+        elif action == "show_wiki_page":
+            wiki_name = args.get("wiki_name")
+            wiki_path = args.get("wiki_path", "/")
+            if not wiki_name:
+                return "Error: wiki_name is required for show_wiki_page. Use list_wikis first to find available wikis."
+            cmd = [
+                _find_az(), "devops", "wiki", "page", "show",
+                "--wiki", wiki_name,
+                "--path", wiki_path,
+                "--include-content",
                 "--output", "json",
             ] + org_args + project_args
         else:

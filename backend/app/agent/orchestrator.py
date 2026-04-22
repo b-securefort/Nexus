@@ -75,28 +75,10 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
     az_context = get_az_context_prompt()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # --- Static content FIRST (maximizes Azure OpenAI prompt cache prefix) ---
     parts = [
         skill.system_prompt,
         "\n---\n"
-        "Knowledge base index (use read_kb_file or search_kb to retrieve full content):\n"
-        f"{kb_summary}\n"
-        "---",
-    ]
-
-    if learnings.strip():
-        parts.append(
-            "\n---\n"
-            "**Agent Learnings** (known issues & past mistakes — DO NOT repeat these):\n"
-            f"{learnings}\n"
-            "---\n"
-            "IMPORTANT: Review the learnings above before executing any commands. "
-            "If a command matches a known issue, use the documented fix or workaround instead."
-        )
-
-    parts.append(
-        f"\nCurrent user: {user.display_name} ({user.email})\n"
-        f"Current date: {now}\n\n"
-        f"{az_context}\n\n"
         "## Tool hierarchy\n"
         "Always prefer tools in this order when querying Azure resources:\n"
         "1. **`az_resource_graph`** (KQL) — fastest, read-only, no approval. Use first for resource queries.\n"
@@ -125,8 +107,33 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
         "- When you **discover a workaround** — record it as a best-practice, noting which tool in the hierarchy worked.\n"
         "- When a command has **unexpected behavior** — record it as a gotcha.\n"
         "- When you find one approach is **significantly faster** than another — record the timing comparison.\n"
-        "Learnings are already loaded above in the system prompt — do NOT call `read_learnings` " 
-        "unless you have just called `update_learnings` and need to verify the update."
+        "Learnings are already loaded above in the system prompt — do NOT call `read_learnings` "
+        "unless you have just called `update_learnings` and need to verify the update.\n"
+        "---",
+    ]
+
+    # --- Dynamic content AFTER static (changes per conversation/turn) ---
+    parts.append(
+        "\n---\n"
+        "Knowledge base index (use read_kb_file or search_kb to retrieve full content):\n"
+        f"{kb_summary}\n"
+        "---"
+    )
+
+    if learnings.strip():
+        parts.append(
+            "\n---\n"
+            "**Agent Learnings** (known issues & past mistakes — DO NOT repeat these):\n"
+            f"{learnings}\n"
+            "---\n"
+            "IMPORTANT: Review the learnings above before executing any commands. "
+            "If a command matches a known issue, use the documented fix or workaround instead."
+        )
+
+    parts.append(
+        f"\nCurrent user: {user.display_name} ({user.email})\n"
+        f"Current date: {now}\n\n"
+        f"{az_context}"
     )
 
     return "\n".join(parts)
@@ -403,6 +410,7 @@ async def handle_chat(
                 "model": settings.AZURE_OPENAI_DEPLOYMENT,
                 "messages": api_messages,
                 "stream": True,
+                "stream_options": {"include_usage": True},
                 "max_completion_tokens": 4096,
             }
             if tool_schemas:
@@ -431,6 +439,7 @@ async def handle_chat(
             # Consume stream
             assistant_content = ""
             tool_calls_accumulator: dict[int, dict] = {}
+            stream_usage = None
 
             try:
                 while True:
@@ -440,6 +449,11 @@ async def handle_chat(
                     if isinstance(item, Exception):
                         raise item
                     chunk = item
+
+                    # Capture usage from the final chunk
+                    if hasattr(chunk, 'usage') and chunk.usage is not None:
+                        stream_usage = chunk.usage
+
                     if not chunk.choices:
                         continue
 
@@ -478,6 +492,20 @@ async def handle_chat(
                 raise
             finally:
                 await stream_thread
+
+            # Log token usage and cache stats
+            if stream_usage:
+                prompt_tokens = stream_usage.prompt_tokens or 0
+                completion_tokens = stream_usage.completion_tokens or 0
+                cached = 0
+                if hasattr(stream_usage, 'prompt_tokens_details') and stream_usage.prompt_tokens_details:
+                    cached = getattr(stream_usage.prompt_tokens_details, 'cached_tokens', 0) or 0
+                cache_pct = (cached / prompt_tokens * 100) if prompt_tokens > 0 else 0
+                logger.info(
+                    "Token usage — prompt: %d (cached: %d, %.1f%%), completion: %d, total: %d",
+                    prompt_tokens, cached, cache_pct, completion_tokens,
+                    prompt_tokens + completion_tokens,
+                )
 
             # Build tool_calls list
             tool_calls = [tool_calls_accumulator[i] for i in sorted(tool_calls_accumulator.keys())]

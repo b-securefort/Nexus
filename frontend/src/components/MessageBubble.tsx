@@ -1,4 +1,6 @@
 import { ChevronDown, ChevronRight, User, Bot, Wrench, CheckCircle, XCircle, Loader2, Play } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Message } from "../types";
 
 interface ToolCallDisplay {
@@ -119,13 +121,19 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
         {/* Message content */}
         {message.content && (
           <div
-            className={`rounded-lg px-4 py-3 whitespace-pre-wrap ${
+            className={`rounded-lg px-4 py-3 ${
               isUser
-                ? "bg-blue-600 text-white"
-                : "bg-zinc-800 text-zinc-100"
+                ? "bg-blue-600 text-white whitespace-pre-wrap"
+                : "bg-zinc-800 text-zinc-100 prose prose-invert prose-sm max-w-none"
             }`}
           >
-            {message.content}
+            {isUser ? (
+              message.content
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            )}
           </div>
         )}
 

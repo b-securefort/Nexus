@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { User, Bot } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,11 +9,11 @@ import type { ToolCallDisplay } from "./ToolCallCard";
 interface Props {
   message: Message;
   toolCalls: ToolCallDisplay[];
-  allMessages: Message[];
+  toolResultMap: Map<string, string>;
   onToggleToolCall: (call_id: string) => void;
 }
 
-export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCall }: Props) {
+export const MessageBubble = memo(function MessageBubble({ message, toolCalls, toolResultMap, onToggleToolCall }: Props) {
   // Local expanded state for historical tool calls (not in the live store)
   const [localExpanded, setLocalExpanded] = useState<Record<string, boolean>>({});
 
@@ -36,15 +36,13 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
         const existing = toolCalls.find((tc) => tc.call_id === c.id);
         if (existing) return existing;
 
-        // Historical: use local expanded state
-        const historyMsg = allMessages.find(
-          (m) => m.role === "tool" && m.tool_call_id === c.id
-        );
+        // Historical: use pre-built map instead of scanning all messages
+        const historyContent = toolResultMap.get(c.id);
         return {
           call_id: c.id,
           name: c.function.name,
           args: JSON.parse(c.function.arguments || "{}"),
-          result: historyMsg?.content,
+          result: historyContent,
           expanded: !!localExpanded[c.id],
         };
       });
@@ -103,4 +101,4 @@ export function MessageBubble({ message, toolCalls, allMessages, onToggleToolCal
       )}
     </div>
   );
-}
+});

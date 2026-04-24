@@ -6,7 +6,10 @@ import { Link } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
 
 export function ChatPage() {
-  const { sidebarOpen, toggleSidebar, setSidebarOpen, resetChat } = useAppStore();
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
+  const resetChat = useAppStore((s) => s.resetChat);
 
   return (
     <div className="flex h-screen bg-base-950 text-base-100">

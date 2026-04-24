@@ -12,7 +12,7 @@ describe('MessageBubble', () => {
       created_at: '2026-01-01T00:00:00Z',
     };
     render(
-      <MessageBubble message={msg} toolCalls={[]} allMessages={[]} onToggleToolCall={() => {}} />
+      <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     expect(screen.getByText('What is Azure?')).toBeInTheDocument();
   });
@@ -25,7 +25,7 @@ describe('MessageBubble', () => {
       created_at: '',
     };
     render(
-      <MessageBubble message={msg} toolCalls={[]} allMessages={[]} onToggleToolCall={() => {}} />
+      <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     expect(
       screen.getByText('Azure is a cloud platform by Microsoft.')
@@ -42,7 +42,7 @@ describe('MessageBubble', () => {
       created_at: '',
     };
     const { container } = render(
-      <MessageBubble message={msg} toolCalls={[]} allMessages={[]} onToggleToolCall={() => {}} />
+      <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     expect(container.firstChild).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('MessageBubble', () => {
       created_at: '',
     };
     const { container } = render(
-      <MessageBubble message={msg} toolCalls={[]} allMessages={[]} onToggleToolCall={() => {}} />
+      <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('justify-end');
@@ -69,7 +69,7 @@ describe('MessageBubble', () => {
       created_at: '',
     };
     const { container } = render(
-      <MessageBubble message={msg} toolCalls={[]} allMessages={[]} onToggleToolCall={() => {}} />
+      <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('justify-start');

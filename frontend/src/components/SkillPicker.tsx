@@ -7,7 +7,9 @@ import type { Skill } from "../types";
 export function SkillPicker() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [open, setOpen] = useState(false);
-  const { selectedSkillId, setSelectedSkillId, conversationId } = useAppStore();
+  const selectedSkillId = useAppStore((s) => s.selectedSkillId);
+  const setSelectedSkillId = useAppStore((s) => s.setSelectedSkillId);
+  const conversationId = useAppStore((s) => s.conversationId);
 
   useEffect(() => {
     fetchSkills()

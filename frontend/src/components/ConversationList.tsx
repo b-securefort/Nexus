@@ -32,16 +32,14 @@ function groupByDate(conversations: ConversationSummary[]) {
 }
 
 export function ConversationList() {
-  const {
-    conversations,
-    setConversations,
-    conversationId,
-    setConversationId,
-    resetChat,
-    setSelectedSkillId,
-    searchQuery,
-    setSearchQuery,
-  } = useAppStore();
+  const conversations = useAppStore((s) => s.conversations);
+  const setConversations = useAppStore((s) => s.setConversations);
+  const conversationId = useAppStore((s) => s.conversationId);
+  const setConversationId = useAppStore((s) => s.setConversationId);
+  const resetChat = useAppStore((s) => s.resetChat);
+  const setSelectedSkillId = useAppStore((s) => s.setSelectedSkillId);
+  const searchQuery = useAppStore((s) => s.searchQuery);
+  const setSearchQuery = useAppStore((s) => s.setSearchQuery);
 
   const [loading, setLoading] = useState(true);
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null);

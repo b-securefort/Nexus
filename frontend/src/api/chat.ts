@@ -108,3 +108,10 @@ export async function resolveApproval(
     throw new Error(err.detail || "Failed to resolve approval");
   }
 }
+
+export async function fetchGreeting(): Promise<string> {
+  const response = await apiFetch("/api/greeting");
+  if (!response.ok) return "";
+  const data = await response.json();
+  return data.greeting || "";
+}

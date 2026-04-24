@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { Message, ApprovalInfo, ConversationSummary } from "../types";
 
+export type StreamingSegment =
+  | { type: "text"; content: string }
+  | { type: "tool_call"; call_id: string };
+
 interface AppState {
   // Current conversation
   conversationId: number | null;
@@ -22,8 +26,15 @@ interface AppState {
     expanded: boolean;
   }>;
 
+  // Ordered streaming segments (text interleaved with tool calls)
+  streamingSegments: StreamingSegment[];
+
   // Conversations list
   conversations: ConversationSummary[];
+
+  // Sidebar
+  sidebarOpen: boolean;
+  searchQuery: string;
 
   // Actions
   setConversationId: (id: number | null) => void;
@@ -40,7 +51,11 @@ interface AppState {
   appendToolCallOutput: (call_id: string, chunk: string) => void;
   setToolCallResult: (call_id: string, result: string) => void;
   toggleToolCallExpanded: (call_id: string) => void;
+  clearToolCalls: () => void;
   setConversations: (conversations: ConversationSummary[]) => void;
+  toggleSidebar: () => void;
+  setSidebarOpen: (open: boolean) => void;
+  setSearchQuery: (query: string) => void;
   resetChat: () => void;
 }
 
@@ -53,7 +68,10 @@ export const useAppStore = create<AppState>((set) => ({
   pendingApproval: null,
   error: null,
   toolCalls: [],
+  streamingSegments: [],
   conversations: [],
+  sidebarOpen: true,
+  searchQuery: "",
 
   setConversationId: (id) => set({ conversationId: id }),
   setSelectedSkillId: (id) => set({ selectedSkillId: id }),
@@ -62,13 +80,26 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ messages: [...state.messages, message] })),
   setStreamingContent: (content) => set({ streamingContent: content }),
   appendStreamingContent: (chunk) =>
-    set((state) => ({ streamingContent: state.streamingContent + chunk })),
+    set((state) => {
+      const segments = [...state.streamingSegments];
+      const last = segments[segments.length - 1];
+      if (last && last.type === "text") {
+        segments[segments.length - 1] = { type: "text", content: last.content + chunk };
+      } else {
+        segments.push({ type: "text", content: chunk });
+      }
+      return {
+        streamingContent: state.streamingContent + chunk,
+        streamingSegments: segments,
+      };
+    }),
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
   setPendingApproval: (approval) => set({ pendingApproval: approval }),
   setError: (error) => set({ error }),
   addToolCall: (call) =>
     set((state) => ({
       toolCalls: [...state.toolCalls, { ...call, expanded: false }],
+      streamingSegments: [...state.streamingSegments, { type: "tool_call" as const, call_id: call.call_id }],
     })),
   setToolCallExecuting: (call_id) =>
     set((state) => ({
@@ -96,7 +127,11 @@ export const useAppStore = create<AppState>((set) => ({
         tc.call_id === call_id ? { ...tc, expanded: !tc.expanded } : tc
       ),
     })),
+  clearToolCalls: () => set({ toolCalls: [], streamingSegments: [] }),
   setConversations: (conversations) => set({ conversations }),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  setSearchQuery: (query) => set({ searchQuery: query }),
   resetChat: () =>
     set({
       conversationId: null,
@@ -106,5 +141,6 @@ export const useAppStore = create<AppState>((set) => ({
       pendingApproval: null,
       error: null,
       toolCalls: [],
+      streamingSegments: [],
     }),
 }));

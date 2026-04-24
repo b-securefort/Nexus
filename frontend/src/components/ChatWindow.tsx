@@ -1,11 +1,26 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Sparkles, Bot } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { sendChatMessage, resumeChat, resolveApproval } from "../api/chat";
+import { sendChatMessage, resumeChat, resolveApproval, fetchGreeting } from "../api/chat";
 import { fetchConversation } from "../api/conversations";
 import { MessageBubble } from "./MessageBubble";
 import { ApprovalCard } from "./ApprovalCard";
+import { ToolCallCard } from "./ToolCallCard";
 import type { Message, ApprovalInfo } from "../types";
+
+/** Simple time-of-day fallback while the AI greeting loads. */
+function getFallbackGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 5) return "Hey there, night owl";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+// Fire greeting fetch at module load time (parallel with page render)
+const greetingPromise = fetchGreeting()
+  .then((g) => g || getFallbackGreeting())
+  .catch(() => getFallbackGreeting());
 
 export function ChatWindow() {
   const [input, setInput] = useState("");
@@ -21,6 +36,7 @@ export function ChatWindow() {
     pendingApproval,
     error,
     toolCalls,
+    streamingSegments,
     setConversationId,
     setMessages,
     addMessage,
@@ -34,6 +50,7 @@ export function ChatWindow() {
     appendToolCallOutput,
     setToolCallResult,
     toggleToolCallExpanded,
+    clearToolCalls,
   } = useAppStore();
 
   const scrollToBottom = useCallback(() => {
@@ -45,7 +62,7 @@ export function ChatWindow() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingContent, toolCalls, pendingApproval, scrollToBottom]);
+  }, [messages, streamingContent, streamingSegments, toolCalls, pendingApproval, scrollToBottom]);
 
   // Load conversation messages when conversationId changes
   useEffect(() => {
@@ -104,7 +121,10 @@ export function ChatWindow() {
           if (d.conversation_id) {
             setConversationId(d.conversation_id as number);
             fetchConversation(d.conversation_id as number)
-              .then((conv) => setMessages(conv.messages))
+              .then((conv) => {
+                setMessages(conv.messages);
+                clearToolCalls();
+              })
               .catch(() => {});
           }
           break;
@@ -127,6 +147,7 @@ export function ChatWindow() {
       setConversationId,
       setMessages,
       setError,
+      clearToolCalls,
       streamingContent,
     ]
   );
@@ -142,6 +163,7 @@ export function ChatWindow() {
     setInput("");
     setError(null);
     setStreamingContent("");
+    clearToolCalls();
     setIsStreaming(true);
 
     // Optimistically add user message
@@ -192,22 +214,57 @@ export function ChatWindow() {
 
   const canSend = !isStreaming && !pendingApproval && input.trim().length > 0;
 
+  const [greeting, setGreeting] = useState("");
+
+  // Read from the module-level promise (already in-flight)
+  useEffect(() => {
+    let cancelled = false;
+    greetingPromise.then((g) => {
+      if (!cancelled) setGreeting(g);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
         {messages.length === 0 && !isStreaming && (
           <div className="flex items-center justify-center h-full">
-            <div className="text-center max-w-sm">
-              <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-5">
-                <Send className="w-5 h-5 text-accent-light" />
+            <div className="text-center max-w-lg animate-fade-in-up">
+              <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
+                <Sparkles className="w-7 h-7 text-accent-light" />
               </div>
-              <h2 className="text-lg font-medium text-base-300 tracking-tight mb-2">Start a conversation</h2>
-              <p className="text-sm text-base-500 leading-relaxed">
+              {greeting ? (
+                <h2 className="text-2xl font-semibold text-base-100 tracking-tight mb-2 animate-fade-in-up">{greeting}</h2>
+              ) : (
+                <div className="h-8 w-56 mx-auto mb-2 rounded-lg bg-base-800/60 animate-soft-pulse" />
+              )}
+              <p className="text-sm text-base-500 leading-relaxed mb-8">
                 {selectedSkillId
-                  ? "Type a message below to begin."
-                  : "Select a skill from the dropdown above, then type a message."}
+                  ? "Ask me anything — I can search your knowledge base, run Azure commands, and more."
+                  : "Select a skill from the dropdown above to get started."}
               </p>
+              {selectedSkillId && (
+                <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto">
+                  {[
+                    "Search the knowledge base",
+                    "Check Azure resource status",
+                    "Help me debug an issue",
+                    "Explain our architecture",
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => {
+                        setInput(suggestion);
+                      }}
+                      className="text-left px-3.5 py-2.5 bg-base-800/50 hover:bg-base-800 border border-base-700/40 rounded-xl text-sm text-base-300 hover:text-base-100 transition-colors duration-150"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -222,12 +279,35 @@ export function ChatWindow() {
           />
         ))}
 
-        {/* Streaming assistant content */}
-        {streamingContent && (
-          <div className="flex justify-start animate-fade-in-up">
-            <div className="bg-base-800/80 rounded-xl px-4 py-3 max-w-[80%] text-base-100 whitespace-pre-wrap text-sm leading-relaxed">
-              {streamingContent}
-              <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
+        {/* Streaming assistant content + live tool calls (interleaved) */}
+        {isStreaming && streamingSegments.length > 0 && (
+          <div className="flex justify-start gap-3 animate-fade-in-up">
+            <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
+              <Bot className="w-3.5 h-3.5 text-accent-light" />
+            </div>
+            <div className="max-w-[80%] space-y-2">
+              {streamingSegments.map((seg, i) => {
+                if (seg.type === "text") {
+                  const isLast = i === streamingSegments.length - 1;
+                  return (
+                    <div key={`seg-text-${i}`} className="bg-base-800/80 rounded-xl px-4 py-3 text-base-100 whitespace-pre-wrap text-sm leading-relaxed">
+                      {seg.content}
+                      {isLast && (
+                        <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
+                      )}
+                    </div>
+                  );
+                }
+                const tc = toolCalls.find((t) => t.call_id === seg.call_id);
+                if (!tc) return null;
+                return <ToolCallCard key={tc.call_id} tc={tc} onToggle={toggleToolCallExpanded} />;
+              })}
+              {/* Show cursor when streaming hasn't produced text yet after last tool call */}
+              {streamingSegments[streamingSegments.length - 1]?.type === "tool_call" && isStreaming && (
+                <div className="bg-base-800/80 rounded-xl px-4 py-3">
+                  <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse" />
+                </div>
+              )}
             </div>
           </div>
         )}

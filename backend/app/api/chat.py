@@ -25,10 +25,75 @@ from app.deps import current_user
 from app.config import get_settings
 from app.skills.loader import load_skill
 from app.skills.models import Skill
+from openai import AzureOpenAI
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+
+@router.get("/greeting")
+async def get_greeting(user: User = Depends(current_user)):
+    """Generate a short AI-powered greeting based on current context."""
+    settings = get_settings()
+    now = datetime.now()
+    hour = now.hour
+    time_str = now.strftime("%I:%M %p")  # e.g. "01:46 AM"
+    day_name = now.strftime("%A")
+
+    # Extract first name from display_name (e.g. "Balaji Kumar" -> "Balaji")
+    first_name = (user.display_name or "").split()[0] if user.display_name else ""
+
+    try:
+        client = AzureOpenAI(
+            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+        )
+
+        name_instruction = (
+            f"The user's first name is {first_name}. "
+            "Sometimes include their name in the greeting, sometimes don't — vary it naturally."
+        ) if first_name else ""
+
+        response = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You generate a single short, friendly greeting for an AI assistant called Nexus. "
+                        "The greeting should be warm but professional. Keep it under 8 words. "
+                        "Do NOT include any punctuation at the end. Do NOT use quotes. "
+                        "Vary your style — sometimes ask how you can help, sometimes just greet, "
+                        "sometimes reference the time context naturally. "
+                        "Use common sense for time references: late night is not 'evening', "
+                        "early hours like 1-4 AM are 'late night' or just skip time references. "
+                        f"{name_instruction}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"The current time is {time_str} on {day_name}. Generate a greeting.",
+                },
+            ],
+            max_completion_tokens=20,
+            temperature=1.0,
+        )
+        greeting = response.choices[0].message.content.strip().strip('"\'')
+        return {"greeting": greeting}
+    except Exception:
+        logger.exception("Failed to generate AI greeting")
+        # Fallback
+        if hour < 5:
+            fallback = "Hey there, night owl"
+        elif hour < 12:
+            fallback = "Good morning"
+        elif hour < 17:
+            fallback = "Good afternoon"
+        else:
+            fallback = "Good evening"
+        return {"greeting": fallback}
 
 # In-memory rate limiter: user_oid -> list of request timestamps
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)

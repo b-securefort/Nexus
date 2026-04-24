@@ -111,6 +111,11 @@ button:not(:disabled):active,
 .stagger-children > *:nth-child(4) { animation-delay: 120ms; }
 .stagger-children > *:nth-child(5) { animation-delay: 160ms; }
 
+/* ── Sidebar panel ── */
+.sidebar-panel {
+  overflow: hidden;
+}
+
 /* ── Prose refinements for assistant messages ── */
 .prose-chat {
   --tw-prose-headings: var(--color-base-200);

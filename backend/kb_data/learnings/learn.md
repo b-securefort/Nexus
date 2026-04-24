@@ -50,3 +50,18 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: az_rest_api
 - **Details**: When asked how many AI models are deployed across subscriptions, do not stop at listing AI hosting resources (Cognitive Services accounts or ML workspaces). The correct first pass is to enumerate Microsoft.CognitiveServices/accounts/{account}/deployments for each OpenAI/AIServices account and count the deployment child resources, separating Succeeded/Enabled from Disabled. Resource Graph is useful for finding the parent accounts, but it does not reliably expose the deployment layer.
 
+## [best-practice] Return the actual AI deployment inventory directly when asked for deployed models
+- **Date**: 2026-04-24 01:02 UTC
+- **Tool**: az_rest_api
+- **Details**: When users ask how many AI models are deployed, do not stop at counting parent Azure AI / Cognitive Services accounts or ML workspaces. Query the deployment child resources for each account first, then present a deployment-level table including account, model name, region, and provisioning status. Explicitly separate active/succeeded deployments from disabled ones so the answer matches the user's intent on the first pass.
+
+## [workaround] Use parent AI account properties when ARG does not surface child deployment resources
+- **Date**: 2026-04-24 01:29 UTC
+- **Tool**: az_resource_graph
+- **Details**: Resource Graph only returned parent Microsoft.CognitiveServices/accounts and Microsoft.MachineLearningServices/workspaces records even though deployed AI models are likely present as child resources or service-side objects. When ARG does not enumerate child deployments, inspect the parent resource properties for endpoints, account kind, and related workspace metadata, then use service-specific APIs/CLI only if a true deployment count is needed.
+
+## [workaround] Add a 5-second delay between back-to-back cost API calls to avoid 429 rate limits
+- **Date**: 2026-04-24 19:21 UTC
+- **Tool**: az_cost_query
+- **Details**: When using az_cost_query for multiple related cost queries, immediate consecutive calls can trigger HTTP 429 Too Many Requests. The reliable workaround is to wait about 5 seconds before issuing the next query, especially when querying adjacent time windows or multiple group-bys for the same subscription. This is preferable to retrying instantly.
+

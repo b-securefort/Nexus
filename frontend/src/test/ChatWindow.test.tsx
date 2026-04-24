@@ -7,10 +7,11 @@ import { useAppStore } from '../store/useAppStore';
 const mockSendChatMessage = vi.fn();
 const mockResolveApproval = vi.fn();
 const mockFetchConversation = vi.fn();
-vi.mock('../api/chat', () => ({
+vi.mock('../api/chat', async () => ({
   sendChatMessage: (...args: unknown[]) => mockSendChatMessage(...args),
   resumeChat: vi.fn(),
   resolveApproval: (...args: unknown[]) => mockResolveApproval(...args),
+  fetchGreeting: vi.fn().mockResolvedValue('Hey there, happy Thursday'),
 }));
 vi.mock('../api/conversations', () => ({
   fetchConversation: (id: number) => mockFetchConversation(id),
@@ -34,10 +35,13 @@ describe('ChatWindow', () => {
     });
   });
 
-  it('renders empty state with skill selected', () => {
+  it('renders empty state with skill selected', async () => {
     render(<ChatWindow />);
-    expect(screen.getByText('Start a conversation')).toBeInTheDocument();
-    expect(screen.getByText('Type a message to begin.')).toBeInTheDocument();
+    // Starts with fallback, then AI greeting loads
+    await waitFor(() => {
+      expect(screen.getByText('Hey there, happy Thursday')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Ask me anything/)).toBeInTheDocument();
   });
 
   it('renders empty state without skill selected', () => {
@@ -69,6 +73,7 @@ describe('ChatWindow', () => {
     useAppStore.setState({
       isStreaming: true,
       streamingContent: 'Generating response...',
+      streamingSegments: [{ type: 'text', content: 'Generating response...' }],
     });
     render(<ChatWindow />);
     expect(screen.getByText('Generating response...')).toBeInTheDocument();
@@ -95,6 +100,7 @@ describe('ChatWindow', () => {
   });
 
   it('disables send button when input is empty', () => {
+    useAppStore.setState({ selectedSkillId: null });
     render(<ChatWindow />);
     const sendButton = screen.getByRole('button');
     expect(sendButton).toBeDisabled();

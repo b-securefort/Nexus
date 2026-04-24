@@ -9,6 +9,7 @@ const mockDeleteConversation = vi.fn();
 vi.mock('../api/conversations', () => ({
   fetchConversations: () => mockFetchConversations(),
   deleteConversation: (id: number) => mockDeleteConversation(id),
+  renameConversation: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { ConversationList } from '../components/ConversationList';
@@ -32,6 +33,8 @@ describe('ConversationList', () => {
       pendingApproval: null,
       error: null,
       toolCalls: [],
+      sidebarOpen: true,
+      searchQuery: '',
     });
   });
 
@@ -64,21 +67,25 @@ describe('ConversationList', () => {
     });
   });
 
-  it('has a New Chat button', async () => {
+  it('has a search input', async () => {
     mockFetchConversations.mockResolvedValue([]);
     render(<ConversationList />);
-    expect(screen.getByText('New Chat')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search chats...')).toBeInTheDocument();
   });
 
-  it('calls resetChat when New Chat is clicked', async () => {
+  it('filters conversations by search query', async () => {
     mockFetchConversations.mockResolvedValue(sampleConversations);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-
-    useAppStore.setState({ conversationId: 1, selectedSkillId: 'shared:architect' });
     render(<ConversationList />);
 
-    await user.click(screen.getByText('New Chat'));
-    expect(useAppStore.getState().conversationId).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByText('First Chat')).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByPlaceholderText('Search chats...');
+    await user.type(searchInput, 'First');
+    expect(screen.getByText('First Chat')).toBeInTheDocument();
+    expect(screen.queryByText('Second Chat')).not.toBeInTheDocument();
   });
 
   it('selects a conversation on click', async () => {
@@ -95,7 +102,7 @@ describe('ConversationList', () => {
     expect(useAppStore.getState().selectedSkillId).toBe('shared:architect');
   });
 
-  it('formats "Just now" for recent conversations', async () => {
+  it('groups conversations under "Today" for recent ones', async () => {
     const recentConv = [{
       id: 1,
       title: 'Recent',
@@ -107,7 +114,8 @@ describe('ConversationList', () => {
     render(<ConversationList />);
 
     await waitFor(() => {
-      expect(screen.getByText('Just now')).toBeInTheDocument();
+      expect(screen.getByText('Today')).toBeInTheDocument();
+      expect(screen.getByText('Recent')).toBeInTheDocument();
     });
   });
 });

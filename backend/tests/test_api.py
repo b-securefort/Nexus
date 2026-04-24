@@ -308,6 +308,16 @@ class TestApprovalsAPI:
 
 class TestChatAPI:
     @pytest.mark.asyncio
+    async def test_greeting_endpoint(self, client):
+        """Greeting endpoint returns a greeting string."""
+        resp = await client.get("/api/greeting")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "greeting" in data
+        assert isinstance(data["greeting"], str)
+        assert len(data["greeting"]) > 0
+
+    @pytest.mark.asyncio
     async def test_chat_no_auth_dev_bypass(self, client):
         """In dev mode, chat requests without Auth header succeed via bypass."""
         resp = await client.post(

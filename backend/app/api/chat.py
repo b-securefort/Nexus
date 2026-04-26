@@ -2,13 +2,16 @@
 
 import json
 import logging
+import os
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import select
 
@@ -119,6 +122,7 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[int] = None
     skill_id: Optional[str] = None
     message: str
+    attachment_urls: list[str] = []
 
     @field_validator("message")
     @classmethod
@@ -129,6 +133,56 @@ class ChatRequest(BaseModel):
         if len(v) > 16000:
             raise ValueError("Message too long (max 16000 characters)")
         return v
+
+
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+
+def _ensure_upload_dir() -> Path:
+    """Ensure the upload directory exists and return its resolved absolute path."""
+    settings = get_settings()
+    upload_dir = Path(settings.UPLOAD_DIR).resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
+async def _save_upload(file: UploadFile) -> dict:
+    """Validate and save a single uploaded file. Returns attachment metadata."""
+    settings = get_settings()
+
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file.content_type}. Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    max_bytes = settings.UPLOAD_MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large: {len(data) / 1024 / 1024:.1f}MB (max {settings.UPLOAD_MAX_FILE_SIZE_MB}MB)",
+        )
+
+    # Generate unique filename preserving extension
+    ext = Path(file.filename or "image.png").suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        ext = ".png"
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+
+    upload_dir = _ensure_upload_dir()
+    file_path = upload_dir / unique_name
+    file_path.write_bytes(data)
+    logger.info("Saved upload %s (%d bytes) to %s", file.filename, len(data), file_path)
+
+    return {
+        "filename": unique_name,
+        "original_name": file.filename or "image",
+        "content_type": file.content_type,
+        "url": f"/api/uploads/{unique_name}",
+    }
 
 
 class ApprovalRequest(BaseModel):
@@ -172,35 +226,102 @@ def _skill_to_snapshot(skill: Skill) -> str:
 
 
 @router.post("/chat")
-async def chat(body: ChatRequest, user: User = Depends(current_user)):
-    """Start or continue a chat conversation. Returns SSE stream."""
+async def chat(
+    request: Request,
+    user: User = Depends(current_user),
+):
+    """Start or continue a chat conversation. Returns SSE stream.
+
+    Accepts either JSON body or multipart/form-data (with file attachments).
+    """
     _check_rate_limit(user.oid)
     _upsert_user(user)
 
+    settings = get_settings()
+    content_type = request.headers.get("content-type", "")
+    logger.info("Chat request content-type: %s", content_type[:100])
+
+    # Parse request — support both JSON and multipart
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        message = str(form.get("message", "")).strip()
+        conversation_id_str = str(form.get("conversation_id", "") or "")
+        skill_id = str(form.get("skill_id", "") or "") or None
+        conversation_id = int(conversation_id_str) if conversation_id_str else None
+
+        # Process file uploads
+        files = form.getlist("files")
+        has_files = any(hasattr(f, 'read') for f in files)
+
+        if not message and not has_files:
+            raise HTTPException(status_code=422, detail="Message or attachment required")
+        if len(message) > 16000:
+            raise HTTPException(status_code=422, detail="Message too long (max 16000 characters)")
+
+        if len(files) > settings.UPLOAD_MAX_FILES_PER_MESSAGE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many files (max {settings.UPLOAD_MAX_FILES_PER_MESSAGE})",
+            )
+        attachments = []
+        for f in files:
+            # Use duck typing: form.getlist returns starlette UploadFile,
+            # not fastapi UploadFile, so isinstance check would fail
+            if hasattr(f, 'read') and hasattr(f, 'filename'):
+                att = await _save_upload(f)
+                attachments.append(att)
+    else:
+        body_bytes = await request.body()
+        try:
+            body_data = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="Invalid JSON")
+        try:
+            body = ChatRequest(**body_data)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        message = body.message
+        conversation_id = body.conversation_id
+        skill_id = body.skill_id
+        attachments = []
+        # Support pre-uploaded attachment URLs in JSON mode
+        for url in body.attachment_urls:
+            filename = url.rsplit("/", 1)[-1]
+            attachments.append({
+                "filename": filename,
+                "original_name": filename,
+                "content_type": "image/png",
+                "url": url,
+            })
+    attachments_json = json.dumps(attachments) if attachments else None
+    if attachments:
+        logger.info("Chat request has %d attachment(s): %s", len(attachments),
+                     [a["filename"] for a in attachments])
+
     with get_session() as session:
-        if body.conversation_id:
+        if conversation_id:
             # Continue existing conversation
-            conversation = session.get(Conversation, body.conversation_id)
+            conversation = session.get(Conversation, conversation_id)
             if not conversation or conversation.deleted_at is not None:
                 raise HTTPException(status_code=404, detail="Conversation not found")
             if conversation.user_oid != user.oid:
                 raise HTTPException(status_code=403, detail="Access denied")
         else:
             # New conversation
-            if not body.skill_id:
+            if not skill_id:
                 raise HTTPException(status_code=400, detail="skill_id is required for new conversations")
 
-            skill = load_skill(body.skill_id, user.oid, session)
+            skill = load_skill(skill_id, user.oid, session)
 
             # Generate title from first message
-            title = body.message[:80].strip()
-            if len(body.message) > 80:
+            title = message[:80].strip()
+            if len(message) > 80:
                 title += "..."
 
             conversation = Conversation(
                 user_oid=user.oid,
                 title=title,
-                skill_id=body.skill_id,
+                skill_id=skill_id,
                 skill_snapshot_json=_skill_to_snapshot(skill),
             )
             session.add(conversation)
@@ -210,7 +331,10 @@ async def chat(body: ChatRequest, user: User = Depends(current_user)):
     async def event_stream():
         with get_session() as session:
             try:
-                async for event in handle_chat(session, conversation, body.message, user):
+                async for event in handle_chat(
+                    session, conversation, message, user,
+                    attachments_json=attachments_json,
+                ):
                     yield event
             except Exception as e:
                 logger.error("Chat stream error: %s", str(e), exc_info=True)
@@ -268,3 +392,24 @@ async def resume_chat(conversation_id: int, user: User = Depends(current_user)):
             yield sse_done(conversation_id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get("/uploads/{filename}")
+async def serve_upload(filename: str, user: User = Depends(current_user)):
+    """Serve an uploaded file. Only allows image files with safe filenames."""
+    import re
+    if not re.match(r"^[a-f0-9]+\.(png|jpg|jpeg|gif|webp)$", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    settings = get_settings()
+    upload_dir = Path(settings.UPLOAD_DIR).resolve()
+    file_path = upload_dir / filename
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Extra safety: ensure resolved path is inside upload dir
+    if not file_path.resolve().is_relative_to(upload_dir):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    return FileResponse(file_path)

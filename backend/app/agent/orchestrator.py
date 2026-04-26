@@ -146,6 +146,49 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
     return "\n".join(parts)
 
 
+def _build_content_with_images(text: str, attachments_json: str) -> list[dict]:
+    """Build OpenAI multi-part content array from text + image attachments.
+
+    Converts stored attachment URLs to base64 data URLs for the OpenAI vision API.
+    """
+    import base64
+    from pathlib import Path
+
+    settings = get_settings()
+
+    parts: list[dict] = []
+    if text:
+        parts.append({"type": "text", "text": text})
+
+    try:
+        attachments = json.loads(attachments_json)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Failed to parse attachments_json: %s", attachments_json[:200])
+        return parts or [{"type": "text", "text": text}]
+
+    upload_dir = Path(settings.UPLOAD_DIR).resolve()
+    for att in attachments:
+        filename = att.get("filename", "")
+        content_type = att.get("content_type", "image/png")
+        file_path = upload_dir / filename
+
+        if file_path.is_file():
+            data = file_path.read_bytes()
+            if not data:
+                logger.warning("Image file is empty: %s", file_path)
+                continue
+            b64 = base64.b64encode(data).decode("ascii")
+            logger.info("Attached image %s (%d bytes) to message", filename, len(data))
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{content_type};base64,{b64}", "detail": "auto"},
+            })
+        else:
+            logger.warning("Image file not found: %s", file_path)
+
+    return parts if parts else [{"type": "text", "text": text}]
+
+
 def _load_message_history(session: Session, conversation_id: int) -> list[dict]:
     """Load message history for the conversation, limited to MAX_HISTORY_MESSAGES.
 
@@ -171,6 +214,9 @@ def _load_message_history(session: Session, conversation_id: int) -> list[dict]:
                 msg["tool_calls"] = tool_calls
         if row.role == "tool":
             msg["tool_call_id"] = row.tool_call_id or ""
+        # Include image attachments as multi-part content for OpenAI vision
+        if row.role == "user" and row.attachments_json:
+            msg["content"] = _build_content_with_images(row.content, row.attachments_json)
         messages.append(msg)
 
     # Collect tool_call_ids provided by assistant messages in the history
@@ -220,6 +266,7 @@ def _save_message(
     tool_calls_json: str | None = None,
     tool_call_id: str | None = None,
     tool_name: str | None = None,
+    attachments_json: str | None = None,
 ) -> Message:
     """Save a message to the database."""
     msg = Message(
@@ -229,6 +276,7 @@ def _save_message(
         tool_calls_json=tool_calls_json,
         tool_call_id=tool_call_id,
         tool_name=tool_name,
+        attachments_json=attachments_json,
     )
     session.add(msg)
     session.commit()
@@ -382,6 +430,7 @@ async def handle_chat(
     conversation: Conversation,
     user_message: str,
     user: User,
+    attachments_json: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Main agent loop. Yields SSE events as strings.
@@ -389,7 +438,10 @@ async def handle_chat(
     settings = get_settings()
 
     # 1. Persist user message
-    user_msg = _save_message(session, conversation.id, role="user", content=user_message)
+    user_msg = _save_message(
+        session, conversation.id, role="user", content=user_message,
+        attachments_json=attachments_json,
+    )
     yield sse_message_saved(user_msg.id, "user")
 
     # 2. Build request

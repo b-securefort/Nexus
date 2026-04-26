@@ -49,6 +49,23 @@ def _setup_logging():
     root.setLevel(settings.APP_LOG_LEVEL)
 
 
+def _apply_lightweight_migrations(engine):
+    """Add columns that may be missing on existing tables (dev convenience).
+
+    This is a no-op if the columns already exist.
+    """
+    import sqlalchemy
+
+    with engine.connect() as conn:
+        # Check if attachments_json column exists on messages table
+        try:
+            conn.execute(sqlalchemy.text("SELECT attachments_json FROM messages LIMIT 0"))
+        except Exception:
+            logger.info("Adding attachments_json column to messages table")
+            conn.execute(sqlalchemy.text("ALTER TABLE messages ADD COLUMN attachments_json TEXT"))
+            conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown tasks."""
@@ -59,6 +76,9 @@ async def lifespan(app: FastAPI):
     # Create tables (dev convenience; prod uses alembic)
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
+
+    # Ensure new columns exist on existing tables (dev convenience)
+    _apply_lightweight_migrations(engine)
 
     # Init tools
     init_tools()

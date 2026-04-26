@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     BACKUP_CONTAINER_NAME: str = "sqlite-backups"
     BACKUP_INTERVAL_SECONDS: int = 86400
 
+    # Uploads
+    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_MAX_FILE_SIZE_MB: int = 5
+    UPLOAD_MAX_FILES_PER_MESSAGE: int = 4
+
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
 

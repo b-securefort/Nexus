@@ -15,6 +15,9 @@ interface AppState {
   pendingApproval: ApprovalInfo | null;
   error: string | null;
 
+  // Pending file attachments for next message
+  pendingAttachments: File[];
+
   // Tool calls
   toolCalls: Array<{
     call_id: string;
@@ -56,6 +59,9 @@ interface AppState {
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
+  addPendingAttachment: (file: File) => void;
+  removePendingAttachment: (index: number) => void;
+  clearPendingAttachments: () => void;
   resetChat: () => void;
 }
 
@@ -67,6 +73,7 @@ export const useAppStore = create<AppState>((set) => ({
   isStreaming: false,
   pendingApproval: null,
   error: null,
+  pendingAttachments: [],
   toolCalls: [],
   streamingSegments: [],
   conversations: [],
@@ -132,6 +139,13 @@ export const useAppStore = create<AppState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  addPendingAttachment: (file) =>
+    set((state) => ({ pendingAttachments: [...state.pendingAttachments, file] })),
+  removePendingAttachment: (index) =>
+    set((state) => ({
+      pendingAttachments: state.pendingAttachments.filter((_, i) => i !== index),
+    })),
+  clearPendingAttachments: () => set({ pendingAttachments: [] }),
   resetChat: () =>
     set({
       conversationId: null,
@@ -140,6 +154,7 @@ export const useAppStore = create<AppState>((set) => ({
       isStreaming: false,
       pendingApproval: null,
       error: null,
+      pendingAttachments: [],
       toolCalls: [],
       streamingSegments: [],
     }),

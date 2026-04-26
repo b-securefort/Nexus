@@ -102,7 +102,7 @@ describe('ChatWindow', () => {
   it('disables send button when input is empty', () => {
     useAppStore.setState({ selectedSkillId: null });
     render(<ChatWindow />);
-    const sendButton = screen.getByRole('button');
+    const sendButton = screen.getByRole('button', { name: /send message/i });
     expect(sendButton).toBeDisabled();
   });
 

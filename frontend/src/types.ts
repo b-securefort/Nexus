@@ -22,6 +22,13 @@ export interface ConversationSummary {
   updated_at: string;
 }
 
+export interface Attachment {
+  filename: string;
+  original_name: string;
+  content_type: string;
+  url: string;
+}
+
 export interface Message {
   id: number;
   role: "user" | "assistant" | "tool";
@@ -29,6 +36,7 @@ export interface Message {
   tool_calls_json?: string | null;
   tool_call_id?: string | null;
   tool_name?: string | null;
+  attachments_json?: string | null;
   created_at: string;
 }
 
@@ -65,6 +73,7 @@ export interface ChatRequest {
   conversation_id?: number | null;
   skill_id?: string | null;
   message: string;
+  files?: File[];
 }
 
 export interface CreateSkillRequest {

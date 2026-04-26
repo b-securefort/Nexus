@@ -95,6 +95,7 @@ async def get_conversation(conversation_id: int, user: User = Depends(current_us
                     "tool_calls_json": m.tool_calls_json,
                     "tool_call_id": m.tool_call_id,
                     "tool_name": m.tool_name,
+                    "attachments_json": m.attachments_json,
                     "created_at": m.created_at.isoformat(),
                 }
                 for m in messages

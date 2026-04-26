@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock apiFetch
 const mockApiFetch = vi.fn();
+const mockApiFetchMultipart = vi.fn();
 vi.mock('../api/client', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+  apiFetchMultipart: (...args: unknown[]) => mockApiFetchMultipart(...args),
 }));
 
 function makeSSEStream(events: string): ReadableStream<Uint8Array> {

@@ -46,6 +46,7 @@ class Message(SQLModel, table=True):
     tool_calls_json: Optional[str] = Field(default=None)
     tool_call_id: Optional[str] = Field(default=None)
     tool_name: Optional[str] = Field(default=None)
+    attachments_json: Optional[str] = Field(default=None)  # JSON array of {filename, content_type, url}
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 
 

@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, apiFetchMultipart } from "./client";
 import type { ChatRequest, ApprovalInfo } from "../types";
 
 export async function sendChatMessage(
@@ -6,11 +6,38 @@ export async function sendChatMessage(
   onEvent: (event: string, data: unknown) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const response = await apiFetch("/api/chat", {
-    method: "POST",
-    body: JSON.stringify(body),
-    signal,
-  });
+  const hasFiles = body.files && body.files.length > 0;
+  console.log(`[Nexus] sendChatMessage: hasFiles=${hasFiles}, fileCount=${body.files?.length ?? 0}`);
+
+  let response: Response;
+  if (hasFiles) {
+    const formData = new FormData();
+    formData.append("message", body.message);
+    if (body.conversation_id != null) {
+      formData.append("conversation_id", String(body.conversation_id));
+    }
+    if (body.skill_id) {
+      formData.append("skill_id", body.skill_id);
+    }
+    for (const file of body.files!) {
+      formData.append("files", file);
+    }
+    response = await apiFetchMultipart("/api/chat", {
+      method: "POST",
+      body: formData,
+      signal,
+    });
+  } else {
+    response = await apiFetch("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        conversation_id: body.conversation_id,
+        skill_id: body.skill_id,
+        message: body.message,
+      }),
+      signal,
+    });
+  }
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: "Request failed" }));

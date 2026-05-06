@@ -1,17 +1,34 @@
-# Examples
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+*.db
 
-Input:
-### Added files:
-[backend/app/tools/validate_drawio.py, backend/kb_data/skills/shared/drawio-diagrammer/SKILL.md]
+# Environment
+.env
+.env.local
 
-### Deleted files:
-[]
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-### Modified files:
-[]
+# OS
+.DS_Store
+Thumbs.db
 
-###current .gitignore Content
-(empty)
+# Node
+node_modules/
+dist/
 
-Expected Output:
-(empty — output nothing)
+# Misc
+*.log
+
+# Uploads
+uploads/

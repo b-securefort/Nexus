@@ -70,3 +70,8 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: az_devops
 - **Details**: Attempting to list Azure DevOps projects failed first because the Azure DevOps CLI extension/auth was not initialized, and a REST fallback then failed with AADSTS53003 Conditional Access blocking token issuance. The correct next step is to authenticate the environment with `az login --scope https://management.core.windows.net//.default` (or equivalent approved auth path) before retrying az devops or REST calls.
 
+## [gotcha] draw.io validator can misclassify resource-sized vertices unless Azure2 image styles are explicit and spaced apart
+- **Date**: 2026-05-06 02:15 UTC
+- **Tool**: generate_file
+- **Details**: When generating Azure draw.io diagrams, generic-looking image vertices can still be flagged as generic styles by the validator. The safest approach is to use explicit Azure2 image paths for every resource icon, keep observability services fully outside VNets/VPNs, and give large spacing between resources and monitoring nodes to avoid overlap heuristics.
+

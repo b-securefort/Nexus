@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Sparkles, Bot, Paperclip, X as XIcon } from "lucide-react";
+import { Send, Loader2, Bot, Paperclip, X as XIcon } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { sendChatMessage, resolveApproval, fetchGreeting } from "../api/chat";
 import { fetchConversation } from "../api/conversations";
@@ -190,7 +190,7 @@ export function ChatWindow() {
 
     const message = input.trim() || (hasFiles ? "[Attached image(s)]" : "");
     const files = [...currentAttachments];
-    console.log(`[Nexus] Sending: text="${message.slice(0, 50)}", files=${files.length}`, files.map(f => `${f.name}(${f.size})`));
+    console.log(`[NEXUS] Sending: text="${message.slice(0, 50)}", files=${files.length}`, files.map(f => `${f.name}(${f.size})`));
     setInput("");
     // Reset textarea height after clearing
     if (textareaRef.current) {
@@ -272,7 +272,7 @@ export function ChatWindow() {
         if (item.type.startsWith("image/")) {
           const file = item.getAsFile();
           if (file && file.size > 0) {
-            console.log(`[Nexus] Pasted image: ${file.name} (${file.type}, ${file.size} bytes)`);
+            console.log(`[NEXUS] Pasted image: ${file.name} (${file.type}, ${file.size} bytes)`);
             addPendingAttachment(file);
             added = true;
           }
@@ -324,7 +324,7 @@ export function ChatWindow() {
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-lg animate-fade-in-up">
               <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
-                <Sparkles className="w-7 h-7 text-accent-light" />
+                <img src="/nexus_icon.png" alt="NEXUS" className="w-10 h-10 object-contain" />
               </div>
               {greeting ? (
                 <h2 className="text-2xl font-semibold text-base-100 tracking-tight mb-2 animate-fade-in-up">{greeting}</h2>

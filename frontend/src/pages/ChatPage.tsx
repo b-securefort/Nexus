@@ -1,7 +1,7 @@
 import { ChatWindow } from "../components/ChatWindow";
 import { ConversationList } from "../components/ConversationList";
 import { SkillPicker } from "../components/SkillPicker";
-import { Sparkles, Settings, PanelLeftClose, PanelLeft, Plus } from "lucide-react";
+import { Settings, PanelLeftClose, PanelLeft, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
 
@@ -40,10 +40,8 @@ export function ChatPage() {
           <div className="px-3 py-3 border-b border-base-800/80">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4 text-accent-light" />
-                </div>
-                <span className="font-semibold text-base-100 tracking-tight">Nexus</span>
+                <img src="/nexus_icon.png" alt="NEXUS" className="w-7 h-7 rounded-lg object-contain" />
+                <span className="font-semibold text-base-100 tracking-tight">NEXUS</span>
               </div>
               <div className="flex items-center gap-1">
                 <button

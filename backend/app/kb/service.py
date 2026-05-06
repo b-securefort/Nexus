@@ -47,23 +47,37 @@ class KBService:
 
     def search(self, query: str, limit: int = 10) -> list[KBEntry]:
         """
-        Substring search over index titles, summaries, and tags.
-        Case-insensitive.
+        Token-scored search over index titles, summaries, and tags.
+        Each query token is scored independently: title match = 3, tag match = 2,
+        summary match = 1. Results are sorted by score descending.
         """
         if limit > 50:
             limit = 50
 
-        query_lower = query.lower()
-        results = []
+        tokens = [t for t in query.lower().split() if len(t) > 1]
+        if not tokens:
+            return []
 
+        scored: list[tuple[int, KBEntry]] = []
         for entry in get_index():
-            searchable = f"{entry.title} {entry.summary} {' '.join(entry.tags)}".lower()
-            if query_lower in searchable:
-                results.append(entry)
-                if len(results) >= limit:
-                    break
+            title_l = entry.title.lower()
+            tags_l = " ".join(entry.tags).lower()
+            summary_l = entry.summary.lower()
 
-        return results
+            score = 0
+            for token in tokens:
+                if token in title_l:
+                    score += 3
+                if token in tags_l:
+                    score += 2
+                if token in summary_l:
+                    score += 1
+
+            if score > 0:
+                scored.append((score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:limit]]
 
 
 # Singleton

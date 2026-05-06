@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     DEV_AUTH_BYPASS: bool = False
 
     # Tool config
+    TOOL_SEARCH_SEMANTIC_ENABLED: bool = True
+    TOOL_SEARCH_STACKOVERFLOW_ENABLED: bool = True
+    STACKOVERFLOW_API_KEY: str = ""  # optional — raises daily quota from 300 to 10,000
+    TOOL_SEARCH_GITHUB_ENABLED: bool = True
+    GITHUB_TOKEN: str = ""  # optional — raises rate limit from 10 to 30 req/min
+    TOOL_SEARCH_AZURE_UPDATES_ENABLED: bool = True
+    TOOL_WEB_SEARCH_ENABLED: bool = True
     TOOL_SHELL_ENABLED: bool = True
     TOOL_AZ_CLI_ENABLED: bool = True
     TOOL_MS_DOCS_ENABLED: bool = True
@@ -50,6 +57,7 @@ class Settings(BaseSettings):
     TOOL_AZ_MONITOR_ENABLED: bool = True
     TOOL_AZ_REST_ENABLED: bool = True
     TOOL_GENERATE_FILE_ENABLED: bool = True
+    TOOL_VALIDATE_DRAWIO_ENABLED: bool = True
     TOOL_AZ_DEVOPS_ENABLED: bool = True
     AZ_DEVOPS_ORG: str = ""
     AZ_DEVOPS_PROJECT: str = ""

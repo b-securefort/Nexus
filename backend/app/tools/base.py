@@ -96,7 +96,7 @@ def init_tools() -> None:
     """Initialize and register all tools. Called on startup."""
     settings = get_settings()
 
-    from app.tools.kb_tools import ReadKBFileTool, SearchKBTool
+    from app.tools.kb_tools import ReadKBFileTool, SearchKBTool, SearchKBSemanticTool
     from app.tools.ms_docs import FetchMsDocsTool
     from app.tools.shell import RunShellTool
     from app.tools.az_cli import AzCliTool
@@ -106,15 +106,25 @@ def init_tools() -> None:
     from app.tools.az_monitor import AzMonitorLogsTool
     from app.tools.az_rest import AzRestApiTool
     from app.tools.generate_file import GenerateFileTool
+    from app.tools.validate_drawio import ValidateDrawioTool
     from app.tools.az_devops import AzDevOpsTool
     from app.tools.az_policy import AzPolicyCheckTool
     from app.tools.az_advisor import AzAdvisorTool
     from app.tools.network_test import NetworkTestTool
     from app.tools.diagram_gen import DiagramGenTool
     from app.tools.web_fetch import WebFetchTool
+    from app.tools.search_stackoverflow import SearchStackOverflowTool
+    from app.tools.search_github import SearchGithubTool
+    from app.tools.search_azure_updates import SearchAzureUpdatesTool
+    from app.tools.web_search import WebSearchTool
 
     register_tool(ReadKBFileTool())
     register_tool(SearchKBTool())
+
+    search_semantic = SearchKBSemanticTool()
+    search_semantic.enabled_by_config = settings.TOOL_SEARCH_SEMANTIC_ENABLED
+    register_tool(search_semantic)
+
     register_tool(ReadLearningsTool())
     register_tool(UpdateLearningsTool())
 
@@ -150,6 +160,10 @@ def init_tools() -> None:
     gen_file.enabled_by_config = settings.TOOL_GENERATE_FILE_ENABLED
     register_tool(gen_file)
 
+    validator = ValidateDrawioTool()
+    validator.enabled_by_config = settings.TOOL_VALIDATE_DRAWIO_ENABLED
+    register_tool(validator)
+
     az_devops = AzDevOpsTool()
     az_devops.enabled_by_config = settings.TOOL_AZ_DEVOPS_ENABLED
     register_tool(az_devops)
@@ -173,6 +187,22 @@ def init_tools() -> None:
     web = WebFetchTool()
     web.enabled_by_config = settings.TOOL_WEB_FETCH_ENABLED
     register_tool(web)
+
+    so = SearchStackOverflowTool()
+    so.enabled_by_config = settings.TOOL_SEARCH_STACKOVERFLOW_ENABLED
+    register_tool(so)
+
+    gh = SearchGithubTool()
+    gh.enabled_by_config = settings.TOOL_SEARCH_GITHUB_ENABLED
+    register_tool(gh)
+
+    az_updates = SearchAzureUpdatesTool()
+    az_updates.enabled_by_config = settings.TOOL_SEARCH_AZURE_UPDATES_ENABLED
+    register_tool(az_updates)
+
+    web_search = WebSearchTool()
+    web_search.enabled_by_config = settings.TOOL_WEB_SEARCH_ENABLED
+    register_tool(web_search)
 
     logger.info(
         "Initialized %d tools (%d enabled)",

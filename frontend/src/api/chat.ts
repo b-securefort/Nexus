@@ -7,7 +7,7 @@ export async function sendChatMessage(
   signal?: AbortSignal
 ): Promise<void> {
   const hasFiles = body.files && body.files.length > 0;
-  console.log(`[Nexus] sendChatMessage: hasFiles=${hasFiles}, fileCount=${body.files?.length ?? 0}`);
+  console.log(`[NEXUS] sendChatMessage: hasFiles=${hasFiles}, fileCount=${body.files?.length ?? 0}`);
 
   let response: Response;
   if (hasFiles) {

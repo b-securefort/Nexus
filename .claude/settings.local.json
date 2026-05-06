@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p backend/kb_data/kb/drawio)",
+      "Bash(mv backend/references/azureicons_drawio.txt backend/references/awsicons_drawio.txt backend/references/REFERENCE.md backend/references/layoutfixing.md backend/kb_data/kb/drawio/)",
+      "Bash(python -m pytest tests/test_validate_drawio.py tests/test_tools.py::TestToolRegistry -x -q)",
+      "Bash(python -c \"from app.tools.validate_drawio import validate_drawio_file; from pathlib import Path; print\\(validate_drawio_file\\(Path\\('output/hub-spoke-frontdoor-appservice.drawio'\\)\\)\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python -c \"from app.tools.validate_drawio import validate_drawio_file; from pathlib import Path; print\\(validate_drawio_file\\(Path\\('output/hub-spoke-frontdoor-appservice.drawio'\\)\\)\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python -m pytest tests/test_validate_drawio.py tests/test_tools.py::TestToolRegistry -x -q)",
+      "Bash(PYTHONIOENCODING=utf-8 python -m pytest tests/ -x -q)",
+      "Bash(PYTHONIOENCODING=utf-8 python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/test_tools.py -x -q)",
+      "Bash(python -m pytest tests/test_kb.py -x -q)",
+      "Bash(python -m pytest tests/test_kb.py tests/test_tools.py -x -q)",
+      "Bash(python -m pytest tests/test_tools.py tests/test_skills.py -x -q)",
+      "Bash(python -m pytest tests/test_tools.py -x -q -k \"azure_updates or AzureUpdates\")",
+      "Bash(python -m pytest tests/test_tools.py::TestSearchAzureUpdatesTool::test_parses_rss_and_filters_by_keyword -x -q -s)",
+      "Bash(copy \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\nexus_icon.png\" \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\frontend\\\\public\\\\nexus_icon.png\")",
+      "PowerShell(Copy-Item \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\nexus_icon.png\" \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\frontend\\\\public\\\\nexus_icon.png\")",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(python -c ' *)",
+      "PowerShell(cd \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\"; $env:PYTHONIOENCODING=\"utf-8\"; python inspect_updates.py 2>&1)",
+      "PowerShell(cd \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\"; $env:PYTHONIOENCODING=\"utf-8\"; python probe_api.py 2>&1)",
+      "PowerShell(cd \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\"; $env:PYTHONIOENCODING=\"utf-8\"; python probe_api2.py 2>&1)",
+      "PowerShell(cd \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\"; $env:PYTHONIOENCODING=\"utf-8\"; python probe3.py 2>&1)",
+      "PowerShell(cd \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\"; $env:PYTHONIOENCODING=\"utf-8\"; python probe4.py 2>&1)",
+      "Bash(Get-ChildItem -Path \"e:\\\\Work\\\\MyProjects\\\\Nexus\\\\backend\\\\kb_data\\\\skills\\\\shared\\\\\" -Force | Select-Object Name, FullName)"
+    ]
+  }
+}

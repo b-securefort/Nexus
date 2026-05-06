@@ -12,14 +12,13 @@ from app.tools.base import Tool
 
 logger = logging.getLogger(__name__)
 
-# Per-conversation rate limit tracking
-_call_counts: dict[int, int] = {}
-_MAX_CALLS_PER_CONVERSATION = 20
-
 
 class FetchMsDocsTool(Tool):
     name = "fetch_ms_docs"
-    description = "Search Microsoft Learn documentation. Returns top 5 results with title, URL, and description."
+    description = (
+        "Search Microsoft Learn documentation. Returns top 5 results with title, URL, and description. "
+        "Use web_fetch on a returned URL to read the full content of a specific article."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -33,33 +32,27 @@ class FetchMsDocsTool(Tool):
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
-        query = args.get("query", "")
+        query = args.get("query", "").strip()
         if not query:
             return "Error: query is required"
 
         try:
-            # Use httpx synchronously here
             with httpx.Client(timeout=15) as client:
                 resp = client.get(
                     "https://learn.microsoft.com/api/search",
-                    params={
-                        "search": query,
-                        "locale": "en-us",
-                        "$top": 5,
-                    },
+                    params={"search": query, "locale": "en-us", "$top": 5},
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-            results = []
-            for item in data.get("results", [])[:5]:
-                results.append(
-                    {
-                        "title": item.get("title", ""),
-                        "url": item.get("url", ""),
-                        "description": item.get("description", ""),
-                    }
-                )
+            results = [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "description": item.get("description", ""),
+                }
+                for item in data.get("results", [])[:5]
+            ]
 
             return json.dumps(results, indent=2)
 

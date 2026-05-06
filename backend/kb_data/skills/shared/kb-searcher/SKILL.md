@@ -4,6 +4,7 @@ description: Search and retrieve knowledge base content
 tools:
   - read_kb_file
   - search_kb
+  - search_kb_semantic
   - read_learnings
 ---
 

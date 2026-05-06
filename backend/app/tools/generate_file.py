@@ -4,7 +4,6 @@ No approval needed (writes only to output/ sandbox).
 """
 
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -32,7 +31,7 @@ _ALLOWED_EXTENSIONS = {
     # Web
     ".html", ".css", ".js", ".ts", ".tsx", ".jsx",
     # Data
-    ".xml", ".sql",
+    ".xml", ".sql",".drawio"
 }
 
 # Dangerous patterns in filenames
@@ -121,9 +120,14 @@ class GenerateFileTool(Tool):
             target.write_text(content, encoding="utf-8")
             size = target.stat().st_size
             logger.info("Generated file: %s (%d bytes) by %s", filename, size, user.email)
-            return (
+            result = (
                 f"File saved: output/{filename} ({size} bytes)\n"
                 f"Full path: {target}"
             )
+            if ext == ".drawio":
+                from app.tools.validate_drawio import validate_drawio_file
+                report = validate_drawio_file(target)
+                result += f"\n\nAuto-validation:\n{report}"
+            return result
         except OSError as e:
             return f"Error writing file: {e}"

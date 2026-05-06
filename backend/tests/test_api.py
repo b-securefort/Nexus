@@ -51,9 +51,10 @@ class TestSkillsAPI:
         assert resp.status_code == 200
         tools = resp.json()
         assert isinstance(tools, list)
-        assert len(tools) == 18
+        assert len(tools) == 19
         tool_names = [t["name"] for t in tools]
         assert "generate_file" in tool_names
+        assert "validate_drawio" in tool_names
         assert "read_kb_file" in tool_names
         assert "search_kb" in tool_names
         assert "fetch_ms_docs" in tool_names

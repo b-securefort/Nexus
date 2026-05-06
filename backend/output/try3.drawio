@@ -1,0 +1,107 @@
+<mxfile host="app.diagrams.net" modified="2026-04-29T00:00:00.000Z" agent="ChatGPT" version="24.7.17" type="device">
+  <diagram id="hubspokeafd" name="Page-1">
+    <mxGraphModel dx="1900" dy="1500" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Hub Subscription" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;strokeWidth=2;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="30" width="900" height="1360" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="Spoke Subscription" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;strokeWidth=2;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="970" y="30" width="900" height="1360" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Monitoring / Edge Services" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFDF2;strokeColor=#999999;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="1410" width="1840" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="Front Door" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/networking/Front_Doors.svg;" vertex="1" parent="1">
+          <mxGeometry x="80" y="90" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Azure Firewall" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/networking/Firewalls.svg;" vertex="1" parent="1">
+          <mxGeometry x="330" y="90" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="Standard Load Balancer" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/networking/Load_Balancers.svg;" vertex="1" parent="1">
+          <mxGeometry x="580" y="90" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Hub VNet" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#999999;" vertex="1" parent="2">
+          <mxGeometry x="40" y="200" width="820" height="520" as="geometry"/>
+        </mxCell>
+        <mxCell id="9" value="Ingress / Firewall Subnet" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0B0B0;" vertex="1" parent="2">
+          <mxGeometry x="70" y="250" width="760" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="10" value="Egress / Load Balancer Subnet" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0B0B0;" vertex="1" parent="2">
+          <mxGeometry x="70" y="460" width="760" height="210" as="geometry"/>
+        </mxCell>
+        <mxCell id="11" value="Spoke VNet" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#999999;" vertex="1" parent="3">
+          <mxGeometry x="40" y="200" width="820" height="520" as="geometry"/>
+        </mxCell>
+        <mxCell id="12" value="App Service Subnet / Private Endpoint" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0B0B0;" vertex="1" parent="3">
+          <mxGeometry x="70" y="250" width="760" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="13" value="App Service Plan" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/app_services/App_Service_Plans.svg;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="100" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="14" value="Azure Web App (Origin)" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/app_services/App_Services.svg;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="100" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="15" value="Private Endpoint" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/networking/Private_Endpoint.svg;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="300" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="16" value="Private DNS Zone" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/networking/DNS_Zones.svg;" vertex="1" parent="1">
+          <mxGeometry x="1500" y="300" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="17" value="Azure Monitor" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/management_governance/Monitor.svg;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="1440" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="18" value="Log Analytics" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/analytics/Log_Analytics_Workspaces.svg;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="1440" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="19" value="Azure Sentinel" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/security/Azure_Sentinel.svg;" vertex="1" parent="1">
+          <mxGeometry x="1540" y="1440" width="64" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="20" value="Internet Users" style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/general/Globe.svg;" vertex="1" parent="1">
+          <mxGeometry x="40" y="260" width="48" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="21" value="Internet to Front Door" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="20" target="5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="22" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" x="-40" y="-20" as="geometry">
+            <Array as="points"><mxPoint x="250" y="120"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="23" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" x="-40" y="-2" as="geometry">
+            <Array as="points"><mxPoint x="500" y="120"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="24" value="Private Forwarding" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="7" target="15">
+          <mxGeometry relative="1" x="-20" y="20" as="geometry">
+            <Array as="points"><mxPoint x="930" y="190"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="25" value="Private DNS lookup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="16" target="15">
+          <mxGeometry relative="1" x="15" y="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="26" value="App traffic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="15" target="14">
+          <mxGeometry relative="1" x="0" y="-12" as="geometry"/>
+        </mxCell>
+        <mxCell id="27" value="Origin host route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="14" target="13">
+          <mxGeometry relative="1" x="0" y="-12" as="geometry"/>
+        </mxCell>
+        <mxCell id="28" value="Health probe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.2;entryY=0;" edge="1" parent="1" source="5" target="14">
+          <mxGeometry relative="1" x="60" y="35" as="geometry">
+            <Array as="points"><mxPoint x="770" y="200"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="29" value="Logs / metrics" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.75;exitY=1;entryX=0.15;entryY=0;" edge="1" parent="1" source="14" target="17">
+          <mxGeometry relative="1" x="120" y="80" as="geometry">
+            <Array as="points"><mxPoint x="1450" y="360"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="30" value="Diagnostics" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="14" target="18">
+          <mxGeometry relative="1" x="210" y="80" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

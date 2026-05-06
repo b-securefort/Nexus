@@ -137,6 +137,15 @@ shape=mxgraph.aws4.eventbridge;fillColor=#E7157B;fontColor=#ffffff;
 
 These rules prevent the most common rendering failures (overlapping icons, stacked arrows, label collisions). They're inlined here so you don't need a tool call to access them. `kb/drawio/layoutfixing.md` has worked examples if you want more depth, but the rules below are sufficient for almost every diagram.
 
+### CRITICAL: Flow-Based Azure Architecture Diagram Standards
+
+**Your diagrams MUST show clear network flow from one component to another.** Follow these non-negotiable rules:
+
+1. **Resources MUST be parented to their subnet containers** - Never use `parent="1"` for resources that belong inside subnets. The `parent` attribute must reference the subnet cell ID.
+2. **Internet users must be OUTSIDE all containers** - Place at top-left, before Front Door, with `parent="1"`.
+3. **Show the actual network path** - Icons inside their subnets, with edges crossing subnet boundaries where traffic flows.
+4. **Monitoring zone must be tall enough** - Minimum 120px height for 64px icons + labels.
+
 ### Sizing standards
 
 - **Canvas**: 1900×1500 for multi-zone (hub-spoke, multi-VNet, multi-VPC, multi-account). 1200×900 for single-zone. Set `pageWidth`/`pageHeight` and `mxGraphModel dx`/`dy` to match.
@@ -144,16 +153,19 @@ These rules prevent the most common rendering failures (overlapping icons, stack
 - **Secondary icons** (NSG, Route Table, small annotations): 48×48.
 - **Container padding**: 40px between container edge and the nearest child icon. 30px between container's top-edge label and the first row of icons.
 - **Inter-icon spacing**: at least **80px horizontal gap** and **60px vertical gap** between neighbour icons (centre-to-centre). Less than this and labels collide.
+- **Monitoring zone height**: Minimum **120px** to accommodate 64px icons + 25px label + padding.
 
 ### Plan coordinates on a grid before writing XML
 
 Before emitting any `<mxCell>`, sketch the layout mentally on a 10px grid:
 
 1. Decide canvas size (1900×1500 or 1200×900).
-2. Carve the canvas into zone containers. Example for hub-spoke: edge zone at x=30 width=380, hub at x=440 width=650, spoke at x=1120 width=720, monitoring zone at y=620 spanning the bottom.
-3. Inside each container, lay out icons on a sub-grid. With 40px padding and 64px icons + 80px gaps, two icons fit in ~250px of container width.
-4. Snap every coordinate to a multiple of 10. Crooked grids look unprofessional and make later edits painful.
-5. Check pairwise overlap: for any two icons A and B, ensure `A.x + A.width + 80 ≤ B.x` (if A is left of B) OR `A.y + A.height + 60 ≤ B.y` (if A is above B). Same for icon-versus-container-edge.
+2. **Place Internet Users FIRST** at x=40, y=40 with `parent="1"` (outside all containers).
+3. Carve the canvas into zone containers. Example for hub-spoke: edge zone at x=30 width=380, hub at x=440 width=650, spoke at x=1120 width=720, monitoring zone at y=620 spanning the bottom.
+4. **For each resource, determine its subnet parent BEFORE writing**. Write down: `FrontDoor → parent=snet-ingress`, `Firewall → parent=snet-ingress`, etc.
+5. Inside each container, lay out icons on a sub-grid. With 40px padding and 64px icons + 80px gaps, two icons fit in ~250px of container width.
+6. Snap every coordinate to a multiple of 10. Crooked grids look unprofessional and make later edits painful.
+7. Check pairwise overlap: for any two icons A and B, ensure `A.x + A.width + 80 ≤ B.x` (if A is left of B) OR `A.y + A.height + 60 ≤ B.y` (if A is above B). Same for icon-versus-container-edge.
 
 If you skip this step, you will produce overlapping icons. Don't skip it.
 
@@ -163,6 +175,34 @@ If you skip this step, you will produce overlapping icons. Don't skip it.
 - Container labels go **top-left** (`align=left;verticalAlign=top`) with `fontStyle=1` (bold).
 - **Color-code zones, not resources**: edge zone `#ffe6cc` (light orange), hub `#d5e8d4` (light green), spoke `#dae8fc` (light blue), monitoring `#f5f5f5` (light grey), DMZ `#fff2cc` (light yellow).
 - **Observability lives OUTSIDE every VNet/VPC.** Azure Monitor, Log Analytics, Application Insights, Sentinel, CloudWatch, CloudTrail, AWS Config — these are regional managed services. Putting them inside a private network container is architecturally wrong AND visually clutters the network. Place them in a separate Monitoring zone below or right of the network containers; show telemetry as dashed edges crossing the boundary.
+
+### PARENT RULE - MOST COMMON BUG TO AVOID
+
+**Every resource MUST have the correct `parent` attribute:**
+
+```xml
+<!-- WRONG: Resource floating on canvas, not inside its subnet -->
+<mxCell id="fw" value="Azure Firewall" parent="1" ...>
+  <mxGeometry x="330" y="90" .../>
+</mxCell>
+
+<!-- CORRECT: Resource parented to its subnet container -->
+<mxCell id="fw" value="Azure Firewall" parent="snet-ingress" ...>
+  <mxGeometry x="40" y="40" .../>  <!-- Coordinates relative to subnet! -->
+</mxCell>
+```
+
+**Key insight:** When `parent="snet-ingress"`, the x/y coordinates are **relative to the subnet's top-left corner**, not the canvas. This ensures the icon moves with the subnet if you reposition it.
+
+**Parent assignment checklist:**
+- [ ] Internet Users: `parent="1"` (always on canvas, outside everything)
+- [ ] Front Door / CDN: `parent="1"` or in Edge zone (global service)
+- [ ] Firewall, WAF: `parent="snet-ingress"` or `parent="snet-firewall"`
+- [ ] Load Balancer, NAT Gateway: `parent="snet-egress"` 
+- [ ] App Service, VMs, AKS: `parent="snet-app"` or `parent="snet-private"`
+- [ ] Private Endpoints: `parent="snet-data"` or `parent="snet-private"`
+- [ ] Databases (Cosmos, SQL): `parent="snet-data"` or use Private Endpoint
+- [ ] Monitor, Log Analytics, Sentinel: `parent="1"` or in dedicated Monitoring zone
 
 ### Edge rules
 
@@ -199,6 +239,7 @@ If you skip this step, you will produce overlapping icons. Don't skip it.
 - **`[containment]`** — a resource icon sits outside or within 40px of its parent container's edge. Fix: move the icon inward or enlarge the container.
 - **`[observability-in-vnet]`** — a Monitor / Log Analytics / Sentinel / App Insights / CloudWatch / CloudTrail cell is parented to a VNet/VPC/subnet container. Fix: move it to its own Monitoring zone outside.
 - **`[duplicate-edge-labels]`** — two or more edges from the same source node share an identical label. Fix: rename each by destination role.
+- **`[resource-parent]`** — a resource that should be inside a subnet has `parent="1"` instead of `parent="snet-xxx"`. Fix: change the parent attribute to the subnet ID and adjust coordinates to be relative to the subnet's top-left.
 
 ## Self-review checklist — run BEFORE calling generate_file
 
@@ -210,6 +251,8 @@ Walk through each item. If any answer is "no", fix the diagram before writing.
 **Icons & containers**
 - [ ] Every Azure resource uses `shape=image;image=img/lib/azure2/...`. No plain rounded rectangles for resources.
 - [ ] Every AWS resource uses `shape=mxgraph.aws4.<name>`. No `image=img/lib/aws4/...`.
+- [ ] **Every resource inside a VNet has `parent="snet-xxx"` (subnet ID), NOT `parent="1"`.** This is the #1 bug.
+- [ ] Internet Users / Globe has `parent="1"` and is positioned outside all containers (top-left).
 - [ ] No two icons overlap (pairwise check on x/y/width/height).
 - [ ] Every icon sits fully inside its parent container with ≥40px padding from container edges.
 - [ ] Observability resources (Monitor, Log Analytics, App Insights, Sentinel, CloudWatch, CloudTrail) are OUTSIDE every VNet/VPC.
@@ -230,6 +273,8 @@ Walk through each item. If any answer is "no", fix the diagram before writing.
 
 ## Minimal working template
 
+This template shows **correct parent assignment** - resources inside their subnet containers:
+
 ```xml
 <mxfile host="app.diagrams.net" version="24.7.17" type="device">
   <diagram id="d1" name="Page-1">
@@ -238,24 +283,66 @@ Walk through each item. If any answer is "no", fix the diagram before writing.
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
 
-        <!-- Zone container (rectangle, NOT an icon) -->
-        <mxCell id="zone-hub" value="Hub VNet"
+        <!-- Internet Users (OUTSIDE all containers, parent="1") -->
+        <mxCell id="internet" value="Internet Users"
+          style="shape=image;html=1;aspect=fixed;image=img/lib/azure2/general/Globe.svg;"
+          vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="48" height="48" as="geometry"/>
+        </mxCell>
+
+        <!-- Hub VNet container (parent="1", it's a top-level zone) -->
+        <mxCell id="hub-vnet" value="Hub VNet"
           style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=4;fontStyle=1;align=left;verticalAlign=top;spacing=10;"
           vertex="1" parent="1">
-          <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+          <mxGeometry x="200" y="20" width="700" height="600" as="geometry"/>
         </mxCell>
 
-        <!-- Resource (Azure2 image) -->
+        <!-- Ingress Subnet (parent="hub-vnet", nested inside VNet) -->
+        <mxCell id="snet-ingress" value="Ingress Subnet"
+          style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b0b0b0;strokeWidth=2;fontStyle=1;align=left;verticalAlign=top;spacing=10;"
+          vertex="1" parent="hub-vnet">
+          <mxGeometry x="40" y="60" width="600" height="200" as="geometry"/>
+        </mxCell>
+
+        <!-- Azure Firewall (parent="snet-ingress", coordinates RELATIVE to subnet!) -->
         <mxCell id="fw" value="Azure Firewall"
           style="sketch=0;outlineConnect=0;fontColor=#23272F;gradientColor=none;fillColor=#ffffff;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/networking/Firewalls.svg;"
-          vertex="1" parent="1">
-          <mxGeometry x="120" y="160" width="64" height="64" as="geometry"/>
+          vertex="1" parent="snet-ingress">
+          <mxGeometry x="80" y="80" width="64" height="64" as="geometry"/>
         </mxCell>
 
-        <!-- Edge with a unique, descriptive label -->
+        <!-- Application Gateway (also in ingress subnet) -->
+        <mxCell id="agw" value="Application Gateway"
+          style="sketch=0;outlineConnect=0;fontColor=#23272F;gradientColor=none;fillColor=#ffffff;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/networking/Application_Gateways.svg;"
+          vertex="1" parent="snet-ingress">
+          <mxGeometry x="240" y="80" width="64" height="64" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge from Internet to Firewall (crosses container boundary - this is correct!) -->
         <mxCell id="e1" value="HTTPS 443"
           style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#cc0000;strokeWidth=2;endArrow=block;"
-          edge="1" source="users" target="fw" parent="1">
+          edge="1" parent="1" source="internet" target="fw">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Monitoring Zone (OUTSIDE VNet, parent="1") -->
+        <mxCell id="monitoring" value="Monitoring"
+          style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;strokeWidth=2;dashed=0;"
+          vertex="1" parent="1">
+          <mxGeometry x="200" y="650" width="700" height="150" as="geometry"/>
+        </mxCell>
+
+        <!-- Azure Monitor (in monitoring zone, NOT inside VNet) -->
+        <mxCell id="monitor" value="Azure Monitor"
+          style="sketch=0;outlineConnect=0;fontColor=#23272F;gradientColor=none;fillColor=#ffffff;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/management_governance/Monitor.svg;"
+          vertex="1" parent="monitoring">
+          <mxGeometry x="80" y="40" width="64" height="64" as="geometry"/>
+        </mxCell>
+
+        <!-- Telemetry edge (dashed, crosses from resource to monitoring) -->
+        <mxCell id="e-telemetry" value="Logs / Metrics"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#666666;strokeWidth=2;endArrow=block;dashed=1;"
+          edge="1" parent="1" source="fw" target="monitor">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
       </root>
@@ -263,6 +350,16 @@ Walk through each item. If any answer is "no", fix the diagram before writing.
   </diagram>
 </mxfile>
 ```
+
+**Key points in this template:**
+1. `internet` has `parent="1"` - outside all containers
+2. `hub-vnet` has `parent="1"` - top-level zone
+3. `snet-ingress` has `parent="hub-vnet"` - nested subnet
+4. `fw` and `agw` have `parent="snet-ingress"` - resources INSIDE subnet
+5. Firewall coordinates `x="80" y="80"` are **relative to subnet's top-left**, not canvas
+6. `monitoring` zone has `parent="1"` - separate from VNet
+7. Monitor has `parent="monitoring"` - inside monitoring zone, outside VNet
+8. Edges can cross container boundaries - this shows network flow
 
 ## Failure modes to watch for and record
 
@@ -272,5 +369,8 @@ If the user reports that icons aren't rendering, the cause is almost always one 
 - Typo in the SVG filename (case matters: `Front_Doors.svg`, not `front_doors.svg` or `FrontDoors.svg`).
 - Used `shape=mxgraph.azure.<name>` (the old Azure stencil) instead of the Azure2 image style. The Azure2 library is image-based, not stencil-based.
 - For AWS: used `image=img/lib/aws4/...` — there is no such path. AWS4 is stencil-based: `shape=mxgraph.aws4.<name>`.
+- **Resources use `parent="1"` instead of being parented to their subnet** - This causes floating icons that don't show network containment. Every resource inside a VNet must have `parent="snet-xxx"`.
+- **Monitoring zone too short** - Height less than 120px causes icons to overflow. Always use minimum 120px for monitoring zones.
+- **Internet users placed inside subscription/VNet container** - Internet must be at `parent="1"` with coordinates outside all container boundaries.
 
 When you discover a new failure pattern, call `update_learnings` so future runs avoid it.

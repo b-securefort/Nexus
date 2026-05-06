@@ -155,6 +155,48 @@ def _check_vendor_icons(cells: dict[str, _Cell]) -> list[str]:
     return out
 
 
+def _check_resources_parented_to_subnets(cells: dict[str, _Cell]) -> list[str]:
+    """Check that resources inside VNets are parented to subnets, not canvas."""
+    out: list[str] = []
+    
+    # Find all VNet and subnet containers
+    vnet_ids = set()
+    subnet_ids = set()
+    for c in cells.values():
+        v = c.value.lower()
+        if c.is_container:
+            if 'vnet' in v or 'virtual network' in v or 'vpc' in v:
+                vnet_ids.add(c.id)
+            elif 'subnet' in v or 'snet' in c.id.lower():
+                subnet_ids.add(c.id)
+    
+    # Find resources that should be in subnets but have parent="1"
+    for c in cells.values():
+        if not c.is_resource_candidate:
+            continue
+        
+        # Skip global services that should be on canvas
+        v = c.value.lower()
+        if any(kw in v for kw in ['internet', 'user', 'front door', 'cdn', 'monitor', 'log analytics', 'sentinel', 'cloudwatch', 'cloudtrail']):
+            continue
+        
+        # If resource has parent="1" but there are subnets in the diagram, flag it
+        if c.parent == "1" and subnet_ids:
+            # Check if this resource is visually inside a VNet (by coordinates)
+            for vnet_id in vnet_ids:
+                vnet = cells.get(vnet_id)
+                if vnet and vnet.x <= c.x <= vnet.x + vnet.w and vnet.y <= c.y <= vnet.y + vnet.h:
+                    out.append(
+                        f'[resource-parent] cell "{c.id}" ("{_label_preview(c.value)}") '
+                        f'has parent="1" but appears to be inside VNet "{vnet_id}". '
+                        f'Resources inside VNets must have parent="snet-xxx" (subnet ID), not parent="1". '
+                        f'Otherwise icons float outside their network containers.'
+                    )
+                    break
+    
+    return out
+
+
 def _rects_clear(a: tuple, b: tuple, gap_x: float, gap_y: float) -> bool:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
@@ -264,6 +306,7 @@ def validate_drawio_file(path: Path) -> str:
     for check in (
         _check_literal_newlines,
         _check_vendor_icons,
+        _check_resources_parented_to_subnets,
         _check_icon_overlap,
         _check_containment,
         _check_observability_outside,
@@ -305,8 +348,8 @@ class ValidateDrawioTool(Tool):
     name = "validate_drawio"
     description = (
         "Validate a .drawio file in output/ for layout violations: icon overlap, "
-        "missing vendor icons (Azure2/AWS4), observability inside VNets, container "
-        "padding, duplicate edge labels, and literal `\\n` in labels. "
+        "missing vendor icons (Azure2/AWS4), resources not parented to subnets (floating icons), "
+        "observability inside VNets, container padding, duplicate edge labels, and literal `\\n` in labels. "
         "generate_file runs this automatically on .drawio writes — call it "
         "explicitly to re-validate after fixes. If violations are reported, fix "
         "them and re-write with overwrite=true. Iterate until PASSED."

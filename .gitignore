@@ -1,34 +1,17 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-*.egg
-dist/
-build/
-.venv/
-venv/
-*.db
+# Examples
 
-# Environment
-.env
-.env.local
+Input:
+### Added files:
+[backend/app/tools/validate_drawio.py, backend/kb_data/skills/shared/drawio-diagrammer/SKILL.md]
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+### Deleted files:
+[]
 
-# OS
-.DS_Store
-Thumbs.db
+### Modified files:
+[]
 
-# Node
-node_modules/
-dist/
+###current .gitignore Content
+(empty)
 
-# Misc
-*.log
-
-# Uploads
-uploads/
+Expected Output:
+(empty — output nothing)

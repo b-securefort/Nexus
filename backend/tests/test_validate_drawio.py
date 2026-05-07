@@ -198,3 +198,150 @@ def test_generate_file_auto_validates_drawio(tmp_path, monkeypatch):
     assert "FAILED" in result
     assert "[encoding]" in result
     assert "[icon-style]" in result
+
+
+def test_numbered_badges_and_text_labels_are_not_flagged_as_resources(tmp_path):
+    """Decorative shapes (numbered flow badges, text labels, small callouts)
+    must not trigger [icon-style] or [overlap] — they're not Azure resources."""
+    cells = """
+    <mxCell id="zone" value="VNet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#EFF6FC;strokeColor=#0078D4;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+    </mxCell>
+    <mxCell id="vm" value="VM"
+      style="shape=image;image=img/lib/azure2/compute/Virtual_Machine.svg;"
+      vertex="1" parent="zone">
+      <mxGeometry x="80" y="80" width="64" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="title" value="My Architecture"
+      style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=16;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="10" width="500" height="24" as="geometry"/>
+    </mxCell>
+    <mxCell id="badge-1" value="1"
+      style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;"
+      vertex="1" parent="1">
+      <mxGeometry x="200" y="200" width="26" height="26" as="geometry"/>
+    </mxCell>
+    <mxCell id="badge-2" value="2"
+      style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;"
+      vertex="1" parent="1">
+      <mxGeometry x="220" y="200" width="26" height="26" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "deco.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "PASSED" in report, f"Expected PASSED, got: {report}"
+    assert "[icon-style]" not in report
+    assert "[overlap]" not in report
+
+
+def test_hint_managed_identity_in_subnet(tmp_path):
+    """Architectural hint: Managed Identity should not be inside a VNet/subnet."""
+    cells = """
+    <mxCell id="vnet" value="Spoke VNet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#EFF6FC;strokeColor=#0078D4;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+    </mxCell>
+    <mxCell id="snet-app" value="App subnet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F0F7FF;strokeColor=#9BC2E6;"
+      vertex="1" parent="vnet">
+      <mxGeometry x="40" y="60" width="500" height="300" as="geometry"/>
+    </mxCell>
+    <mxCell id="webapp" value="Web App"
+      style="shape=image;image=img/lib/azure2/app_services/App_Services.svg;"
+      vertex="1" parent="snet-app">
+      <mxGeometry x="80" y="80" width="56" height="56" as="geometry"/>
+    </mxCell>
+    <mxCell id="mi" value="Managed Identity"
+      style="shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;"
+      vertex="1" parent="snet-app">
+      <mxGeometry x="240" y="80" width="48" height="48" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "mi-in-subnet.drawio", cells)
+    report = validate_drawio_file(p)
+    # Structural validation should still pass; the architectural issue is a hint.
+    assert "PASSED" in report or "FAILED" in report
+    assert "[hint]" in report
+    assert "Managed Identity" in report or "identity-plane" in report
+    assert "mi" in report
+
+
+def test_hint_paas_in_subnet(tmp_path):
+    """Architectural hint: a Web App icon parented inside a subnet."""
+    cells = """
+    <mxCell id="vnet" value="VNet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#EFF6FC;strokeColor=#0078D4;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+    </mxCell>
+    <mxCell id="snet" value="App subnet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F0F7FF;strokeColor=#9BC2E6;"
+      vertex="1" parent="vnet">
+      <mxGeometry x="40" y="60" width="500" height="300" as="geometry"/>
+    </mxCell>
+    <mxCell id="webapp" value="Web App"
+      style="shape=image;image=img/lib/azure2/app_services/App_Services.svg;"
+      vertex="1" parent="snet">
+      <mxGeometry x="80" y="80" width="56" height="56" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "paas-in-subnet.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "[hint]" in report
+    assert "PaaS" in report
+
+
+def test_hint_badge_collision_with_edge_label(tmp_path):
+    """Hint: a numbered badge sitting where an edge label will render."""
+    cells = """
+    <mxCell id="a" value="A"
+      style="shape=image;image=img/lib/azure2/general/Globe.svg;"
+      vertex="1" parent="1">
+      <mxGeometry x="100" y="100" width="48" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="b" value="B"
+      style="shape=image;image=img/lib/azure2/general/Globe.svg;"
+      vertex="1" parent="1">
+      <mxGeometry x="500" y="100" width="48" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="e1" value="Important Label"
+      style="edgeStyle=orthogonalEdgeStyle;html=1;"
+      edge="1" parent="1" source="a" target="b">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="badge-1" value="1"
+      style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;"
+      vertex="1" parent="1">
+      <mxGeometry x="312" y="111" width="26" height="26" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "badge-collide.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "[hint]" in report
+    assert "badge-1" in report
+    assert "label-render area" in report or "visually collide" in report
+
+
+def test_hint_orphan_badge(tmp_path):
+    """Hint: a badge floating far away from any resource icon."""
+    cells = """
+    <mxCell id="a" value="A"
+      style="shape=image;image=img/lib/azure2/general/Globe.svg;"
+      vertex="1" parent="1">
+      <mxGeometry x="100" y="100" width="48" height="48" as="geometry"/>
+    </mxCell>
+    <mxCell id="badge-orphan" value="9"
+      style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;"
+      vertex="1" parent="1">
+      <mxGeometry x="1500" y="1000" width="26" height="26" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "badge-orphan.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "[hint]" in report
+    assert "badge-orphan" in report
+    assert "200px" in report or "floating" in report or "empty space" in report

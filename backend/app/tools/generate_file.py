@@ -72,14 +72,39 @@ class GenerateFileTool(Tool):
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
-        filename = args.get("filename", "")
-        content = args.get("content", "")
+        # Accept common synonyms — smaller LLMs sometimes hallucinate
+        # parameter keys. The schema documents `filename` / `content`,
+        # but we forgive the most frequent variants rather than fail.
+        filename = (
+            args.get("filename")
+            or args.get("file_name")
+            or args.get("name")
+            or args.get("path")
+            or args.get("file_path")
+            or ""
+        )
+        content = (
+            args.get("content")
+            or args.get("body")
+            or args.get("text")
+            or args.get("data")
+            or args.get("file_content")
+            or ""
+        )
         overwrite = args.get("overwrite", False)
 
         if not filename:
-            return "Error: filename is required"
+            keys = ", ".join(sorted(args.keys())) or "(none)"
+            return (
+                "Error: filename is required. Pass it as the `filename` parameter. "
+                f"Received keys: {keys}"
+            )
         if not content:
-            return "Error: content is required"
+            keys = ", ".join(sorted(args.keys())) or "(none)"
+            return (
+                "Error: content is required. Pass the file body as the `content` parameter. "
+                f"Received keys: {keys}"
+            )
 
         # Security: block path traversal and dangerous chars
         if _DANGEROUS_PATTERNS.search(filename):

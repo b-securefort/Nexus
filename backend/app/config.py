@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     TOOL_NETWORK_TEST_ENABLED: bool = True
     TOOL_DIAGRAM_GEN_ENABLED: bool = True
     TOOL_WEB_FETCH_ENABLED: bool = True
+    TOOL_RENDER_DRAWIO_ENABLED: bool = True
+    # Optional: HTTP endpoint of a drawio-image-export2 sidecar.
+    # When set, render_drawio POSTs the XML to this URL instead of calling
+    # the local draw.io desktop CLI. Use this for containerized deployments
+    # (Container Apps, App Service Linux multi-container, AKS).
+    # Example: http://drawio-export:8080
+    DRAWIO_EXPORT_URL: str = ""
+    DRAWIO_EXPORT_TIMEOUT_SECONDS: int = 30
     TOOL_APPROVAL_TIMEOUT_SECONDS: int = 600
 
     # Backup

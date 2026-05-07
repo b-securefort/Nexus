@@ -25,6 +25,10 @@ _MIN_VERT_GAP = 60
 _CONTAINER_PADDING = 40
 # Vertices wider/taller than this are containers (zones, VNets, subnets, VPCs).
 _CONTAINER_MIN_DIM = 300
+# Vertices smaller than this in BOTH dimensions are decorative annotations
+# (numbered badges, small callouts), not Azure resources. They're exempt
+# from icon-style and overlap checks since they're meant to overlay the diagram.
+_DECORATION_MAX_DIM = 36
 
 # Service-name keywords for rule-based checks.
 _OBSERVABILITY_KEYWORDS = (
@@ -32,6 +36,27 @@ _OBSERVABILITY_KEYWORDS = (
     "application insights", "cloudwatch", "cloudtrail",
 )
 _VNET_KEYWORDS = ("vnet", "virtual network", "vpc", "subnet")
+
+# Architectural-correctness keywords used by hint checks.
+# These resources are control-plane / PaaS — they should NOT be drawn inside a VNet.
+_IDENTITY_KEYWORDS = (
+    "managed identity", "entra id", "azure ad", "active directory",
+)
+_DNS_ZONE_KEYWORDS = (
+    "private dns zone", "private dns", "dns zone",
+)
+# PaaS resources accessed via PE — drawn outside the VNet, connected via Private Endpoint.
+# `private endpoint` itself is in-subnet (it's the consumer's NIC), so we exclude it.
+_PAAS_KEYWORDS = (
+    "app service", "web app", "function app",
+    "cosmos", "sql database", "sql managed instance",  # NOTE: SQL MI IS subnet-injected; handled below
+    "key vault", "storage account", "container registry",
+    "redis cache", "azure cache", "service bus", "event hub", "event grid",
+)
+# Subset of PaaS that IS legitimately subnet-resident — exclude from hints.
+_PAAS_SUBNET_RESIDENT = (
+    "sql managed instance", "api management",  # APIM Internal mode
+)
 
 
 @dataclass
@@ -54,9 +79,34 @@ class _Cell:
         return self.is_vertex and (self.w >= _CONTAINER_MIN_DIM or self.h >= _CONTAINER_MIN_DIM)
 
     @property
+    def is_decoration(self) -> bool:
+        """Decorative annotations (numbered badges, text labels, dividers) — not
+        Azure resources. Identified by style or by being too small to hold an icon.
+        Exempt from icon-style and overlap rules.
+        """
+        if not self.is_vertex:
+            return False
+        s = self.style.lower().lstrip()
+        # Pure text labels (titles, phase labels, divider captions)
+        if s.startswith("text;") or s.startswith("text "):
+            return True
+        # Numbered flow badges and other ellipse callouts
+        if "ellipse" in s:
+            return True
+        # Anything tiny in both dimensions — small badges, asterisks, dots
+        if 0 < self.w <= _DECORATION_MAX_DIM and 0 < self.h <= _DECORATION_MAX_DIM:
+            return True
+        return False
+
+    @property
     def is_resource_candidate(self) -> bool:
-        # A non-container vertex that carries a label is treated as a resource.
-        return self.is_vertex and not self.is_container and bool(self.value.strip())
+        # A non-container, non-decoration vertex with a label is treated as a resource.
+        return (
+            self.is_vertex
+            and not self.is_container
+            and not self.is_decoration
+            and bool(self.value.strip())
+        )
 
     @property
     def has_vendor_icon(self) -> bool:
@@ -136,7 +186,7 @@ def _check_literal_newlines(cells: dict[str, _Cell]) -> list[str]:
             out.append(
                 f'[encoding] cell "{c.id}" has literal `\\n` in label '
                 f'("{_label_preview(c.value)}"). '
-                f"In XML attributes, use `&#10;` for line breaks — drawio does not unescape `\\n`."
+                f"In XML attributes, use `&#10;` for line breaks - drawio does not unescape `\\n`."
             )
     return out
 
@@ -215,8 +265,8 @@ def _check_icon_overlap(cells: dict[str, _Cell]) -> list[str]:
                 out.append(
                     f'[overlap] cells "{a.id}" ("{_label_preview(a.value, 25)}") '
                     f'and "{b.id}" ("{_label_preview(b.value, 25)}") '
-                    f"overlap or are too close. Need ≥{_MIN_HORIZ_GAP}px horizontal "
-                    f"or ≥{_MIN_VERT_GAP}px vertical gap between resource icons."
+                    f"overlap or are too close. Need >={_MIN_HORIZ_GAP}px horizontal "
+                    f"or >={_MIN_VERT_GAP}px vertical gap between resource icons."
                 )
     return out
 
@@ -240,7 +290,7 @@ def _check_containment(cells: dict[str, _Cell]) -> list[str]:
                 f'[containment] cell "{c.id}" ("{_label_preview(c.value, 25)}") '
                 f'lies outside or too close to the edge of container '
                 f'"{container.id}" ("{_label_preview(container.value, 25)}"). '
-                f"Require ≥{pad}px padding from each container edge."
+                f"Require >={pad}px padding from each container edge."
             )
     return out
 
@@ -264,6 +314,147 @@ def _check_observability_outside(cells: dict[str, _Cell]) -> list[str]:
                     f"separate Monitoring zone with a dashed telemetry edge."
                 )
                 break
+    return out
+
+
+def _resource_inside_vnet(c: _Cell, cells: dict[str, _Cell]) -> _Cell | None:
+    """Return the first VNet/subnet ancestor a cell sits inside, or None."""
+    for a in _ancestors(c, cells):
+        av = a.value.lower()
+        if any(kw in av for kw in _VNET_KEYWORDS):
+            return a
+    return None
+
+
+# --- Hint checks (non-blocking — give the agent feedback without failing validation) ---
+
+def _hint_architectural_placement(cells: dict[str, _Cell]) -> list[str]:
+    """Flag resources drawn in the wrong plane.
+
+    Identity (MI, Entra), DNS zones, and most PaaS services are not subnet-resident
+    and should not be parented inside a VNet/subnet. This catches the most common
+    architectural-correctness mistakes that the structural validator can't.
+    """
+    out: list[str] = []
+    for c in cells.values():
+        if not c.is_resource_candidate:
+            continue
+        v = c.value.lower()
+        in_vnet = _resource_inside_vnet(c, cells)
+        if not in_vnet:
+            continue
+
+        if any(kw in v for kw in _IDENTITY_KEYWORDS):
+            out.append(
+                f'[hint] cell "{c.id}" ("{_label_preview(c.value, 30)}") looks like an '
+                f"identity-plane resource (Managed Identity / Entra ID) but is parented "
+                f'inside "{in_vnet.id}". Identity objects are not network-resident - '
+                f"place at canvas level (parent=\"1\") and connect to the resource that uses them."
+            )
+            continue
+        if any(kw in v for kw in _DNS_ZONE_KEYWORDS):
+            out.append(
+                f'[hint] cell "{c.id}" ("{_label_preview(c.value, 30)}") looks like a '
+                f'Private DNS zone but is parented inside "{in_vnet.id}". DNS zones are '
+                f"regional - place at canvas level and use VNet Link connectors to show "
+                f"which VNets the zone resolves for."
+            )
+            continue
+        if any(kw in v for kw in _PAAS_KEYWORDS) and not any(
+            kw in v for kw in _PAAS_SUBNET_RESIDENT
+        ) and "private endpoint" not in v:
+            out.append(
+                f'[hint] cell "{c.id}" ("{_label_preview(c.value, 30)}") looks like a '
+                f"PaaS service but is parented inside a VNet/subnet. PaaS runs on "
+                f"Microsoft's network - place at canvas level (or in a subscription/RG "
+                f"container outside the VNet) and connect via a Private Endpoint in "
+                f"the consuming subnet if private access is required."
+            )
+            continue
+    return out
+
+
+def _hint_badge_edge_label_collision(cells: dict[str, _Cell]) -> list[str]:
+    """Flag numbered badges that sit where a labelled edge will render its label.
+
+    draw.io places edge labels at the geometric midpoint (or the offset specified
+    on the edge geometry). A badge dropped near that midpoint will overlap the
+    label visually. The fix is to move the badge OR remove the edge label.
+    """
+    out: list[str] = []
+    badges = [
+        c for c in cells.values()
+        if c.is_decoration and c.is_vertex and "ellipse" in c.style.lower()
+        and c.value.strip().isdigit()
+    ]
+    if not badges:
+        return out
+
+    labelled_edges = [
+        c for c in cells.values()
+        if c.is_edge and c.value.strip() and c.source and c.target
+        and c.source in cells and c.target in cells
+    ]
+
+    for badge in badges:
+        bx, by = _abs_pos(badge, cells)
+        bcx, bcy = bx + badge.w / 2, by + badge.h / 2
+        for edge in labelled_edges:
+            src_cx, src_cy, src_x2, src_y2 = _bbox(cells[edge.source], cells)
+            tgt_cx, tgt_cy, tgt_x2, tgt_y2 = _bbox(cells[edge.target], cells)
+            mid_x = (src_cx + src_x2 + tgt_cx + tgt_x2) / 4
+            mid_y = (src_cy + src_y2 + tgt_cy + tgt_y2) / 4
+            if abs(bcx - mid_x) < 50 and abs(bcy - mid_y) < 40:
+                out.append(
+                    f'[hint] badge "{badge.id}" (value "{badge.value}") at '
+                    f"({int(bcx)}, {int(bcy)}) sits in the label-render area of "
+                    f'edge "{edge.id}" ("{_label_preview(edge.value, 25)}"). '
+                    f"They will visually collide. Either move the badge to the side "
+                    f"of the connector, or remove the edge label (the arrow style "
+                    f"often conveys intent on its own)."
+                )
+                break
+    return out
+
+
+def _hint_orphan_badges(cells: dict[str, _Cell]) -> list[str]:
+    """Flag numbered badges that aren't visually anchored to any nearby resource or edge.
+
+    A badge floating in empty space doesn't help readers follow the flow. It should
+    be next to an icon or on/near a connector.
+    """
+    out: list[str] = []
+    badges = [
+        c for c in cells.values()
+        if c.is_decoration and c.is_vertex and "ellipse" in c.style.lower()
+        and c.value.strip().isdigit()
+    ]
+    if not badges:
+        return out
+
+    resources = [c for c in cells.values() if c.is_resource_candidate]
+
+    for badge in badges:
+        bx, by = _abs_pos(badge, cells)
+        bcx, bcy = bx + badge.w / 2, by + badge.h / 2
+        # Find the nearest resource icon's edge-to-edge distance
+        nearest_dist = None
+        for r in resources:
+            rx, ry, rx2, ry2 = _bbox(r, cells)
+            # Closest point on resource bbox to badge center
+            dx = max(rx - bcx, 0, bcx - rx2)
+            dy = max(ry - bcy, 0, bcy - ry2)
+            dist = (dx * dx + dy * dy) ** 0.5
+            if nearest_dist is None or dist < nearest_dist:
+                nearest_dist = dist
+        # Threshold: 200px away from any resource is "floating in empty space"
+        if nearest_dist is None or nearest_dist > 200:
+            out.append(
+                f'[hint] badge "{badge.id}" (value "{badge.value}") at '
+                f"({int(bcx)}, {int(bcy)}) is more than 200px from any resource icon. "
+                f"Badges should sit next to the icon or connector that represents "
+                f"the step they annotate. Move it closer to the relevant flow point."
+            )
     return out
 
 
@@ -300,7 +491,7 @@ def validate_drawio_file(path: Path) -> str:
     try:
         cells = _parse(text)
     except ET.ParseError as e:
-        return f"Validation FAILED: XML parse error — {e}"
+        return f"Validation FAILED: XML parse error - {e}"
 
     violations: list[str] = []
     for check in (
@@ -314,6 +505,17 @@ def validate_drawio_file(path: Path) -> str:
     ):
         violations.extend(check(cells))
 
+    # Hints are non-blocking — they suggest visual/architectural improvements
+    # that the structural rules cannot catch. The agent should consider them
+    # but is not required to act on every one.
+    hints: list[str] = []
+    for hint_check in (
+        _hint_architectural_placement,
+        _hint_badge_edge_label_collision,
+        _hint_orphan_badges,
+    ):
+        hints.extend(hint_check(cells))
+
     counts = {
         "vertices": sum(1 for c in cells.values() if c.is_vertex),
         "edges": sum(1 for c in cells.values() if c.is_edge),
@@ -326,7 +528,19 @@ def validate_drawio_file(path: Path) -> str:
     )
 
     if not violations:
-        return f"Validation PASSED: {summary}. No layout violations."
+        head = f"Validation PASSED: {summary}. No layout violations."
+        if not hints:
+            return head
+        lines = [head, "", f"Suggestions ({len(hints)}, non-blocking):"]
+        for i, h in enumerate(hints, 1):
+            lines.append(f"  {i}. {h}")
+        lines.append("")
+        lines.append(
+            "These hints are advisory - they catch visual or architectural "
+            "issues the structural rules cannot. Address what improves the "
+            "diagram; the diagram is structurally valid as-is."
+        )
+        return "\n".join(lines)
 
     lines = [
         f"Validation FAILED: {len(violations)} violation(s) found.",
@@ -341,6 +555,11 @@ def validate_drawio_file(path: Path) -> str:
         "Fix each violation, re-write the file with overwrite=true, "
         "then re-run validate_drawio. Iterate until PASSED."
     )
+    if hints:
+        lines.append("")
+        lines.append(f"Suggestions ({len(hints)}, non-blocking - fix the violations first):")
+        for i, h in enumerate(hints, 1):
+            lines.append(f"  {i}. {h}")
     return "\n".join(lines)
 
 

@@ -1,0 +1,47 @@
+# Local dev / staging compose mirroring the production sidecar topology.
+#
+# - nexus-backend: the FastAPI app
+# - drawio-export: jgraph/drawio-image-export2, a headless draw.io rendering service
+#
+# In production (Container Apps / App Service Linux multi-container), the same
+# two-container layout is used; only image registry, env vars, and ingress change.
+#
+# Usage (from project root):
+#   docker compose up --build
+#
+# The backend reaches the sidecar at http://drawio-export:8080 via the default
+# Compose network DNS — no hostname configuration needed.
+
+services:
+  nexus-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: nexus-backend:dev
+    container_name: nexus-backend
+    ports:
+      - "8002:8000"
+    environment:
+      APP_ENV: dev
+      DEV_AUTH_BYPASS: "true"
+      DRAWIO_EXPORT_URL: "http://drawio-export:8080"
+      # Mount your real .env values via env_file in production; for local dev,
+      # populate AZURE_OPENAI_* and ENTRA_* by writing backend/.env (gitignored).
+    env_file:
+      - backend/.env
+    volumes:
+      # Persist generated diagrams and the sqlite DB across restarts in dev.
+      - ./backend/output:/app/output
+      - ./backend/app.db:/app/app.db
+    depends_on:
+      - drawio-export
+    restart: unless-stopped
+
+  drawio-export:
+    image: jgraph/drawio-image-export2:latest
+    container_name: drawio-export
+    # No public ports needed - only nexus-backend talks to it on the internal
+    # network. Uncomment if you want to test it directly with curl.
+    # ports:
+    #   - "8080:8080"
+    restart: unless-stopped

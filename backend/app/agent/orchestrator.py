@@ -470,7 +470,7 @@ async def handle_chat(
                 "messages": api_messages,
                 "stream": True,
                 "stream_options": {"include_usage": True},
-                "max_completion_tokens": 4096,
+                "max_completion_tokens": 16384,
             }
             if tool_schemas:
                 create_kwargs["tools"] = tool_schemas
@@ -594,10 +594,28 @@ async def handle_chat(
             for call in tool_calls:
                 call_id = call["id"]
                 func_name = call["function"]["name"]
+                raw_args = call["function"]["arguments"] or ""
+                json_parse_error: str | None = None
                 try:
-                    func_args = json.loads(call["function"]["arguments"])
-                except json.JSONDecodeError:
+                    func_args = json.loads(raw_args)
+                except json.JSONDecodeError as je:
                     func_args = {}
+                    # Surface the real cause instead of silently passing {} to the tool.
+                    # Almost always means the model's output hit max_completion_tokens
+                    # mid-argument, leaving an unterminated JSON string. Tell the model
+                    # explicitly so it can recover (split into smaller writes, etc.).
+                    json_parse_error = (
+                        f"Tool call arguments JSON failed to parse: {je.msg} "
+                        f"at char {je.pos} of {len(raw_args)}. "
+                        "This usually means the response was truncated by the model's "
+                        "token limit while emitting a large argument (e.g. file content). "
+                        "Retry with a smaller payload — for example, split the file into "
+                        "multiple writes using overwrite=true and append in chunks."
+                    )
+                    logger.warning(
+                        "Tool args JSON parse failed for %s: %s (raw_len=%d)",
+                        func_name, je, len(raw_args),
+                    )
 
                 yield sse_tool_call_start(call_id, func_name, func_args)
 
@@ -606,7 +624,11 @@ async def handle_chat(
 
                 # Find tool
                 tool = next((t for t in tools if t.name == func_name), None)
-                if not tool:
+                if json_parse_error:
+                    # Skip tool execution — feed the parse error back so the model
+                    # understands what went wrong on its own previous turn.
+                    tool_result = f"Error: {json_parse_error}"
+                elif not tool:
                     tool_result = f"Error: Unknown tool '{func_name}'"
                 elif _tool_needs_approval(tool, func_args):
                     # Create approval

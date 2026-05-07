@@ -107,6 +107,7 @@ def init_tools() -> None:
     from app.tools.az_rest import AzRestApiTool
     from app.tools.generate_file import GenerateFileTool
     from app.tools.validate_drawio import ValidateDrawioTool
+    from app.tools.render_drawio import RenderDrawioTool
     from app.tools.az_devops import AzDevOpsTool
     from app.tools.az_policy import AzPolicyCheckTool
     from app.tools.az_advisor import AzAdvisorTool
@@ -163,6 +164,10 @@ def init_tools() -> None:
     validator = ValidateDrawioTool()
     validator.enabled_by_config = settings.TOOL_VALIDATE_DRAWIO_ENABLED
     register_tool(validator)
+
+    render = RenderDrawioTool()
+    render.enabled_by_config = settings.TOOL_RENDER_DRAWIO_ENABLED
+    register_tool(render)
 
     az_devops = AzDevOpsTool()
     az_devops.enabled_by_config = settings.TOOL_AZ_DEVOPS_ENABLED

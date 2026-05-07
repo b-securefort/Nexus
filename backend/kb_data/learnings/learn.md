@@ -75,3 +75,68 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: generate_file
 - **Details**: When generating Azure draw.io diagrams, generic-looking image vertices can still be flagged as generic styles by the validator. The safest approach is to use explicit Azure2 image paths for every resource icon, keep observability services fully outside VNets/VPNs, and give large spacing between resources and monitoring nodes to avoid overlap heuristics.
 
+## [best-practice] Validator hints are non-blocking but almost always worth fixing
+- **Date**: 2026-05-07 UTC
+- **Tool**: validate_drawio
+- **Details**: The validator now emits two kinds of feedback: blocking `[violation]` items that fail validation (overlap, parenting, observability-in-VNet, etc.) and non-blocking `[hint]` items that flag visual or architectural issues the strict rules cannot catch. Hints include: badge/edge-label collisions, badges floating in empty space far from any resource, Managed Identity inside a VNet, Private DNS zone inside a subnet, PaaS services (App Service, Key Vault, Cosmos, etc.) inside a subnet. A diagram with hints is structurally valid but visually or architecturally suboptimal. Address every hint unless there's a specific reason not to - they are the cheapest signal of "this won't look right" and "this is architecturally wrong" the agent gets without the user having to point it out.
+
+## [best-practice] After validation, render the .drawio to PNG with render_drawio and visually review
+- **Date**: 2026-05-07 UTC
+- **Tool**: render_drawio
+- **Details**: The new `render_drawio` tool calls the locally installed draw.io desktop CLI (Windows path: `C:\Program Files\draw.io\draw.io.exe`) to export a `.drawio` file to PNG. After validation passes and hints are addressed, ALWAYS render the diagram and visually review the PNG. The rendering catches issues neither the structural validator nor architectural hints can: orthogonal-edge router decisions that drop labels in unexpected places, multi-line labels that get truncated, stylistic problems with bidirectional arrows, etc. If `render_drawio` reports that draw.io is not installed, fall back to reasoning over the XML and the hints; otherwise, render and review every time. Treat "agent claims diagram is done without rendering" as incomplete output.
+
+## [best-practice] Position auxiliary zones near the resources they relate to - not at the opposite end of the canvas
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: When a monitoring zone, identity zone, or DNS zone connects to a resource via an edge, place that zone NEAR the resource, not on the opposite side of the canvas. Long diagonal edges trigger draw.io's orthogonal router to pick paths through unrelated busy areas, and any edge label drops into that busy area causing label collisions with existing icon labels. Concrete rule: the monitoring zone for spoke telemetry goes directly below the spoke, not below the hub. The identity zone (Entra/MI) goes near the resource that uses MI, not at the far edge. For long edges that genuinely have to cross the canvas (e.g. private DNS zone with VNet links to both hub and spoke), either omit the edge label (the dashed style already conveys intent) or add explicit waypoints via `<Array as="points"><mxPoint x="..." y="..."/></Array>` inside `<mxGeometry relative="1">` to control routing. Validator does not catch these label collisions; only visual review does.
+
+## [best-practice] Always do a visual review after validation passes — the validator catches structure, not communication quality
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: A `Validation PASSED` report does not mean the diagram looks good. The validator catches: encoding errors, missing icons, overlapping resources, container-padding violations, observability inside VNets, duplicate edge labels, and resource-parent mismatches. It does NOT catch: edge labels dropped in busy areas (label collisions), bidirectional arrows that are visually ambiguous, public-IP-without-association-to-its-NIC, NVAs drawn as floating icons without their service-chain context, badge positions that don't visibly anchor to a flow step, or zones placed at the wrong end of the canvas. After every PASSED validation, do a quick visual reasoning pass: (1) is every edge label readable and not overlapping anything? (2) is every numbered badge positioned next to the connector or icon it annotates? (3) does every arrow tell an unambiguous architectural story? (4) are PaaS/PE/MI/DNS placements consistent with `kb/drawio/azure_architecture_semantics.md`? Iterate on the file (with overwrite=true) for visual issues, even if structural validation has already passed.
+
+## [best-practice] NVA inspection chains: use one bidirectional edge labelled as a hairpin, not ambiguous unidirectional arrows
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: When a load balancer (F5, AppGW) hairpins traffic to a firewall (Palo Alto, Azure Firewall) for L7 inspection and back, draw a single bidirectional edge between LB and firewall labelled "L7 inspection (hairpin)" with `endArrow=classic;startArrow=classic`. Two separate one-way arrows are ambiguous about ordering and clutter the LB subnet. For a Public IP attached to an NVA, draw the PIP icon adjacent to the NVA inside the same subnet (not at canvas level), and connect them with a thin no-arrow dashed line labelled "frontend IP" so the association is explicit — this matches the visual convention used by Microsoft Learn reference diagrams. Note in the legend that real production NVAs span untrust + trust subnets with separate NICs; the single-icon-per-NVA representation is a high-level simplification.
+
+## [best-practice] When a diagram request matches a canonical Azure pattern, start from the reference example
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: `kb/drawio/examples/` contains pre-built `.drawio` files for common Azure patterns. They already pass validation and reflect correct architectural placement (Web App as PaaS outside the VNet, Managed Identity at canvas level, Private DNS zone with VNet Links, etc.). When a user's request matches one of these patterns, read the example with `read_kb_file` and adapt it (rename, add/remove components, adjust labels) rather than regenerating from scratch. Regenerating is the slow path and tends to reproduce past architectural mistakes. Currently available: `pattern_c_frontdoor_hub_f5_nat_spoke_pe.drawio` for any "AFD + hub firewall/LB + private spoke origin" request.
+
+## [best-practice] Verify architectural correctness, not just visual style, when generating Azure diagrams
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: A diagram that passes validate_drawio and looks Microsoft-style can still be architecturally wrong. Before adding any "secure-looking" icon (Managed Identity, Private Endpoint, Private DNS zone, Key Vault), consult `kb/drawio/azure_architecture_semantics.md` and confirm: (1) the component is at the right plane — subnet-resident vs PaaS vs control-plane, (2) its parent container is correct, (3) it actually connects to something it talks to, (4) it has a reason to be in this specific diagram. Common mistakes from past runs: putting Managed Identity inside a subnet (it's an Entra ID object, not a network resource), placing a Private Endpoint in the same subnet as the PaaS service it exposes (PEs go in the consuming subnet, never colocated with the target), drawing Private DNS zones inside a "Private DNS subnet" (zones are regional, linked to VNets via VNet Links — they don't live in subnets), modelling Front Door as routing through a customer's hub firewall (AFD reaches its origin via public internet or Private Link only — there are valid hybrid patterns where AFD's origin is a public IP in the hub that NATs to a spoke PE, but this needs the F5/AppGW to be the origin endpoint, not a midpoint). When the user asks for "Front Door + hub-spoke", pick exactly one of the three documented reference patterns (Pattern A: AFD Premium + Private Link to spoke PE, Pattern B: AFD → public hub WAF/NVA → spoke, Pattern C: AFD → hub F5 public VIP → NAT → spoke PE) and model its components correctly — do not blend patterns.
+
+## [best-practice] Plan draw.io layout coordinates BEFORE writing XML — never iterate by trial and error
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: The validate_drawio checks (overlap ≥80px horizontal / ≥60px vertical, containment ≥40px from edges) are deterministic and correct — they are not "false positives". When writing a Microsoft-style diagram, sketch every container's bounding box and every icon's coordinates on a 10px grid first, verify pairwise non-overlap and ≥40px container padding mathematically, and only then emit the XML. Iterating regenerate-and-revalidate cycles wastes budget and produces visually crowded diagrams. If you have written XML and the validator complains, fix the *spacing* — do not blame the validator and do not remove required visual elements (numbered badges, NSG corners) to silence it. The standard for "Microsoft reference architecture style" includes numbered badges; producing a diagram without them is incomplete output, not a workaround.
+
+## [gotcha] generate_file truncation produces a confusing "filename required" / "received keys: (none)" error
+- **Date**: 2026-05-07 UTC
+- **Tool**: generate_file
+- **Details**: If the model's response hits its token limit while emitting a large `content` argument, the JSON arguments get cut off mid-string and fail to parse — the tool then receives an empty dict and reports a misleading missing-parameter error. The fix is NOT to change parameter names or simplify the schema. The fix is: detect a "JSON failed to parse" or "received keys: (none)" error after a large write attempt, then either (a) shorten the payload by writing a compact skeleton first and rewriting with overwrite=true to add detail, or (b) write the diagram in two passes — title + containers + a few core icons first, then overwrite with the full version. Do not re-emit the same oversized payload — it will fail the same way.
+
+## [known-issue] Do not place a second ingress gateway on the internet path when the intended entry point is hub F5
+- **Date**: 2026-05-07 00:59 UTC
+- **Tool**: generate_file
+- **Details**: In a hub-and-spoke ingress design where the user explicitly says all internet traffic should enter through the F5 load balancer, the diagram must not show a separate Application Gateway outside the spoke as the first hop. The correct flow is Internet -> hub F5 public VIP (optionally via an upstream edge service only if requested) -> spoke Application Gateway/WAF -> Web App. If App Gateway is present, it should be inside the spoke and not drawn as an independent internet entry point.
+
+## [best-practice] Add explicit subnet icons to subnet containers for Microsoft-style Azure network diagrams
+- **Date**: 2026-05-07 01:03 UTC
+- **Tool**: generate_file
+- **Details**: When drawing hub and spoke VNets with multiple subnets, add a subnet icon inside each subnet container near the top-left label area. This improves readability and aligns with Microsoft reference architecture styling. Keep the subnet icon anchored within the subnet box, and continue using the Azure2 networking/Subnet.svg asset rather than a generic rectangle or unlabeled box.
+
+## [best-practice] Model App Service VNet integration with a dedicated integration subnet rather than placing the Web App inside the VNet
+- **Date**: 2026-05-07 01:05 UTC
+- **Tool**: generate_file
+- **Details**: When a Web App needs VNet integration, keep the Web App icon outside the VNet because App Service is still PaaS. Add a dedicated integration subnet in the spoke VNet and connect the Web App to that subnet with a clearly labeled association (e.g. VNet integration or outbound integration). Do not parent the Web App to the subnet; it remains a control-plane PaaS resource.
+
+## [best-practice] Always render the validated draw.io diagram to PNG and review the image for layout feedback
+- **Date**: 2026-05-07 01:08 UTC
+- **Tool**: generate_file
+- **Details**: After structural validation passes or is close to passing, render the .drawio file to PNG and inspect the actual image. This catches issues the validator cannot: edge labels colliding with icons, badges drifting into busy areas, and container boxes that technically validate but still look too cramped. The render step should be part of the normal feedback loop, not optional.
+

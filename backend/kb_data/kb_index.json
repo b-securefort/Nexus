@@ -22,5 +22,29 @@
     "title": "Azure Platform Overview",
     "summary": "Core Azure services, naming conventions, resource groups, and tagging standards",
     "tags": ["azure", "platform", "standards"]
+  },
+  {
+    "path": "kb/drawio/ms_reference_style.md",
+    "title": "Microsoft Reference Architecture Visual Style Guide",
+    "summary": "Exact colour palette, container styles (VNet, subnet, resource group, AZ columns), connector styles, and typography for producing diagrams that match Microsoft Learn reference architecture diagrams",
+    "tags": ["drawio", "diagram", "azure", "style", "architecture"]
+  },
+  {
+    "path": "kb/drawio/patterns.md",
+    "title": "Draw.io Pattern Library — Microsoft Reference Architecture",
+    "summary": "Copy-paste XML fragments for: numbered flow badges, title blocks, VNet corner icon with NSG corner, private endpoint pattern, AZ zone columns, linear flow phase labels, managed disk stack, on-premises zone",
+    "tags": ["drawio", "diagram", "azure", "patterns", "xml"]
+  },
+  {
+    "path": "kb/drawio/azure_architecture_semantics.md",
+    "title": "Azure Architecture Semantics for Diagrams",
+    "summary": "What each Azure component is, where it parents (subnet vs PaaS vs control-plane), what it must connect to to be meaningful, common reference patterns for Front Door + hub-spoke (including the AFD-to-Hub-F5-NAT-to-Spoke-PE pattern), and common architectural misuses to avoid",
+    "tags": ["drawio", "diagram", "azure", "architecture", "semantics", "frontdoor", "hub-spoke"]
+  },
+  {
+    "path": "kb/drawio/examples/pattern_c_frontdoor_hub_f5_nat_spoke_pe.drawio",
+    "title": "Reference diagram — Pattern C: AFD → Hub F5 NAT → Spoke Web App PE",
+    "summary": "Validation-passing canonical .drawio reference for Front Door with a public VIP on a Hub F5 BIG-IP that NATs to a Spoke Web App private endpoint. Includes Hub VNet with firewall and LB subnets (Palo Alto + F5 + Public IP), Spoke VNet with PE subnet, Web App and Key Vault as PaaS outside the VNet, Managed Identity at canvas level connected to Entra ID, Private DNS zone with VNet links to both hub and spoke, monitoring zone, and 6 numbered flow badges. Read and adapt rather than regenerating from scratch.",
+    "tags": ["drawio", "diagram", "azure", "example", "reference", "frontdoor", "hub-spoke", "f5", "private-endpoint"]
   }
 ]

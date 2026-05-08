@@ -3,6 +3,7 @@ Tool base class and registry.
 """
 
 import logging
+import shutil
 import subprocess
 import sys
 from abc import ABC, abstractmethod
@@ -13,12 +14,78 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+_az_executable_path: str | None = None
+_az_circuit_breaker_tripped: bool = False
+
+def _find_az() -> str | None:
+    """Resolve the full path to the Azure CLI executable.
+
+    Implements a Circuit Breaker: if 'az' is missing, it trips the breaker
+    and returns None, preventing expensive subprocess failures.
+    """
+    global _az_executable_path, _az_circuit_breaker_tripped
+    
+    if _az_circuit_breaker_tripped:
+        return None
+        
+    if _az_executable_path:
+        return _az_executable_path
+        
+    path = shutil.which("az")
+    if not path and sys.platform == "win32":
+        path = shutil.which("az.cmd")
+        
+    if path:
+        _az_executable_path = path
+        return path
+        
+    logger.error("Azure CLI Circuit Breaker TRIPPED: 'az' executable not found on system.")
+    _az_circuit_breaker_tripped = True
+    return None
+
 # Suppress the black console window that subprocess spawns on Windows.
 # Spread this into every subprocess.run() / subprocess.Popen() call:
 #   subprocess.run([...], **SUBPROCESS_FLAGS)
 SUBPROCESS_FLAGS: dict = (
     {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 )
+
+# Characters that cmd.exe interprets as shell metacharacters when an
+# unquoted command STRING is passed to it. Python's subprocess quotes each
+# list element via list2cmdline() before handing it to cmd.exe, so these
+# chars in arg *values* are not actually shell-interpreted. We therefore
+# screen for the null byte (which truncates C strings) and the backtick
+# (PowerShell escape). Pipe `|`, ampersand `&`, semicolon `;`, redirects
+# `<>`, and `$` are all valid inside KQL queries, file paths, and JSON
+# bodies, so blocking them broke az_resource_graph and az_monitor_logs.
+_SHELL_METACHAR_PATTERN = r'[`\x00]'
+
+import re as _re
+
+
+def check_shell_injection(value: str, field_name: str = "argument") -> str | None:
+    """Return an error string if *value* contains characters that survive
+    subprocess quoting and could enable command injection.
+
+    Defence-in-depth only — the primary protection is that subprocess uses
+    list2cmdline() to quote each arg before invoking cmd.exe, so most shell
+    metacharacters in arg values are inert. We block only:
+      - NUL (\\x00): truncates the command string in cmd.exe
+      - backtick (`): PowerShell escape character
+
+    Returns None if safe, or an error message string if blocked.
+    """
+    if _re.search(_SHELL_METACHAR_PATTERN, value):
+        logger.warning(
+            "Shell injection blocked in %s: %s", field_name, value[:120],
+        )
+        bad = ', '.join(repr(c) for c in '`\x00' if c in value)
+        return (
+            f"Error: {field_name} contains characters that are not allowed "
+            f"for security reasons ({bad}). Remove and retry."
+        )
+    return None
 
 
 class Tool(ABC):
@@ -29,6 +96,8 @@ class Tool(ABC):
     parameters_schema: dict
     requires_approval: bool = False
     enabled_by_config: bool = True
+    rate_limit_calls: int | None = None
+    rate_limit_window: int = 60  # seconds
 
     def to_openai_schema(self) -> dict:
         return {
@@ -45,6 +114,12 @@ class Tool(ABC):
         """Execute the tool and return a string result."""
         ...
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Auto-register concrete tools that define a name
+        if hasattr(cls, "name") and not getattr(cls, "__abstractmethods__", None):
+            TOOL_REGISTRY[cls.name] = cls()
+
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
         """Execute the tool, yielding output chunks as they arrive.
 
@@ -54,6 +129,87 @@ class Tool(ABC):
         result = self.execute(args, user)
         yield result
         return result
+
+
+def retry_with_backoff(
+    func, max_retries: int = 3, base_delay: float = 2.0, retryable_errors: tuple = ("429", "500", "502", "503", "504", "Too Many Requests")
+) -> subprocess.CompletedProcess:
+    """Execute a subprocess call with exponential backoff for retryable errors."""
+    import time
+    import random
+    
+    for attempt in range(max_retries + 1):
+        result = func()
+        if result.returncode == 0 or attempt == max_retries:
+            return result
+        
+        error_output = (result.stderr or "") + (result.stdout or "")
+        if not any(err in error_output for err in retryable_errors):
+            return result
+            
+        logger.warning(
+            "Retryable error encountered (attempt %d/%d). Retrying in backoff...",
+            attempt + 1,
+            max_retries,
+        )
+        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+        time.sleep(delay)
+    return result
+
+
+class AzureToolBase(Tool):
+    """Base class for tools that call the az CLI under the hood."""
+    
+    max_output_size = 12288  # Default 12KB token-budget friendly limit
+
+    def _run_az(self, cmd: list[str], label: str, timeout: int = 60, use_retry: bool = True, truncate: bool = True) -> str:
+        # Callers (each tool's execute()) are responsible for the login check.
+        az_path = _find_az()
+        if not az_path:
+            return "Error: Azure CLI is not installed on this server. Circuit breaker is open. Tool disabled."
+
+        cmd[0] = az_path
+
+        # Defence-in-depth: Block shell injection in arguments
+        for i, arg in enumerate(cmd[1:]):  # skip 'az' command itself
+            injection_err = check_shell_injection(str(arg), f"cmd[{i+1}]")
+            if injection_err:
+                return injection_err
+
+        try:
+            def _run():
+                return subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    shell=(sys.platform == "win32"),
+                    **SUBPROCESS_FLAGS,
+                )
+            
+            if use_retry:
+                result = retry_with_backoff(_run)
+            else:
+                result = _run()
+
+            if result.returncode != 0:
+                error = result.stderr.strip() if result.stderr else "Unknown error"
+                return f"Error ({label}) [exit {result.returncode}]: {error}"
+            
+            output = result.stdout.strip()
+            if truncate and len(output) > self.max_output_size:
+                output = output[:self.max_output_size] + "\n... (truncated)"
+            # Return empty string on empty success — callers decide how to phrase
+            # "no results" so they can match each tool's original CLI semantics.
+            return output
+            
+        except subprocess.TimeoutExpired:
+            return f"Error: {label} timed out after {timeout} seconds"
+        except FileNotFoundError:
+            return "Error: Azure CLI (az) not found. Is it installed?"
+        except Exception as e:
+            logger.error("%s error: %s", label, str(e), exc_info=True)
+            return f"Error: {str(e)}"
 
 
 # Global tool registry
@@ -93,121 +249,49 @@ def resolve_tools(tool_names: list[str]) -> list[Tool]:
 
 
 def init_tools() -> None:
-    """Initialize and register all tools. Called on startup."""
+    """Initialize and register all tools via auto-discovery. Called on startup."""
+    import pkgutil
+    import importlib
+    import app.tools
+    
     settings = get_settings()
 
-    from app.tools.kb_tools import ReadKBFileTool, SearchKBTool, SearchKBSemanticTool
-    from app.tools.ms_docs import FetchMsDocsTool
-    from app.tools.shell import RunShellTool
-    from app.tools.az_cli import AzCliTool
-    from app.tools.az_resource_graph import AzResourceGraphTool
-    from app.tools.learn_tool import ReadLearningsTool, UpdateLearningsTool
-    from app.tools.az_cost import AzCostQueryTool
-    from app.tools.az_monitor import AzMonitorLogsTool
-    from app.tools.az_rest import AzRestApiTool
-    from app.tools.generate_file import GenerateFileTool
-    from app.tools.validate_drawio import ValidateDrawioTool
-    from app.tools.render_drawio import RenderDrawioTool
-    from app.tools.az_devops import AzDevOpsTool
-    from app.tools.az_policy import AzPolicyCheckTool
-    from app.tools.az_advisor import AzAdvisorTool
-    from app.tools.network_test import NetworkTestTool
-    from app.tools.diagram_gen import DiagramGenTool
-    from app.tools.web_fetch import WebFetchTool
-    from app.tools.search_stackoverflow import SearchStackOverflowTool
-    from app.tools.search_github import SearchGithubTool
-    from app.tools.search_azure_updates import SearchAzureUpdatesTool
-    from app.tools.web_search import WebSearchTool
+    # 1. Discover and load all modules in app.tools
+    # The Tool.__init_subclass__ hook will automatically register them into TOOL_REGISTRY
+    for _, module_name, _ in pkgutil.iter_modules(app.tools.__path__):
+        if module_name != "base":
+            try:
+                importlib.import_module(f"app.tools.{module_name}")
+            except Exception as e:
+                logger.error("Failed to auto-register tool module %s: %s", module_name, e)
 
-    register_tool(ReadKBFileTool())
-    register_tool(SearchKBTool())
+    # 2. Apply config flags to enable/disable tools
+    config_mapping = {
+        "search_kb_semantic": settings.TOOL_SEARCH_SEMANTIC_ENABLED,
+        "ms_docs": settings.TOOL_MS_DOCS_ENABLED,
+        "run_shell": settings.TOOL_SHELL_ENABLED,
+        "az_cli": settings.TOOL_AZ_CLI_ENABLED,
+        "az_resource_graph": settings.TOOL_AZ_CLI_ENABLED,  # shares az_cli config
+        "az_cost_query": settings.TOOL_AZ_COST_ENABLED,
+        "az_monitor_logs": settings.TOOL_AZ_MONITOR_ENABLED,
+        "az_rest_api": settings.TOOL_AZ_REST_ENABLED,
+        "generate_file": settings.TOOL_GENERATE_FILE_ENABLED,
+        "validate_drawio": settings.TOOL_VALIDATE_DRAWIO_ENABLED,
+        "render_drawio": settings.TOOL_RENDER_DRAWIO_ENABLED,
+        "az_devops": settings.TOOL_AZ_DEVOPS_ENABLED,
+        "az_policy_check": settings.TOOL_AZ_POLICY_ENABLED,
+        "az_advisor": settings.TOOL_AZ_ADVISOR_ENABLED,
+        "network_test": settings.TOOL_NETWORK_TEST_ENABLED,
+        "web_fetch": settings.TOOL_WEB_FETCH_ENABLED,
+        "search_stackoverflow": settings.TOOL_SEARCH_STACKOVERFLOW_ENABLED,
+        "search_github": settings.TOOL_SEARCH_GITHUB_ENABLED,
+        "search_azure_updates": settings.TOOL_SEARCH_AZURE_UPDATES_ENABLED,
+        "web_search": settings.TOOL_WEB_SEARCH_ENABLED,
+    }
 
-    search_semantic = SearchKBSemanticTool()
-    search_semantic.enabled_by_config = settings.TOOL_SEARCH_SEMANTIC_ENABLED
-    register_tool(search_semantic)
-
-    register_tool(ReadLearningsTool())
-    register_tool(UpdateLearningsTool())
-
-    ms_docs = FetchMsDocsTool()
-    ms_docs.enabled_by_config = settings.TOOL_MS_DOCS_ENABLED
-    register_tool(ms_docs)
-
-    shell = RunShellTool()
-    shell.enabled_by_config = settings.TOOL_SHELL_ENABLED
-    register_tool(shell)
-
-    az_cli = AzCliTool()
-    az_cli.enabled_by_config = settings.TOOL_AZ_CLI_ENABLED
-    register_tool(az_cli)
-
-    az_graph = AzResourceGraphTool()
-    az_graph.enabled_by_config = settings.TOOL_AZ_CLI_ENABLED  # shares az_cli config
-    register_tool(az_graph)
-
-    az_cost = AzCostQueryTool()
-    az_cost.enabled_by_config = settings.TOOL_AZ_COST_ENABLED
-    register_tool(az_cost)
-
-    az_monitor = AzMonitorLogsTool()
-    az_monitor.enabled_by_config = settings.TOOL_AZ_MONITOR_ENABLED
-    register_tool(az_monitor)
-
-    az_rest = AzRestApiTool()
-    az_rest.enabled_by_config = settings.TOOL_AZ_REST_ENABLED
-    register_tool(az_rest)
-
-    gen_file = GenerateFileTool()
-    gen_file.enabled_by_config = settings.TOOL_GENERATE_FILE_ENABLED
-    register_tool(gen_file)
-
-    validator = ValidateDrawioTool()
-    validator.enabled_by_config = settings.TOOL_VALIDATE_DRAWIO_ENABLED
-    register_tool(validator)
-
-    render = RenderDrawioTool()
-    render.enabled_by_config = settings.TOOL_RENDER_DRAWIO_ENABLED
-    register_tool(render)
-
-    az_devops = AzDevOpsTool()
-    az_devops.enabled_by_config = settings.TOOL_AZ_DEVOPS_ENABLED
-    register_tool(az_devops)
-
-    az_policy = AzPolicyCheckTool()
-    az_policy.enabled_by_config = settings.TOOL_AZ_POLICY_ENABLED
-    register_tool(az_policy)
-
-    az_advisor = AzAdvisorTool()
-    az_advisor.enabled_by_config = settings.TOOL_AZ_ADVISOR_ENABLED
-    register_tool(az_advisor)
-
-    net_test = NetworkTestTool()
-    net_test.enabled_by_config = settings.TOOL_NETWORK_TEST_ENABLED
-    register_tool(net_test)
-
-    diagram = DiagramGenTool()
-    diagram.enabled_by_config = settings.TOOL_DIAGRAM_GEN_ENABLED
-    register_tool(diagram)
-
-    web = WebFetchTool()
-    web.enabled_by_config = settings.TOOL_WEB_FETCH_ENABLED
-    register_tool(web)
-
-    so = SearchStackOverflowTool()
-    so.enabled_by_config = settings.TOOL_SEARCH_STACKOVERFLOW_ENABLED
-    register_tool(so)
-
-    gh = SearchGithubTool()
-    gh.enabled_by_config = settings.TOOL_SEARCH_GITHUB_ENABLED
-    register_tool(gh)
-
-    az_updates = SearchAzureUpdatesTool()
-    az_updates.enabled_by_config = settings.TOOL_SEARCH_AZURE_UPDATES_ENABLED
-    register_tool(az_updates)
-
-    web_search = WebSearchTool()
-    web_search.enabled_by_config = settings.TOOL_WEB_SEARCH_ENABLED
-    register_tool(web_search)
+    for name, tool in TOOL_REGISTRY.items():
+        if name in config_mapping:
+            tool.enabled_by_config = config_mapping[name]
 
     logger.info(
         "Initialized %d tools (%d enabled)",

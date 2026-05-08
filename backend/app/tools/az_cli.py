@@ -3,32 +3,54 @@ Azure CLI tool — runs az commands with user approval.
 """
 
 import logging
-import shutil
 import subprocess
 import sys
 import threading
 from typing import Generator
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import SUBPROCESS_FLAGS, Tool, check_shell_injection, _find_az
 from app.tools.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_SIZE = 8192
 
+# Subcommand prefixes that are blocked even with approval. These are operations
+# that wipe credentials, create identities, or remove access — any of which
+# could lock the team out or be abused if approval UX is bypassed.
+_BLOCKED_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("account", "clear"),
+    ("ad", "app", "create"),
+    ("ad", "app", "delete"),
+    ("ad", "sp", "create"),
+    ("ad", "sp", "delete"),
+    ("role", "assignment", "delete"),
+    ("role", "definition", "delete"),
+)
 
-def _find_az() -> str:
-    """Resolve the full path to az CLI. On Windows it's az.cmd."""
-    path = shutil.which("az")
-    if path:
-        return path
-    # Fallback for Windows
-    if sys.platform == "win32":
-        path = shutil.which("az.cmd")
-        if path:
-            return path
-    return "az"
+
+def _is_blocked(az_args: list[str]) -> str | None:
+    """Return an error string if the args contain a blocked subcommand sequence
+    as a contiguous run of tokens.
+
+    Scans the *entire* args list rather than only the head, so global flags
+    (``--debug``, ``--verbose``, ``--only-show-errors``, ``--output json``,
+    ``--subscription <id>``, etc.) cannot be used as a prefix to slip a
+    destructive subcommand past the blocklist.
+    """
+    lowered = [str(a).lower() for a in az_args]
+    for prefix in _BLOCKED_PREFIXES:
+        n = len(prefix)
+        for i in range(len(lowered) - n + 1):
+            if tuple(lowered[i:i + n]) == prefix:
+                joined = " ".join(prefix)
+                return (
+                    f"Error: 'az {joined}' is blocked for safety. "
+                    "These operations can wipe credentials or remove access. "
+                    "If this is genuinely required, the operator must run it manually."
+                )
+    return None
 
 
 class AzCliTool(Tool):
@@ -61,7 +83,22 @@ class AzCliTool(Tool):
         if not isinstance(az_args, list):
             return "Error: args must be a list of strings"
 
-        cmd = [_find_az()] + [str(a) for a in az_args]
+        # Block destructive operations even with approval
+        blocked = _is_blocked(az_args)
+        if blocked:
+            return blocked
+
+        # Defence-in-depth: block shell metacharacters in individual args
+        for i, arg in enumerate(az_args):
+            injection_err = check_shell_injection(str(arg), f"args[{i}]")
+            if injection_err:
+                return injection_err
+
+        az_path = _find_az()
+        if not az_path:
+            return "Error: Azure CLI is not installed on this server. Circuit breaker is open. Tool disabled."
+
+        cmd = [az_path] + [str(a) for a in az_args]
 
         try:
             result = subprocess.run(
@@ -104,7 +141,26 @@ class AzCliTool(Tool):
             yield "Error: args must be a list of strings"
             return "Error: args must be a list of strings"
 
-        cmd = [_find_az()] + [str(a) for a in az_args]
+        # Block destructive operations even with approval
+        blocked = _is_blocked(az_args)
+        if blocked:
+            yield blocked
+            return blocked
+
+        # Defence-in-depth: block shell metacharacters in individual args
+        for i, arg in enumerate(az_args):
+            injection_err = check_shell_injection(str(arg), f"args[{i}]")
+            if injection_err:
+                yield injection_err
+                return injection_err
+
+        az_path = _find_az()
+        if not az_path:
+            err = "Error: Azure CLI is not installed on this server. Circuit breaker is open. Tool disabled."
+            yield err
+            return err
+            
+        cmd = [az_path] + [str(a) for a in az_args]
 
         try:
             proc = subprocess.Popen(

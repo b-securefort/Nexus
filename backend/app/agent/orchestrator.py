@@ -5,6 +5,7 @@ Agent orchestrator — main agent loop with tool calling and approval gating.
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
@@ -92,7 +93,6 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
         "Other tools:\n"
         "- **`network_test`** — DNS/port checks, NSG rules. No approval.\n"
         "- **`generate_file`** — Write files to output/ sandbox. No approval.\n"
-        "- **`diagram_gen`** — Generate Mermaid diagrams. No approval.\n"
         "- **`web_fetch`** — Fetch web page content. No approval.\n"
         "Before running any command, call `fetch_ms_docs` to verify the correct syntax.\n\n"
         "## Thinking before acting\n"
@@ -402,6 +402,8 @@ def _build_failure_summary_for_learning(
     return "\n".join(lines)
 
 
+_tool_call_history: dict[str, list[float]] = {}
+
 def _execute_tool_streaming(
     tool: Tool, func_args: dict, user, call_id: str, chunk_sink: list[str]
 ) -> str:
@@ -411,6 +413,25 @@ def _execute_tool_streaming(
     yield them as SSE events after this synchronous call returns.
     Returns the full combined tool output.
     """
+    start_time = time.time()
+    
+    # Rate Limiting Check
+    if getattr(tool, "rate_limit_calls", None) is not None:
+        history = _tool_call_history.setdefault(tool.name, [])
+        window = getattr(tool, "rate_limit_window", 60)
+        
+        # Prune timestamps older than the window
+        history = [ts for ts in history if start_time - ts < window]
+        _tool_call_history[tool.name] = history
+        
+        if len(history) >= tool.rate_limit_calls:
+            logger.warning("Rate limit tripped for tool %s", tool.name)
+            err = f"Error: Rate limit exceeded for `{tool.name}`. Maximum {tool.rate_limit_calls} calls per {window} seconds. Please wait or use a different strategy."
+            chunk_sink.append(err)
+            return err
+            
+        history.append(start_time)
+        
     gen = tool.execute_streaming(func_args, user)
     full_result = ""
     try:
@@ -422,6 +443,19 @@ def _execute_tool_streaming(
     # If the generator didn't return a value, build from chunks
     if not full_result and chunk_sink:
         full_result = "".join(chunk_sink)
+    
+    duration = time.time() - start_time
+    
+    # Structured Telemetry
+    telemetry = {
+        "event": "tool_execution",
+        "tool_name": tool.name,
+        "args_len": len(json.dumps(func_args)),
+        "duration_sec": round(duration, 3),
+        "result_len": len(full_result),
+    }
+    logger.info("TELEMETRY: %s", json.dumps(telemetry))
+    
     return full_result
 
 
@@ -668,20 +702,41 @@ async def handle_chat(
                 for chunk in _stream_chunks:
                     yield sse_tool_output_chunk(call_id, chunk)
 
-                # Save tool result
+                # Standardise output envelope
+                is_error = (
+                    tool_result.strip().startswith("Error") or 
+                    "Approval timed out" in tool_result or 
+                    "User denied" in tool_result
+                )
+                
+                try:
+                    parsed_data = json.loads(tool_result)
+                except Exception:
+                    parsed_data = tool_result
+
+                envelope = {
+                    "status": "error" if is_error else "success",
+                    "tool": func_name,
+                    "data": parsed_data,
+                }
+                enveloped_result = json.dumps(envelope, indent=2)
+
+                # Save tool result to DB and history as the standardised envelope
                 tool_msg = _save_message(
                     session,
                     conversation.id,
                     role="tool",
-                    content=tool_result,
+                    content=enveloped_result,
                     tool_call_id=call_id,
                     tool_name=func_name,
                 )
-                messages.append({"role": "tool", "content": tool_result, "tool_call_id": call_id})
+                messages.append({"role": "tool", "content": enveloped_result, "tool_call_id": call_id})
+                
+                # The UI gets the raw text for streaming/display, but can also parse the enveloped result if needed
                 yield sse_tool_result(call_id, func_name, tool_result)
 
                 # Multi-strategy retry: track failures and escalate
-                if func_name in _COMMAND_TOOLS and tool_result.startswith("Error"):
+                if func_name in _COMMAND_TOOLS and is_error:
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
                         from app.tools.az_login_check import clear_login_cache

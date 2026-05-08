@@ -5,33 +5,17 @@ Does NOT require approval since Resource Graph is strictly read-only.
 
 import json
 import logging
-import shutil
-import subprocess
-import sys
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import AzureToolBase, check_shell_injection, _find_az
 from app.tools.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
 
-_MAX_OUTPUT_SIZE = 16384
 
-
-def _find_az() -> str:
-    """Resolve the full path to az CLI. On Windows it's az.cmd."""
-    path = shutil.which("az")
-    if path:
-        return path
-    if sys.platform == "win32":
-        path = shutil.which("az.cmd")
-        if path:
-            return path
-    return "az"
-
-
-class AzResourceGraphTool(Tool):
+class AzResourceGraphTool(AzureToolBase):
     name = "az_resource_graph"
+    max_output_size = 16384
     description = (
         "Execute a read-only Azure Resource Graph (ARG) query using Kusto Query Language (KQL). "
         "Use this to explore, count, or list Azure resources across subscriptions. "
@@ -78,6 +62,11 @@ class AzResourceGraphTool(Tool):
         if not query:
             return "Error: query is required"
 
+        # Defence-in-depth: block shell metacharacters in the KQL query
+        injection_err = check_shell_injection(query, "query")
+        if injection_err:
+            return injection_err
+
         subscriptions = args.get("subscriptions", [])
 
         cmd = [
@@ -90,38 +79,22 @@ class AzResourceGraphTool(Tool):
         if subscriptions:
             cmd.extend(["--subscriptions"] + subscriptions)
 
+        # We use truncate=False because we need to parse the JSON first
+        result_str = self._run_az(cmd, label="Resource Graph query", timeout=30, truncate=False)
+        
+        if result_str.startswith("Error"):
+            return result_str
+
+        # Parse and format the output
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                shell=(sys.platform == "win32"),
-                **SUBPROCESS_FLAGS,
-            )
+            data = json.loads(result_str)
+            records = data.get("data", data)
+            count = data.get("totalRecords", len(records) if isinstance(records, list) else "unknown")
+            output = json.dumps({"totalRecords": count, "data": records}, indent=2)
+        except json.JSONDecodeError:
+            output = result_str
 
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                return f"Error (exit {result.returncode}): {error_msg}"
+        if len(output) > self.max_output_size:
+            output = output[:self.max_output_size] + "\n... (truncated)"
 
-            # Parse and format the output
-            try:
-                data = json.loads(result.stdout)
-                records = data.get("data", data)
-                count = data.get("totalRecords", len(records) if isinstance(records, list) else "unknown")
-                output = json.dumps({"totalRecords": count, "data": records}, indent=2)
-            except json.JSONDecodeError:
-                output = result.stdout
-
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-
-            return output
-
-        except subprocess.TimeoutExpired:
-            return "Error: Resource Graph query timed out after 30 seconds"
-        except FileNotFoundError:
-            return "Error: Azure CLI (az) not found. Is it installed? Run 'az extension add --name resource-graph' if the extension is missing."
-        except Exception as e:
-            logger.error("Resource Graph error: %s", str(e))
-            return f"Error: {str(e)}"
+        return output

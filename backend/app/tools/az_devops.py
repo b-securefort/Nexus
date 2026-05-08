@@ -3,19 +3,14 @@ Azure DevOps tool — query pipelines, builds, PRs, and work items.
 Read-only queries have no approval. Triggering actions requires approval.
 """
 
-import json
 import logging
-import subprocess
-import sys
 
 from app.auth.models import User
 from app.config import get_settings
-from app.tools.base import SUBPROCESS_FLAGS, Tool
-from app.tools.az_cli import _find_az
+from app.tools.base import AzureToolBase, _find_az
+from app.tools.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
-
-_MAX_OUTPUT_SIZE = 16384
 
 # Actions that are read-only
 _SAFE_ACTIONS = {
@@ -25,7 +20,7 @@ _SAFE_ACTIONS = {
 }
 
 
-class AzDevOpsTool(Tool):
+class AzDevOpsTool(AzureToolBase):
     name = "az_devops"
     description = (
         "Query Azure DevOps for projects, pipelines, builds, pull requests, and work items. "
@@ -133,6 +128,10 @@ class AzDevOpsTool(Tool):
         return org_args, project_args
 
     def execute(self, args: dict, user: User) -> str:
+        login_err = require_az_login()
+        if login_err:
+            return login_err
+
         action = args.get("action", "")
         top = args.get("top", 10)
 
@@ -228,35 +227,15 @@ class AzDevOpsTool(Tool):
         return self._run_cmd(cmd, action)
 
     def _run_cmd(self, cmd: list[str], label: str) -> str:
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                shell=(sys.platform == "win32"),
-                **SUBPROCESS_FLAGS,
-            )
+        result_str = self._run_az(cmd, label=label, timeout=30)
+        
+        if result_str.startswith("Error"):
+            if "azure-devops" in result_str.lower() or "not found" in result_str.lower():
+                return (
+                    f"Error: Azure DevOps CLI extension may not be installed. "
+                    "Try: az extension add --name azure-devops\n"
+                    f"Original error: {result_str}"
+                )
+            return result_str
 
-            if result.returncode != 0:
-                error = result.stderr.strip() if result.stderr else "Unknown error"
-                if "azure-devops" in error.lower() or "not found" in error.lower():
-                    return (
-                        f"Error: Azure DevOps CLI extension may not be installed. "
-                        "Try: az extension add --name azure-devops\n"
-                        f"Original error: {error}"
-                    )
-                return f"Error running {label}: {error}"
-
-            output = result.stdout.strip()
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-            return output if output else f"{label} completed (no output)"
-
-        except subprocess.TimeoutExpired:
-            return f"Error: {label} timed out after 30 seconds"
-        except FileNotFoundError:
-            return "Error: Azure CLI (az) not found"
-        except Exception as e:
-            logger.error("DevOps tool error: %s", str(e))
-            return f"Error: {str(e)}"
+        return result_str

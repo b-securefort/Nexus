@@ -19,6 +19,8 @@ No API key required.
 import json
 import logging
 import re
+import threading
+import time
 
 import httpx
 
@@ -30,6 +32,14 @@ logger = logging.getLogger(__name__)
 _API_BASE = "https://www.microsoft.com/releasecommunications/api/v2/azure"
 _ITEM_URL_BASE = "https://azure.microsoft.com/en-us/updates"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0"}
+
+_CACHE_TTL = 900  # 15 minutes
+_feed_cache: list[dict] | None = None
+_feed_cache_time: float = 0.0
+_cache_lock = threading.Lock()
+
+# Connection pool for HTTP requests
+_shared_client = httpx.Client(timeout=20, follow_redirects=True)
 
 # Tokens that signal a retirement/deprecation intent
 _RETIREMENT_TOKENS = {
@@ -55,6 +65,7 @@ _STOPWORDS = {
 
 class SearchAzureUpdatesTool(Tool):
     name = "search_azure_updates"
+    rate_limit_calls = 5
     description = (
         "Search the official Azure Updates API (azure.microsoft.com/en-us/updates) "
         "for GA releases, previews, retirements, and service announcements. "
@@ -149,21 +160,31 @@ class SearchAzureUpdatesTool(Tool):
           "In development" — announced but not yet available
           None             — retirement items (identified by tags=["Retirements"])
         """
-        all_items: list[dict] = []
-        url: str | None = _API_BASE
+        global _feed_cache, _feed_cache_time
+        now = time.time()
+        
+        with _cache_lock:
+            if _feed_cache is not None and (now - _feed_cache_time) < _CACHE_TTL:
+                all_items = _feed_cache
+            else:
+                all_items = []
+                url: str | None = _API_BASE
 
-        with httpx.Client(timeout=20, follow_redirects=True) as client:
-            while url and len(all_items) < 200:
-                resp = client.get(url, headers=_HEADERS)
-                resp.raise_for_status()
-                data = resp.json()
-                page = data.get("value", [])
-                all_items.extend(page)
-                url = data.get("@odata.nextLink")
-                logger.debug("Fetched %d items, total so far %d", len(page), len(all_items))
+                while url and len(all_items) < 200:
+                    resp = _shared_client.get(url, headers=_HEADERS)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    page = data.get("value", [])
+                    all_items.extend(page)
+                    url = data.get("@odata.nextLink")
+                    logger.debug("Fetched %d items, total so far %d", len(page), len(all_items))
 
-        # Sort newest-first by modified date (API default order is not guaranteed)
-        all_items.sort(key=lambda i: i.get("modified") or i.get("created") or "", reverse=True)
+                # Sort newest-first by modified date (API default order is not guaranteed)
+                all_items.sort(key=lambda i: i.get("modified") or i.get("created") or "", reverse=True)
+                
+                # Update cache
+                _feed_cache = all_items
+                _feed_cache_time = time.time()
 
         # Client-side status filtering
         if is_retirement and not is_ga:

@@ -3,26 +3,20 @@ Network connectivity test tool — DNS lookups, port checks, NSG rule queries.
 Read-only, no approval needed.
 """
 
-import json
 import logging
 import socket
-import subprocess
-import sys
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import AzureToolBase, _find_az
 from app.tools.az_login_check import require_az_login
-from app.tools.az_cli import _find_az
 
 logger = logging.getLogger(__name__)
-
-_MAX_OUTPUT_SIZE = 8192
 
 # Only allow testing well-known ports and Azure service ports
 _ALLOWED_PORTS = set(range(1, 65536))
 
 
-class NetworkTestTool(Tool):
+class NetworkTestTool(AzureToolBase):
     name = "network_test"
     description = (
         "Test network connectivity: DNS resolution, TCP port checks, "
@@ -116,24 +110,12 @@ class NetworkTestTool(Tool):
     def _nsg_rules(self, resource_group: str, nsg_name: str) -> str:
         if not resource_group or not nsg_name:
             return "Error: resource_group and nsg_name are required for nsg_rules"
-        try:
-            cmd = [
-                _find_az(), "network", "nsg", "rule", "list",
-                "--resource-group", resource_group,
-                "--nsg-name", nsg_name,
-                "--output", "json",
-            ]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
-                shell=(sys.platform == "win32"), **SUBPROCESS_FLAGS,
-            )
-            if result.returncode != 0:
-                return f"Error: {result.stderr.strip() if result.stderr else 'Unknown error'}"
-            output = result.stdout.strip()
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-            return output if output else "No NSG rules found."
-        except subprocess.TimeoutExpired:
-            return "Error: NSG query timed out"
-        except Exception as e:
-            return f"Error: {e}"
+        
+        cmd = [
+            _find_az(), "network", "nsg", "rule", "list",
+            "--resource-group", resource_group,
+            "--nsg-name", nsg_name,
+            "--output", "json",
+        ]
+        result_str = self._run_az(cmd, label="NSG rules query", timeout=30)
+        return result_str if result_str else "No NSG rules found."

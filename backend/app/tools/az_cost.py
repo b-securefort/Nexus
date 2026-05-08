@@ -5,18 +5,13 @@ Read-only, no approval needed.
 
 import json
 import logging
-import subprocess
-import sys
 from datetime import datetime, timedelta, timezone
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import AzureToolBase, _find_az
 from app.tools.az_login_check import require_az_login
-from app.tools.az_cli import _find_az
 
 logger = logging.getLogger(__name__)
-
-_MAX_OUTPUT_SIZE = 16384
 
 # Timeframe strings accepted by the Cost Management REST API
 _TIMEFRAME_MAP = {
@@ -34,8 +29,10 @@ _CUSTOM_DAYS = {
 }
 
 
-class AzCostQueryTool(Tool):
+class AzCostQueryTool(AzureToolBase):
     name = "az_cost_query"
+    max_output_size = 16384
+    rate_limit_calls = 8
     description = (
         "Query Azure Cost Management for cost and usage data via the REST API. "
         "Read-only — no approval needed. "
@@ -95,16 +92,10 @@ class AzCostQueryTool(Tool):
 
     def _get_subscription_id(self) -> str | None:
         """Get the current subscription ID from az account show."""
-        try:
-            result = subprocess.run(
-                [_find_az(), "account", "show", "--query", "id", "-o", "tsv"],
-                capture_output=True, text=True, timeout=15,
-                shell=(sys.platform == "win32"), **SUBPROCESS_FLAGS,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except Exception:
-            pass
+        cmd = [_find_az(), "account", "show", "--query", "id", "-o", "tsv"]
+        result = self._run_az(cmd, label="get subscription id", timeout=15, use_retry=False)
+        if not result.startswith("Error"):
+            return result.strip()
         return None
 
     # ── Usage query via REST API ─────────────────────────────────────────
@@ -223,47 +214,14 @@ class AzCostQueryTool(Tool):
     # ── REST call helper ─────────────────────────────────────────────────
 
     def _az_rest(self, method: str, url: str, body: dict | None, label: str) -> str:
-        """Execute an az rest call and return the raw output."""
+        """Execute an az rest call and return the raw output using the standardized retry."""
         cmd = [_find_az(), "rest", "--method", method, "--url", url, "--output", "json"]
         if body is not None:
             cmd.extend(["--body", json.dumps(body), "--headers", "Content-Type=application/json"])
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True, text=True, timeout=60,
-                shell=(sys.platform == "win32"), **SUBPROCESS_FLAGS,
-            )
-
-            if result.returncode != 0:
-                error = result.stderr.strip() if result.stderr else "Unknown error"
-                # Handle 429 rate limits with a retry
-                if "429" in error or "Too Many Requests" in error:
-                    import time
-                    time.sleep(3)
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True, text=True, timeout=60,
-                        shell=(sys.platform == "win32"), **SUBPROCESS_FLAGS,
-                    )
-                    if result.returncode != 0:
-                        error = result.stderr.strip() if result.stderr else "Unknown error"
-                        return f"Error running {label} (exit {result.returncode}): {error}"
-                else:
-                    return f"Error running {label} (exit {result.returncode}): {error}"
-
-            output = result.stdout.strip()
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-            return output
-
-        except subprocess.TimeoutExpired:
-            return f"Error: {label} timed out after 60 seconds"
-        except FileNotFoundError:
-            return "Error: Azure CLI (az) not found. Is it installed?"
-        except Exception as e:
-            logger.error("Cost query error: %s", str(e))
-            return f"Error: {str(e)}"
+        # Use the AzureToolBase _run_az which includes our retry_with_backoff helper
+        # by default, effectively replacing the custom 429 retry loop.
+        return self._run_az(cmd, label=label, timeout=60, use_retry=True)
 
     # ── Response formatting ──────────────────────────────────────────────
 
@@ -344,4 +302,4 @@ class AzCostQueryTool(Tool):
         except (json.JSONDecodeError, TypeError, KeyError) as e:
             logger.warning("Failed to format cost response: %s", e)
             # Return raw truncated
-            return raw[:_MAX_OUTPUT_SIZE]
+            return raw[:self.max_output_size]

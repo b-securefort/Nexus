@@ -7,13 +7,13 @@ pre-check login status before executing commands.
 
 import json
 import logging
-import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 
-from app.tools.base import SUBPROCESS_FLAGS
+from app.tools.base import SUBPROCESS_FLAGS, _find_az
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +33,9 @@ class AzLoginState:
     checked_at: float = 0.0
 
 
-# Module-level cache
+# Module-level cache (protected by _cache_lock for thread safety)
 _cached_state: AzLoginState | None = None
-
-
-def _find_az() -> str:
-    """Resolve the full path to az CLI."""
-    path = shutil.which("az")
-    if path:
-        return path
-    if sys.platform == "win32":
-        path = shutil.which("az.cmd")
-        if path:
-            return path
-    return "az"
+_cache_lock = threading.Lock()
 
 
 def check_az_login(force_refresh: bool = False) -> AzLoginState:
@@ -54,26 +43,32 @@ def check_az_login(force_refresh: bool = False) -> AzLoginState:
     
     Returns an AzLoginState with login details or error info.
     Results are cached for _LOGIN_CACHE_TTL seconds.
+    Thread-safe: concurrent requests will not race on the cache.
     """
     global _cached_state
 
     now = time.time()
-    if (
-        not force_refresh
-        and _cached_state is not None
-        and (now - _cached_state.checked_at) < _LOGIN_CACHE_TTL
-    ):
-        return _cached_state
+    with _cache_lock:
+        if (
+            not force_refresh
+            and _cached_state is not None
+            and (now - _cached_state.checked_at) < _LOGIN_CACHE_TTL
+        ):
+            return _cached_state
 
+    # Run the (slow) subprocess check outside the lock to avoid blocking
     state = _do_check()
-    _cached_state = state
+
+    with _cache_lock:
+        _cached_state = state
     return state
 
 
 def clear_login_cache() -> None:
     """Clear the cached login state (e.g., after an auth error)."""
     global _cached_state
-    _cached_state = None
+    with _cache_lock:
+        _cached_state = None
 
 
 def get_az_context_prompt() -> str:
@@ -136,9 +131,17 @@ def require_az_login() -> str | None:
 
 def _do_check() -> AzLoginState:
     """Actually run az account show and parse the result."""
+    az_path = _find_az()
+    if not az_path:
+        return AzLoginState(
+            logged_in=False,
+            error="Azure CLI not found (circuit breaker open).",
+            checked_at=time.time(),
+        )
+
     try:
         result = subprocess.run(
-            [_find_az(), "account", "show", "--output", "json"],
+            [az_path, "account", "show", "--output", "json"],
             capture_output=True,
             text=True,
             timeout=15,

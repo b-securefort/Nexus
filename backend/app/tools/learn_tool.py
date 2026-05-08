@@ -118,9 +118,24 @@ class UpdateLearningsTool(Tool):
         )
 
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(entry)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            # Basic rotation: split by entry header
+            parts = content.split("\n## [")
+            header = parts[0]
+            entries = ["## [" + p for p in parts[1:]]
+            
+            entries.append(entry.strip() + "\n\n")
+            
+            MAX_ENTRIES = 50
+            if len(entries) > MAX_ENTRIES:
+                entries = entries[-MAX_ENTRIES:]
+                
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(header + "\n" + "".join(entries))
+                
             logger.info("Learning recorded: [%s] %s", category, summary)
-            return f"Learning recorded: [{category}] {summary}"
+            return f"Learning recorded: [{category}] {summary} (Total entries: {len(entries)})"
         except Exception as e:
             return f"Error writing learning: {e}"

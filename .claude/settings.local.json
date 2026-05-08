@@ -35,7 +35,8 @@
       "Read(//mnt/c/Program Files/**)",
       "Read(//c/Users/Balaji/AppData/Local/Temp/claude/e--Work-MyProjects-Nexus/d1a135a1-4fcb-4547-b620-04c102d08bb3/tasks//**)",
       "Read(//c/Users/Balaji/AppData/Local/Temp/claude/e--Work-MyProjects-Nexus/d1a135a1-4fcb-4547-b620-04c102d08bb3/tasks/**)",
-      "Bash(python -m pytest tests/test_agent.py tests/test_validate_drawio.py tests/test_tools.py -q)"
+      "Bash(python -m pytest tests/test_agent.py tests/test_validate_drawio.py tests/test_tools.py -q)",
+      "Bash(python -c \"from app.tools import az_advisor, az_cli, az_cost, az_devops, az_login_check, az_monitor, az_policy, az_resource_graph, az_rest, base, learn_tool, network_test, search_azure_updates, web_fetch, ms_docs, search_stackoverflow, search_github, web_search; print\\('All tool modules import cleanly'\\)\")"
     ]
   }
 }

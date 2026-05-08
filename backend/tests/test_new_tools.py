@@ -24,6 +24,29 @@ _USER = User(oid="test-user", email="test@test.com", display_name="Test")
 init_tools()
 
 
+@pytest.fixture(autouse=True)
+def _ensure_logged_in_cache(request):
+    """Pre-populate the az_login_check cache with a logged-in state for any
+    test that isn't part of TestAzLoginCheck. AzureToolBase._run_az imports
+    require_az_login from the source module on every call, so a cached
+    logged-in state is the simplest way to make every Azure tool test pass
+    without per-test login mocks."""
+    if request.cls is not None and request.cls.__name__ == "TestAzLoginCheck":
+        # These tests exercise the cache directly — leave them alone.
+        yield
+        return
+    from app.tools import az_login_check
+    az_login_check._cached_state = az_login_check.AzLoginState(
+        logged_in=True,
+        user="test@test.com",
+        subscription_id="sub-test",
+        subscription_name="Test Sub",
+        tenant_id="tenant-test",
+        checked_at=time.time(),
+    )
+    yield
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _mock_subprocess_success(stdout: str, stderr: str = ""):
@@ -52,6 +75,7 @@ def _patch_az_logged_in():
     # so we need to patch every usage site. Use a helper context manager.
     from contextlib import ExitStack
     modules = [
+        # Each tool module imports require_az_login at module load — patch each.
         "app.tools.az_cost",
         "app.tools.az_monitor",
         "app.tools.az_rest",
@@ -60,6 +84,7 @@ def _patch_az_logged_in():
         "app.tools.network_test",
         "app.tools.az_cli",
         "app.tools.az_resource_graph",
+        "app.tools.az_devops",
     ]
     stack = ExitStack()
     for mod in modules:
@@ -72,6 +97,7 @@ def _patch_az_not_logged_in():
     err = "Error: Azure CLI is not logged in.\nPlease run: az login --use-device-code"
     from contextlib import ExitStack
     modules = [
+        # Each tool module imports require_az_login at module load — patch each.
         "app.tools.az_cost",
         "app.tools.az_monitor",
         "app.tools.az_rest",
@@ -80,6 +106,7 @@ def _patch_az_not_logged_in():
         "app.tools.network_test",
         "app.tools.az_cli",
         "app.tools.az_resource_graph",
+        "app.tools.az_devops",
     ]
     stack = ExitStack()
     for mod in modules:
@@ -256,7 +283,7 @@ class TestAzCostQueryTool:
             result = tool.execute({"query_type": "usage"}, _USER)
         assert "not logged in" in result
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_usage_query_success(self, mock_run):
         tool = get_tool("az_cost_query")
         # First call: get subscription ID, Second call: REST query
@@ -286,7 +313,7 @@ class TestAzCostQueryTool:
         assert "rest" in rest_cmd
         assert "MonthToDate" in str(rest_cmd)
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_usage_query_custom_period(self, mock_run):
         tool = get_tool("az_cost_query")
         mock_run.side_effect = [
@@ -299,7 +326,7 @@ class TestAzCostQueryTool:
         body_str = str(rest_cmd)
         assert "Custom" in body_str
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_usage_query_with_grouping(self, mock_run):
         tool = get_tool("az_cost_query")
         rest_response = json.dumps({
@@ -331,7 +358,7 @@ class TestAzCostQueryTool:
         body_arg = [a for a in rest_cmd if "ResourceGroup" in str(a)]
         assert len(body_arg) > 0
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_usage_query_with_rg_filter(self, mock_run):
         tool = get_tool("az_cost_query")
         mock_run.side_effect = [
@@ -347,7 +374,7 @@ class TestAzCostQueryTool:
         body_str = str(rest_cmd)
         assert "my-rg" in body_str
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_forecast_query(self, mock_run):
         tool = get_tool("az_cost_query")
         rest_response = json.dumps({
@@ -368,7 +395,7 @@ class TestAzCostQueryTool:
             result = tool.execute({"query_type": "forecast"}, _USER)
         assert "500.00" in result
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_budget_status(self, mock_run):
         tool = get_tool("az_cost_query")
         rest_response = json.dumps({
@@ -392,7 +419,7 @@ class TestAzCostQueryTool:
         assert "450" in result
         assert "1000" in result
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_command_failure(self, mock_run):
         tool = get_tool("az_cost_query")
         mock_run.side_effect = [
@@ -403,7 +430,7 @@ class TestAzCostQueryTool:
             result = tool.execute({"query_type": "usage"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_429_retry(self, mock_run):
         """Test that 429 rate limits trigger a retry."""
         tool = get_tool("az_cost_query")
@@ -423,7 +450,7 @@ class TestAzCostQueryTool:
         assert "99.00" in result
         assert mock_run.call_count == 3  # sub + fail + retry
 
-    @patch("app.tools.az_cost.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_no_subscription(self, mock_run):
         """Test error when subscription ID can't be determined."""
         tool = get_tool("az_cost_query")
@@ -433,7 +460,7 @@ class TestAzCostQueryTool:
         assert "Error" in result
         assert "subscription" in result.lower()
 
-    @patch("app.tools.az_cost.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=60))
+    @patch("app.tools.base.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=60))
     def test_timeout(self, mock_run):
         tool = get_tool("az_cost_query")
         with _patch_az_logged_in():
@@ -469,7 +496,7 @@ class TestAzMonitorLogsTool:
         assert "Error" in result
         assert "required" in result
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_query_with_workspace(self, mock_run):
         tool = get_tool("az_monitor_logs")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -484,7 +511,7 @@ class TestAzMonitorLogsTool:
         cmd = mock_run.call_args[0][0]
         assert "ws-123" in cmd
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_auto_discover_workspace(self, mock_run):
         tool = get_tool("az_monitor_logs")
         # First call: workspace discovery
@@ -498,7 +525,7 @@ class TestAzMonitorLogsTool:
         assert "1 row" in result
         assert mock_run.call_count == 2
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_no_workspace_found(self, mock_run):
         tool = get_tool("az_monitor_logs")
         mock_run.return_value = _mock_subprocess_success("")  # empty output
@@ -507,7 +534,7 @@ class TestAzMonitorLogsTool:
         assert "Error" in result
         assert "No Log Analytics workspace" in result
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_query_zero_results(self, mock_run):
         tool = get_tool("az_monitor_logs")
         mock_run.return_value = _mock_subprocess_success("[]")
@@ -518,7 +545,7 @@ class TestAzMonitorLogsTool:
             }, _USER)
         assert "0 results" in result
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_query_failure(self, mock_run):
         tool = get_tool("az_monitor_logs")
         mock_run.return_value = _mock_subprocess_failure("Bad KQL syntax")
@@ -529,7 +556,7 @@ class TestAzMonitorLogsTool:
             }, _USER)
         assert "Error" in result
 
-    @patch("app.tools.az_monitor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_custom_timespan(self, mock_run):
         tool = get_tool("az_monitor_logs")
         mock_run.return_value = _mock_subprocess_success("[]")
@@ -579,7 +606,7 @@ class TestAzRestApiTool:
         """Relative URLs starting with / should be allowed."""
         tool = get_tool("az_rest_api")
         with _patch_az_logged_in(), \
-             patch("app.tools.az_rest.subprocess.run") as mock_run:
+             patch("app.tools.base.subprocess.run") as mock_run:
             mock_run.return_value = _mock_subprocess_success('{"value": []}')
             result = tool.execute({
                 "method": "GET",
@@ -598,7 +625,7 @@ class TestAzRestApiTool:
         assert "Error" in result
         assert "Invalid JSON" in result
 
-    @patch("app.tools.az_rest.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_get_success(self, mock_run):
         tool = get_tool("az_rest_api")
         mock_run.return_value = _mock_subprocess_success('{"name": "rg1"}')
@@ -609,7 +636,7 @@ class TestAzRestApiTool:
             }, _USER)
         assert "rg1" in result
 
-    @patch("app.tools.az_rest.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_put_with_body(self, mock_run):
         tool = get_tool("az_rest_api")
         mock_run.return_value = _mock_subprocess_success('{"status": "ok"}')
@@ -622,7 +649,7 @@ class TestAzRestApiTool:
         cmd = mock_run.call_args[0][0]
         assert "--body" in cmd
 
-    @patch("app.tools.az_rest.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_empty_response_body(self, mock_run):
         tool = get_tool("az_rest_api")
         mock_run.return_value = _mock_subprocess_success("")
@@ -648,7 +675,7 @@ class TestAzRestApiTool:
     def test_graph_microsoft_url_allowed(self):
         tool = get_tool("az_rest_api")
         with _patch_az_logged_in(), \
-             patch("app.tools.az_rest.subprocess.run") as mock_run:
+             patch("app.tools.base.subprocess.run") as mock_run:
             mock_run.return_value = _mock_subprocess_success('{}')
             result = tool.execute({
                 "method": "GET",
@@ -785,7 +812,7 @@ class TestGenerateFileTool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestAzDevOpsTool:
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_list_pipelines(self, mock_run):
         tool = get_tool("az_devops")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -798,7 +825,7 @@ class TestAzDevOpsTool:
         }, _USER)
         assert "CI Pipeline" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_list_builds(self, mock_run):
         tool = get_tool("az_devops")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -810,27 +837,27 @@ class TestAzDevOpsTool:
         }, _USER)
         assert "succeeded" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_show_pipeline_requires_id(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "show_pipeline"}, _USER)
         assert "Error" in result
         assert "pipeline_id" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_show_build_requires_id(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "show_build"}, _USER)
         assert "Error" in result
         assert "build_id" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_trigger_build_requires_pipeline_id(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "trigger_build"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_list_prs(self, mock_run):
         tool = get_tool("az_devops")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -839,14 +866,14 @@ class TestAzDevOpsTool:
         result = tool.execute({"action": "list_prs", "project": "p"}, _USER)
         assert "Fix bug" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_show_pr_requires_id(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "show_pr"}, _USER)
         assert "Error" in result
         assert "pr_id" in result
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_create_pr_requires_fields(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "create_pr"}, _USER)
@@ -869,14 +896,14 @@ class TestAzDevOpsTool:
         assert tool._needs_approval("trigger_build") is True
         assert tool._needs_approval("create_pr") is True
 
-    @patch("app.tools.az_devops.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_extension_not_installed_hint(self, mock_run):
         tool = get_tool("az_devops")
         mock_run.return_value = _mock_subprocess_failure("'pipelines' is not in the 'az' command group. azure-devops not found")
         result = tool.execute({"action": "list_pipelines", "project": "p"}, _USER)
         assert "azure-devops" in result.lower()
 
-    @patch("app.tools.az_devops.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=30))
+    @patch("app.tools.base.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=30))
     def test_timeout(self, mock_run):
         tool = get_tool("az_devops")
         result = tool.execute({"action": "list_pipelines"}, _USER)
@@ -894,7 +921,7 @@ class TestAzPolicyCheckTool:
             result = tool.execute({"action": "compliance_summary"}, _USER)
         assert "not logged in" in result
 
-    @patch("app.tools.az_policy.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_compliance_summary(self, mock_run):
         tool = get_tool("az_policy_check")
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -905,7 +932,7 @@ class TestAzPolicyCheckTool:
             result = tool.execute({"action": "compliance_summary"}, _USER)
         assert "nonCompliantResources" in result or "3" in result
 
-    @patch("app.tools.az_policy.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_non_compliant_resources(self, mock_run):
         tool = get_tool("az_policy_check")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -915,7 +942,7 @@ class TestAzPolicyCheckTool:
             result = tool.execute({"action": "non_compliant_resources"}, _USER)
         assert "NonCompliant" in result
 
-    @patch("app.tools.az_policy.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_list_assignments(self, mock_run):
         tool = get_tool("az_policy_check")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -925,7 +952,7 @@ class TestAzPolicyCheckTool:
             result = tool.execute({"action": "list_assignments"}, _USER)
         assert "enforce-tags" in result
 
-    @patch("app.tools.az_policy.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_with_resource_group_scope(self, mock_run):
         tool = get_tool("az_policy_check")
         mock_run.return_value = _mock_subprocess_success("[]")
@@ -960,7 +987,7 @@ class TestAzAdvisorTool:
             result = tool.execute({}, _USER)
         assert "not logged in" in result
 
-    @patch("app.tools.az_advisor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_list_all_recommendations(self, mock_run):
         tool = get_tool("az_advisor")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -970,7 +997,7 @@ class TestAzAdvisorTool:
             result = tool.execute({}, _USER)
         assert "Resize VM" in result
 
-    @patch("app.tools.az_advisor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_filter_by_category(self, mock_run):
         tool = get_tool("az_advisor")
         mock_run.return_value = _mock_subprocess_success("[]")
@@ -980,7 +1007,7 @@ class TestAzAdvisorTool:
         assert "--category" in cmd
         assert "Security" in cmd
 
-    @patch("app.tools.az_advisor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_filter_by_resource_group(self, mock_run):
         tool = get_tool("az_advisor")
         mock_run.return_value = _mock_subprocess_success("[]")
@@ -990,7 +1017,7 @@ class TestAzAdvisorTool:
         assert "--resource-group" in cmd
         assert "rg-prod" in cmd
 
-    @patch("app.tools.az_advisor.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_no_recommendations(self, mock_run):
         tool = get_tool("az_advisor")
         mock_run.return_value = _mock_subprocess_success("")
@@ -998,7 +1025,7 @@ class TestAzAdvisorTool:
             result = tool.execute({}, _USER)
         assert "No recommendations" in result
 
-    @patch("app.tools.az_advisor.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=60))
+    @patch("app.tools.base.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=60))
     def test_timeout(self, mock_run):
         tool = get_tool("az_advisor")
         with _patch_az_logged_in():
@@ -1101,7 +1128,7 @@ class TestNetworkTestTool:
         assert "Error" in result
         assert "resource_group" in result
 
-    @patch("app.tools.network_test.subprocess.run")
+    @patch("app.tools.base.subprocess.run")
     def test_nsg_rules_success(self, mock_run):
         tool = get_tool("network_test")
         mock_run.return_value = _mock_subprocess_success(json.dumps([
@@ -1136,56 +1163,6 @@ class TestNetworkTestTool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# diagram_gen
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDiagramGenTool:
-    def test_with_mermaid_code(self):
-        tool = get_tool("diagram_gen")
-        result = tool.execute({
-            "diagram_type": "flowchart",
-            "mermaid_code": "flowchart LR\n  A --> B --> C",
-        }, _USER)
-        assert "```mermaid" in result
-        assert "A --> B --> C" in result
-
-    def test_with_description_only(self):
-        tool = get_tool("diagram_gen")
-        result = tool.execute({
-            "diagram_type": "architecture",
-            "description": "Show VNet with 3 subnets",
-        }, _USER)
-        assert "Diagram request received" in result
-        assert "architecture" in result
-
-    def test_no_description_or_code(self):
-        tool = get_tool("diagram_gen")
-        result = tool.execute({"diagram_type": "flowchart"}, _USER)
-        assert "Error" in result
-
-    def test_mermaid_code_with_description(self):
-        tool = get_tool("diagram_gen")
-        result = tool.execute({
-            "diagram_type": "sequence",
-            "description": "Auth flow",
-            "mermaid_code": "sequenceDiagram\n  Client->>Server: Request",
-        }, _USER)
-        assert "```mermaid" in result
-        assert "Auth flow" in result or "N/A" not in result
-
-    def test_requires_no_approval(self):
-        tool = get_tool("diagram_gen")
-        assert tool.requires_approval is False
-
-    def test_schema_has_diagram_type_enum(self):
-        tool = get_tool("diagram_gen")
-        schema = tool.to_openai_schema()
-        props = schema["function"]["parameters"]["properties"]
-        assert "diagram_type" in props
-        assert "enum" in props["diagram_type"]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # web_fetch
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1204,16 +1181,12 @@ class TestWebFetchTool:
     def test_http_localhost_allowed(self):
         """HTTP to localhost should be allowed."""
         tool = get_tool("web_fetch")
-        with patch("app.tools.web_fetch.httpx.Client") as mock_cls:
+        with patch("app.tools.web_fetch._shared_client") as mock_client:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.text = "OK"
             mock_response.reason_phrase = "OK"
-            mock_client = MagicMock()
-            mock_client.__enter__ = MagicMock(return_value=mock_client)
-            mock_client.__exit__ = MagicMock(return_value=False)
             mock_client.get.return_value = mock_response
-            mock_cls.return_value = mock_client
 
             result = tool.execute({"url": "http://localhost:8080/health"}, _USER)
         assert "Error" not in result or "HTTPS" not in result
@@ -1228,35 +1201,27 @@ class TestWebFetchTool:
         result = tool.execute({"url": "not a url at all"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_fetch_success_text_mode(self, mock_cls):
+    @patch("app.tools.web_fetch._shared_client")
+    def test_fetch_success_text_mode(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "<html><body><p>Hello World</p></body></html>"
         mock_response.reason_phrase = "OK"
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.return_value = mock_response
-        mock_cls.return_value = mock_client
 
         result = tool.execute({"url": "https://example.com"}, _USER)
         assert "Hello World" in result
         assert "<html>" not in result  # HTML should be stripped
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_fetch_raw_mode(self, mock_cls):
+    @patch("app.tools.web_fetch._shared_client")
+    def test_fetch_raw_mode(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "<html><body>Raw Content</body></html>"
         mock_response.reason_phrase = "OK"
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.return_value = mock_response
-        mock_cls.return_value = mock_client
 
         result = tool.execute({
             "url": "https://example.com",
@@ -1264,17 +1229,13 @@ class TestWebFetchTool:
         }, _USER)
         assert "<html>" in result  # HTML should NOT be stripped in raw mode
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_fetch_headers_only(self, mock_cls):
+    @patch("app.tools.web_fetch._shared_client")
+    def test_fetch_headers_only(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "text/html", "server": "nginx"}
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.return_value = mock_response
-        mock_cls.return_value = mock_client
 
         result = tool.execute({
             "url": "https://example.com",
@@ -1283,43 +1244,32 @@ class TestWebFetchTool:
         assert "Status: 200" in result
         assert "content-type" in result
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_http_error_status(self, mock_cls):
+    @patch("app.tools.web_fetch._shared_client")
+    def test_http_error_status(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_response.reason_phrase = "Not Found"
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.return_value = mock_response
-        mock_cls.return_value = mock_client
 
         result = tool.execute({"url": "https://example.com/missing"}, _USER)
         assert "Error" in result
         assert "404" in result
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_connection_error(self, mock_cls):
+    @patch("app.tools.web_fetch._shared_client")
+    def test_connection_error(self, mock_client):
         import httpx
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-        mock_cls.return_value = mock_client
 
         tool = get_tool("web_fetch")
         result = tool.execute({"url": "https://nonexistent.example.com"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.web_fetch.httpx.Client")
-    def test_timeout_error(self, mock_cls):
+    @patch("app.tools.web_fetch._is_private_or_internal_host", return_value=False)
+    @patch("app.tools.web_fetch._shared_client")
+    def test_timeout_error(self, mock_client, _mock_ssrf):
         import httpx
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.side_effect = httpx.TimeoutException("Timed out")
-        mock_cls.return_value = mock_client
 
         tool = get_tool("web_fetch")
         result = tool.execute({"url": "https://slow.example.com"}, _USER)

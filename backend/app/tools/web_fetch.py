@@ -3,8 +3,10 @@ Web fetch tool — fetch and extract content from web pages.
 Read-only, no approval needed.
 """
 
+import ipaddress
 import logging
 import re
+import socket
 
 import httpx
 
@@ -16,13 +18,73 @@ logger = logging.getLogger(__name__)
 _MAX_CONTENT_SIZE = 16384
 _TIMEOUT = 15
 
+# Connection pool for HTTP requests
+_shared_client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5)
+
 # Only allow HTTPS URLs (and HTTP for localhost)
 _ALLOWED_SCHEMES = {"https"}
 _LOCALHOST_PATTERNS = {"localhost", "127.0.0.1", "::1"}
 
+# Azure IMDS and other metadata endpoints that must always be blocked
+_BLOCKED_IPS = {
+    "169.254.169.254",  # Azure IMDS / AWS EC2 metadata
+    "metadata.google.internal",  # GCP metadata
+}
+
+
+def _is_private_or_internal_host(hostname: str) -> bool:
+    """Resolve hostname and check if ANY resolved IP is private, loopback,
+    link-local, or reserved. Fail-closed: returns True on DNS failure.
+
+    This prevents SSRF attacks where the LLM is tricked into fetching
+    internal resources, cloud metadata endpoints (IMDS), or private
+    network services.
+    """
+    # Direct check for known metadata hostnames
+    if hostname.lower() in _BLOCKED_IPS:
+        return True
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        # DNS failure — fail closed to prevent DNS rebinding attacks
+        logger.warning("SSRF check: DNS resolution failed for %s — blocking", hostname)
+        return True
+
+    if not addr_infos:
+        return True
+
+    for _, _, _, _, sockaddr in addr_infos:
+        ip_str = sockaddr[0]
+
+        # Explicit IMDS check (in case it resolves via a hostname alias)
+        if ip_str in _BLOCKED_IPS:
+            return True
+
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return True  # unparseable — fail closed
+
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            logger.warning(
+                "SSRF check: %s resolved to blocked IP %s", hostname, ip_str,
+            )
+            return True
+
+    return False
+
 
 class WebFetchTool(Tool):
     name = "web_fetch"
+    rate_limit_calls = 15
     description = (
         "Fetch and extract text content from a web page URL. "
         "Use this to retrieve documentation, API references, or status pages. "
@@ -72,16 +134,19 @@ class WebFetchTool(Tool):
         if scheme not in _ALLOWED_SCHEMES and not (scheme == "http" and host in _LOCALHOST_PATTERNS):
             return f"Error: URL scheme '{scheme}' is not allowed. Use HTTPS."
 
-        # Block internal/private IPs (basic SSRF prevention)
-        if host in _LOCALHOST_PATTERNS and scheme == "https":
-            pass  # Allow HTTPS to localhost
-        
+        # SSRF prevention: block requests to private/internal/metadata IPs.
+        # Allow localhost only for HTTP (dev servers); all other private ranges blocked.
+        if host not in _LOCALHOST_PATTERNS and _is_private_or_internal_host(host):
+            return (
+                "Error: URL resolves to a private, internal, or cloud metadata IP address. "
+                "Requests to internal networks and metadata services (e.g. 169.254.169.254) "
+                "are blocked for security."
+            )
         try:
-            with httpx.Client(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
-                response = client.get(
-                    url,
-                    headers={"User-Agent": "Nexus-AI-Assistant/1.0"},
-                )
+            response = _shared_client.get(
+                url,
+                headers={"User-Agent": "Nexus-AI-Assistant/1.0"},
+            )
 
             if mode == "headers_only":
                 headers = "\n".join(f"  {k}: {v}" for k, v in response.headers.items())

@@ -22,6 +22,24 @@ _MAX_OUTPUT_SIZE = 8192
 _WORK_DIR = Path(__file__).resolve().parent.parent.parent
 
 
+def _normalize_timeout(raw, default: int = 30, max_: int = 120) -> tuple[int | None, str | None]:
+    """Coerce timeout_seconds to a positive int in [1, max_].
+
+    Returns (timeout, None) on success, (None, error_string) on failure.
+    Strings, negatives, zero, and non-numeric junk all return a clean error
+    so the caller never propagates a TypeError or ValueError from subprocess.
+    """
+    if raw is None:
+        return default, None
+    try:
+        t = int(raw)
+    except (TypeError, ValueError):
+        return None, f"Error: timeout_seconds must be a positive integer, got {raw!r}"
+    if t <= 0:
+        return None, f"Error: timeout_seconds must be greater than 0, got {t}"
+    return min(t, max_), None
+
+
 class RunShellTool(Tool):
     name = "run_shell"
     description = (
@@ -71,7 +89,9 @@ class RunShellTool(Tool):
     def execute(self, args: dict, user: User) -> str:
         command = args.get("command", "")
         shell_type = args.get("shell", "default")
-        timeout = min(args.get("timeout_seconds", 30), 120)
+        timeout, err = _normalize_timeout(args.get("timeout_seconds"))
+        if err:
+            return err
 
         work_dir = _WORK_DIR
 
@@ -124,7 +144,10 @@ class RunShellTool(Tool):
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
         command = args.get("command", "")
         shell_type = args.get("shell", "default")
-        timeout = min(args.get("timeout_seconds", 30), 120)
+        timeout, err = _normalize_timeout(args.get("timeout_seconds"))
+        if err:
+            yield err
+            return err
 
         work_dir = _WORK_DIR
 

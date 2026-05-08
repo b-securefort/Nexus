@@ -5,24 +5,20 @@ GET requests are read-only (no approval). Mutations require approval.
 
 import json
 import logging
-import subprocess
-import sys
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import AzureToolBase, _find_az
 from app.tools.az_login_check import require_az_login
-from app.tools.az_cli import _find_az
 
 logger = logging.getLogger(__name__)
-
-_MAX_OUTPUT_SIZE = 16384
 
 # HTTP methods that are read-only
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
-class AzRestApiTool(Tool):
+class AzRestApiTool(AzureToolBase):
     name = "az_rest_api"
+    rate_limit_calls = 10
     description = (
         "Call any Azure Resource Manager REST API directly using 'az rest'. "
         "Use this as a last resort when az_resource_graph and az_cli don't support the operation. "
@@ -93,30 +89,5 @@ class AzRestApiTool(Tool):
         if body and method not in _SAFE_METHODS:
             cmd.extend(["--body", body])
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                shell=(sys.platform == "win32"),
-                **SUBPROCESS_FLAGS,
-            )
-
-            if result.returncode != 0:
-                error = result.stderr.strip() if result.stderr else "Unknown error"
-                return f"Error ({method} {url}): {error}"
-
-            output = result.stdout.strip()
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-
-            return output if output else f"{method} {url} — success (no response body)"
-
-        except subprocess.TimeoutExpired:
-            return f"Error: {method} {url} timed out after 60 seconds"
-        except FileNotFoundError:
-            return "Error: Azure CLI (az) not found"
-        except Exception as e:
-            logger.error("az rest error: %s", str(e))
-            return f"Error: {str(e)}"
+        result_str = self._run_az(cmd, label=f"{method} {url}", timeout=60)
+        return result_str if result_str else f"{method} {url} — success (no response body)"

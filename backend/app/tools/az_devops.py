@@ -228,8 +228,30 @@ class AzDevOpsTool(AzureToolBase):
 
     def _run_cmd(self, cmd: list[str], label: str) -> str:
         result_str = self._run_az(cmd, label=label, timeout=30)
-        
+
         if result_str.startswith("Error"):
+            # B2: translate specific auth errors to actionable recovery steps
+            if "TF400813" in result_str:
+                return (
+                    "Error: Azure DevOps authentication failed (TF400813) — the current Azure "
+                    "identity does not have access to this DevOps organization or project.\n"
+                    "Recovery steps:\n"
+                    "  1. Re-authenticate with DevOps scope: "
+                    "az login --scope https://app.vssps.visualstudio.com/.default\n"
+                    "  2. Verify the organization URL and project name are correct.\n"
+                    "  3. Check that your account has at least 'Reader' access in the Azure DevOps project settings.\n"
+                    f"Original error: {result_str}"
+                )
+            if "AADSTS53003" in result_str:
+                return (
+                    "Error: Azure AD Conditional Access blocked this request (AADSTS53003) — "
+                    "the token was issued but a Conditional Access policy is denying access.\n"
+                    "Recovery steps:\n"
+                    "  1. Re-authenticate: az login --scope https://management.core.windows.net//.default\n"
+                    "  2. Ensure your device is compliant and any MFA requirements are satisfied.\n"
+                    "  3. If on a non-corporate device, use a compliant device or contact your IT admin.\n"
+                    f"Original error: {result_str}"
+                )
             if "azure-devops" in result_str.lower() or "not found" in result_str.lower():
                 return (
                     f"Error: Azure DevOps CLI extension may not be installed. "

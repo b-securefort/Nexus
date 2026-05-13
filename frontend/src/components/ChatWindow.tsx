@@ -1,12 +1,24 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Send, Loader2, Bot, Paperclip, X as XIcon } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { sendChatMessage, resolveApproval, fetchGreeting } from "../api/chat";
+import {
+  sendChatMessage,
+  resolveApproval,
+  fetchGreeting,
+  submitQuestionAnswers,
+} from "../api/chat";
+import type { QuestionAnswer } from "../api/chat";
 import { fetchConversation } from "../api/conversations";
 import { MessageBubble } from "./MessageBubble";
 import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard } from "./QuestionCard";
 import { ToolCallCard } from "./ToolCallCard";
-import type { Message, ApprovalInfo } from "../types";
+import type {
+  Message,
+  ApprovalInfo,
+  QuestionInfo,
+  QuestionAnswerEntry,
+} from "../types";
 
 /** Simple time-of-day fallback while the AI greeting loads. */
 function getFallbackGreeting(): string {
@@ -44,6 +56,8 @@ export function ChatWindow() {
     streamingContent,
     isStreaming,
     pendingApproval,
+    pendingQuestion,
+    resolvedAnswers,
     error,
     toolCalls,
     streamingSegments,
@@ -55,6 +69,8 @@ export function ChatWindow() {
     appendStreamingContent,
     setIsStreaming,
     setPendingApproval,
+    setPendingQuestion,
+    setQuestionAnswers,
     setError,
     addToolCall,
     setToolCallExecuting,
@@ -127,6 +143,21 @@ export function ChatWindow() {
           setPendingApproval(d as unknown as ApprovalInfo);
           break;
 
+        case "question_required":
+          setPendingQuestion(d as unknown as QuestionInfo);
+          break;
+
+        case "question_answered": {
+          const qid = d.question_id as string;
+          const answers = d.answers as QuestionAnswerEntry[];
+          setQuestionAnswers(qid, answers);
+          // The live card stays mounted in answered state until the model's
+          // next message arrives (server will re-render the conversation
+          // history with the natural-dialogue rendering).
+          setPendingQuestion(null);
+          break;
+        }
+
         case "tool_result":
           setToolCallResult(d.call_id as string, d.content as string);
           break;
@@ -166,6 +197,8 @@ export function ChatWindow() {
       setToolCallExecuting,
       appendToolCallOutput,
       setPendingApproval,
+      setPendingQuestion,
+      setQuestionAnswers,
       setToolCallResult,
       setIsStreaming,
       setStreamingContent,
@@ -254,6 +287,26 @@ export function ChatWindow() {
     }
   };
 
+  const handleAnswerQuestion = async (answers: QuestionAnswerEntry[]) => {
+    if (!pendingQuestion) return;
+    const qid = pendingQuestion.question_id;
+    try {
+      // Optimistically lock the card while the request is in flight; the
+      // live card stays visible (in resolved state) until the server's
+      // question_answered event arrives or the next assistant message
+      // re-renders this conversation.
+      setQuestionAnswers(qid, answers);
+      const payload: QuestionAnswer[] = answers.map((a) => ({
+        question: a.question,
+        selected: a.selected,
+        ...(a.notes ? { notes: a.notes } : {}),
+      }));
+      await submitQuestionAnswers(qid, payload);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -302,7 +355,11 @@ export function ChatWindow() {
     [addPendingAttachment]
   );
 
-  const canSend = !isStreaming && !pendingApproval && (input.trim().length > 0 || pendingAttachments.length > 0);
+  const canSend =
+    !isStreaming &&
+    !pendingApproval &&
+    !pendingQuestion &&
+    (input.trim().length > 0 || pendingAttachments.length > 0);
 
   const [greeting, setGreeting] = useState("");
 
@@ -410,6 +467,22 @@ export function ChatWindow() {
           </div>
         )}
 
+        {/* Pending or just-resolved question */}
+        {pendingQuestion && (
+          <div className="animate-fade-in-up flex justify-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
+              <Bot className="w-3.5 h-3.5 text-accent-light" />
+            </div>
+            <div className="max-w-[80%] flex-1">
+              <QuestionCard
+                question={pendingQuestion}
+                resolved={resolvedAnswers[pendingQuestion.question_id]}
+                onSubmit={handleAnswerQuestion}
+              />
+            </div>
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div className="bg-red-950/40 border border-red-800/40 rounded-xl px-4 py-3 text-red-300 text-sm animate-fade-in-up">
@@ -458,7 +531,7 @@ export function ChatWindow() {
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={isStreaming || !!pendingApproval}
+              disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
               className="self-end bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-3 text-base-400 hover:text-base-200 hover:bg-base-800 disabled:opacity-40 transition-colors duration-150"
               title="Attach image (or paste from clipboard)"
             >
@@ -475,11 +548,13 @@ export function ChatWindow() {
               placeholder={
                 pendingApproval
                   ? "Waiting for approval decision..."
+                  : pendingQuestion
+                  ? "Answer the questions above to continue..."
                   : pendingAttachments.length > 0
                   ? "Add a message about the image(s)..."
                   : "Type your message..."
               }
-              disabled={isStreaming || !!pendingApproval}
+              disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
               rows={1}
               className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 text-sm leading-relaxed"
               style={{ minHeight: "44px", maxHeight: "200px" }}

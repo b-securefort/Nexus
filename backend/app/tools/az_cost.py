@@ -5,6 +5,7 @@ Read-only, no approval needed.
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from app.auth.models import User
@@ -12,6 +13,12 @@ from app.tools.base import AzureToolBase, _find_az
 from app.tools.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
+
+# B1: minimum interval between Cost Management REST calls to avoid HTTP 429.
+# The API rate-limits per-subscription; consecutive back-to-back calls reliably
+# trigger it even with the generic retry_with_backoff in place.
+_last_cost_call: float = 0.0
+_COST_MIN_INTERVAL: float = 5.0  # seconds
 
 # Timeframe strings accepted by the Cost Management REST API
 _TIMEFRAME_MAP = {
@@ -215,13 +222,29 @@ class AzCostQueryTool(AzureToolBase):
 
     def _az_rest(self, method: str, url: str, body: dict | None, label: str) -> str:
         """Execute an az rest call and return the raw output using the standardized retry."""
+        # B1: throttle — enforce minimum gap between Cost API calls to avoid 429
+        global _last_cost_call
+        elapsed = time.monotonic() - _last_cost_call
+        if _last_cost_call > 0 and elapsed < _COST_MIN_INTERVAL:
+            time.sleep(_COST_MIN_INTERVAL - elapsed)
+        _last_cost_call = time.monotonic()
+
         cmd = [_find_az(), "rest", "--method", method, "--url", url, "--output", "json"]
         if body is not None:
             cmd.extend(["--body", json.dumps(body), "--headers", "Content-Type=application/json"])
 
         # Use the AzureToolBase _run_az which includes our retry_with_backoff helper
         # by default, effectively replacing the custom 429 retry loop.
-        return self._run_az(cmd, label=label, timeout=60, use_retry=True)
+        result = self._run_az(cmd, label=label, timeout=60, use_retry=True)
+
+        # Surface a clear retry hint when the API is still rate-limiting (B1)
+        if "429" in result or "Too Many Requests" in result.lower():
+            result += (
+                "\n\nHint: Cost Management API is rate-limited (HTTP 429). "
+                "Wait at least 30 seconds before retrying. "
+                "Avoid querying multiple subscriptions in rapid succession."
+            )
+        return result
 
     # ── Response formatting ──────────────────────────────────────────────
 

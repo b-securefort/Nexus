@@ -78,3 +78,24 @@ class PendingApproval(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     resolved_at: Optional[datetime] = Field(default=None)
     result_json: Optional[str] = Field(default=None)
+
+
+class PendingQuestion(SQLModel, table=True):
+    """Persistent record of an `ask_user` tool call awaiting the user's answer.
+
+    Mirrors the approval state machine: created when the tool fires, resolved
+    when the user posts answers via the API, expired by the periodic sweeper
+    when the timeout elapses.
+    """
+    __tablename__ = "pending_questions"
+
+    id: str = Field(primary_key=True)  # UUID
+    conversation_id: int = Field(nullable=False, index=True)
+    user_oid: str = Field(nullable=False)
+    # JSON list of {question, header, options:[{label, description}], multi_select}
+    questions_json: str = Field(nullable=False)
+    status: str = Field(nullable=False, default="pending")  # pending | answered | expired
+    created_at: datetime = Field(default_factory=_utcnow, nullable=False)
+    resolved_at: Optional[datetime] = Field(default=None)
+    # JSON list of {question, selected:[label, ...], notes?:str} once answered
+    answers_json: Optional[str] = Field(default=None)

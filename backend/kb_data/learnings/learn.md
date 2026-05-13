@@ -4,7 +4,6 @@ This file records known issues, mistakes, and solutions discovered during tool e
 The agent consults this before running commands to avoid repeating errors.
 
 ---
-
 ## [gotcha] Cost Management REST API can return HTTP 429 on back-to-back queries
 - **Date**: 2026-04-21 16:37 UTC
 - **Tool**: az_cost_query
@@ -139,4 +138,114 @@ The agent consults this before running commands to avoid repeating errors.
 - **Date**: 2026-05-07 01:08 UTC
 - **Tool**: generate_file
 - **Details**: After structural validation passes or is close to passing, render the .drawio file to PNG and inspect the actual image. This catches issues the validator cannot: edge labels colliding with icons, badges drifting into busy areas, and container boxes that technically validate but still look too cramped. The render step should be part of the normal feedback loop, not optional.
+
+## [gotcha] real entry
+
+## [gotcha] real entry
+
+## [gotcha] real entry
+
+## [syntax-fix] az login on Linux without browser
+- **Date**: 2026-05-09 01:11 UTC
+- **Tool**: az_cli
+- **Details**: Use --use-device-code; bare 'az login' tries to spawn a browser and hangs in headless containers.
+
+## [gotcha] validator vertex-size threshold
+- **Date**: 2026-05-09 01:11 UTC
+- **Tool**: validate_drawio
+- **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
+
+## [gotcha] real entry
+
+## [syntax-fix] az login on Linux without browser
+- **Date**: 2026-05-09 01:13 UTC
+- **Tool**: az_cli
+- **Details**: Use --use-device-code; bare 'az login' tries to spawn a browser and hangs in headless containers.
+
+## [gotcha] validator vertex-size threshold
+- **Date**: 2026-05-09 01:13 UTC
+- **Tool**: validate_drawio
+- **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
+
+## [syntax-fix] let-bindings unsupported
+- **Date**: 2026-05-09 01:18 UTC
+- **Tool**: az_resource_graph
+- **Details**: Resource Graph KQL does not support 'let' bindings; inline the values directly.
+
+## [known-issue] azure-devops extension
+- **Date**: 2026-05-09 01:18 UTC
+- **Tool**: az_devops
+- **Details**: az_devops requires the azure-devops CLI extension; install with 'az extension add --name azure-devops'.
+
+## [best-practice] Cost API daily granularity
+- **Date**: 2026-05-09 01:18 UTC
+- **Tool**: az_cost_query
+- **Details**: The Cost Management API caps daily granularity at 365 days; queries beyond return an error.
+
+## [syntax-fix] az login on Linux without browser
+- **Date**: 2026-05-09 01:18 UTC
+- **Tool**: az_cli
+- **Details**: Use --use-device-code; bare 'az login' tries to spawn a browser and hangs in headless containers.
+
+## [gotcha] validator vertex-size threshold
+- **Date**: 2026-05-09 01:18 UTC
+- **Tool**: validate_drawio
+- **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
+
+## [gotcha] real entry
+
+## [syntax-fix] let-bindings unsupported
+- **Date**: 2026-05-09 01:20 UTC
+- **Tool**: az_resource_graph
+- **Details**: Resource Graph KQL does not support 'let' bindings; inline the values directly.
+
+## [known-issue] azure-devops extension
+- **Date**: 2026-05-09 01:20 UTC
+- **Tool**: az_devops
+- **Details**: az_devops requires the azure-devops CLI extension; install with 'az extension add --name azure-devops'.
+
+## [best-practice] Cost API daily granularity
+- **Date**: 2026-05-09 01:20 UTC
+- **Tool**: az_cost_query
+- **Details**: The Cost Management API caps daily granularity at 365 days; queries beyond return an error.
+
+## [syntax-fix] az login on Linux without browser
+- **Date**: 2026-05-09 01:20 UTC
+- **Tool**: az_cli
+- **Details**: Use --use-device-code; bare 'az login' tries to spawn a browser and hangs in headless containers.
+
+## [gotcha] validator vertex-size threshold
+- **Date**: 2026-05-09 01:20 UTC
+- **Tool**: validate_drawio
+- **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
+
+## [gotcha] Subnets can be misclassified as resource-sized vertices if their dimensions or icon usage are not unmistakably container-like
+- **Date**: 2026-05-09 22:12 UTC
+- **Tool**: validate_drawio
+- **Details**: When building Azure draw.io diagrams, the validator may flag subnet boxes as generic/resource-like if they are not clearly container-shaped and sufficiently distinct from resource icons. The safer approach is to keep subnet containers visually dominant with explicit subnet styling, give them more separation, and avoid placing resource icons too close to their borders. If a subnet is intended as a container, ensure its geometry and spacing make it obvious; otherwise the validator can misclassify it and report icon-style violations.
+
+## [best-practice] For drawio: never default-assume a backend or access pattern; call ask_user first
+- **Date**: 2026-05-10 02:45 UTC
+- **Tool**: ask_user
+- **Details**: When a drawio request leaves the backend service or the access pattern unspecified (e.g. "draw an Application Gateway in spoke" with no backend named), do NOT pick "a sensible default" and write XML. Call `ask_user` with multiple-choice questions for backend type and access pattern first. Producing a syntactically valid diagram of the wrong architecture wastes far more turns than the single round-trip an `ask_user` call costs. The drawio-diagrammer SKILL.md Step 0 is binding; treat it as a hard precondition, not advice.
+
+## [gotcha] Narrating a file change without calling the write tool is a hallucinated success
+- **Date**: 2026-05-10 03:05 UTC
+- **Tool**: generate_file
+- **Details**: Saying "I added X to the diagram" or "I patched the file" without actually calling `generate_file` or `patch_drawio_cell` in the same response leaves the file unchanged. The user will (rightly) call this out. A `read_kb_file` call is preparation, not a change. After reading whatever you need, you MUST follow up with the write tool in the same turn before claiming the change is done. Applies equally to follow-up requests on an existing diagram — those go straight to `patch_drawio_cell` or `generate_file overwrite=true`, not to ask_user.
+
+## [gotcha] Follow-up edits on an existing diagram must skip ask_user
+- **Date**: 2026-05-10 03:05 UTC
+- **Tool**: ask_user
+- **Details**: ask_user is for clarifying the FIRST message about a new diagram. Once a diagram exists in the conversation, follow-ups like "add a Key Vault", "include the hub abstraction", "move the App Gateway" are direct edit commands — answer them with patch_drawio_cell or generate_file overwrite=true, not with another ask_user call. Re-asking on a follow-up wastes a round-trip and confuses the user.
+
+## [best-practice] Keep Private DNS zones in the hub by default unless the user specifies a spoke DNS zone
+- **Date**: 2026-05-09 23:04 UTC
+- **Tool**: generate_file
+- **Details**: When a hub-spoke architecture includes a Private DNS zone, place it in the hub by default and show the VNet link(s) there. Do not place a Private DNS zone in the spoke unless the user explicitly asks for spoke-local DNS. This keeps the DNS resource centralized and avoids duplicating the zone unnecessarily in the spoke.
+
+## [best-practice] Model WAF policy as an attached policy object, not a traffic hop
+- **Date**: 2026-05-09 23:35 UTC
+- **Tool**: generate_file
+- **Details**: In Azure diagrams, the Web Application Firewall policy icon is a policy attachment to Application Gateway, not a network hop. Draw only an association between WAF policy and Application Gateway; do not route traffic through the WAF policy. The Application Gateway itself remains the traffic-processing component and forwards traffic to its backends.
 

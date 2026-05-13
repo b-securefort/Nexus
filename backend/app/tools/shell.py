@@ -4,6 +4,7 @@ Shell tool — runs commands with user approval.
 
 import logging
 import os
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -20,6 +21,13 @@ _MAX_OUTPUT_SIZE = 8192
 
 # Working directory = backend project root (where output/ lives)
 _WORK_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+# B3: pattern that reliably causes "Cannot run a document in the middle of a
+# pipeline" in PowerShell — piping the az executable output directly instead
+# of capturing it in a variable first.
+# Matches: az <any args> | <something>  (on a single logical line)
+_PS_AZ_PIPE_RE = re.compile(r'\baz(?:\.cmd)?\b[^|\n]+\|', re.IGNORECASE)
 
 
 def _normalize_timeout(raw, default: int = 30, max_: int = 120) -> tuple[int | None, str | None]:
@@ -92,6 +100,19 @@ class RunShellTool(Tool):
         timeout, err = _normalize_timeout(args.get("timeout_seconds"))
         if err:
             return err
+
+        # B3: pre-flight check for the PowerShell "pipe az directly" anti-pattern
+        if shell_type == "powershell" and _PS_AZ_PIPE_RE.search(command):
+            return (
+                "Error: The command pipes the 'az' executable directly into a pipeline, "
+                "which fails in PowerShell with:\n"
+                "  'Cannot run a document in the middle of a pipeline'\n\n"
+                "Fix: capture the az output in a variable first, then pipe it:\n"
+                "  # Wrong:  az graph query -q $q -o json | ConvertFrom-Json\n"
+                "  # Right:  $json = az graph query -q $q -o json\n"
+                "  #         $json | ConvertFrom-Json\n\n"
+                "Please rewrite the command using the pattern above and retry."
+            )
 
         work_dir = _WORK_DIR
 

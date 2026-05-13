@@ -30,7 +30,13 @@ class ReadKBFileTool(Tool):
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
+        if not isinstance(args, dict):
+            return "Error: invalid arguments"
         path = args.get("path", "")
+        if not isinstance(path, str):
+            return f"Error: path must be a string, got {type(path).__name__}"
+        if not path:
+            return "Error: path is required"
         kb = get_kb_service()
         try:
             return kb.read_file(path)
@@ -38,6 +44,8 @@ class ReadKBFileTool(Tool):
             return "Error: Invalid path"
         except FileNotFoundError:
             return "Error: File not found"
+        except OSError as e:
+            return f"Error: {e}"
 
 
 class SearchKBTool(Tool):

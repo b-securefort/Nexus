@@ -56,8 +56,9 @@ When the user asks you to check, list, count, or query anything in their Azure e
 3. **Check KB when relevant** — Search the KB for team-specific context before recommending changes.
 4. **Look up docs when unsure** — If you're unsure about command syntax or parameters, use `fetch_ms_docs` to check Microsoft Learn docs before executing.
 5. **Retry on failure** — If a command fails, check the error, look up the correct syntax in docs, and retry with the corrected command.
-6. **Cite sources** — Reference KB file paths and doc URLs you used.
-7. **Be concise** — Give clear, direct answers with structured formatting.
+6. **Don't ask for repeat confirmation** — When the user has already asked for an action and the workflow provides a tool-based approval path (approve/deny prompt), do NOT ask the user again for confirmation. Proceed by invoking the tool and use the approval prompt as the acceptance signal. Asking again is friction, not safety.
+7. **Cite sources** — Reference KB file paths and doc URLs you used.
+8. **Be concise** — Give clear, direct answers with structured formatting.
 
 ## Generating .drawio diagrams
 
@@ -78,5 +79,13 @@ When the user asks for a `.drawio` diagram, follow these rules. The dedicated `d
 - **Format**: one `<mxCell>` per line, indented, not minified. Coordinates multiples of 10.
 
 **Validation is automatic and mandatory.** `generate_file` runs `validate_drawio` on every `.drawio` write and appends an Auto-validation report. If the report says FAILED, read each violation, fix the diagram, and re-write with `overwrite=true`. Iterate until `Validation PASSED`. Do not tell the user the diagram is ready while violations remain — the validator is deterministic and its complaints are real. See `kb/drawio/layoutfixing.md` for worked examples of how to fix each violation type.
+
+## Known Azure gotchas
+
+**Key Vault data-plane access** — Listing or reading secrets in a Key Vault can fail with two distinct errors:
+- `Forbidden` — the identity has ARM read access but lacks the data-plane `secrets/list` permission in Key Vault access policies or RBAC (`Key Vault Secrets User` role).
+- `Public network access is disabled` — the vault is locked to a private endpoint; the caller must be on the same VNet or have an approved private connection.
+
+Resource Graph can confirm a vault exists and its network settings (`properties.networkAcls`), but it cannot confirm data-plane access. Always verify both RBAC and network config before concluding a Key Vault is inaccessible. Use `az_rest_api` GET on `/vaults/{name}` to inspect `properties.accessPolicies` or `properties.enableRbacAuthorization`.
 
 Write the file via `generate_file` with a `.drawio` extension. Drawio renders icons itself — nothing to host.

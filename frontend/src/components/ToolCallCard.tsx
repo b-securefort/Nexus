@@ -1,4 +1,7 @@
+import { useState } from "react";
 import { ChevronDown, ChevronRight, CheckCircle, XCircle, Loader2, Play } from "lucide-react";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export interface ToolCallDisplay {
   call_id: string;
@@ -8,6 +11,23 @@ export interface ToolCallDisplay {
   executing?: boolean;
   streamingOutput?: string;
   expanded: boolean;
+}
+
+/** Build the URL for an image rendered by render_drawio. Returns null if the
+ * args don't identify a previewable PNG/JPG/SVG. The callId is appended as a
+ * cache-bust query param so successive renders of the same filename - which
+ * would otherwise share the URL - aren't served from the browser's cache. */
+function renderDrawioPreviewUrl(
+  args: Record<string, unknown>,
+  callId: string,
+): string | null {
+  const filename = typeof args.filename === "string" ? args.filename : "";
+  if (!filename.endsWith(".drawio")) return null;
+  const fmt = (typeof args.format === "string" ? args.format : "png").toLowerCase();
+  if (fmt !== "png" && fmt !== "jpg" && fmt !== "svg") return null;
+  const stem = filename.slice(0, -".drawio".length);
+  const cacheBust = encodeURIComponent(callId || "");
+  return `${API_BASE}/api/output/${encodeURIComponent(stem)}.${fmt}?v=${cacheBust}`;
 }
 
 /** Format tool args into a human-readable command string. */
@@ -35,6 +55,13 @@ export function formatCommand(toolName: string, args: Record<string, unknown>): 
   }
   if (toolName === "read_learnings") {
     return "read learn.md";
+  }
+  if (toolName === "patch_drawio_cell") {
+    const parts: string[] = [];
+    for (const k of ["x", "y", "width", "height"]) {
+      if (args[k] !== undefined && args[k] !== null) parts.push(`${k}=${args[k]}`);
+    }
+    return `${args.cell_id || "?"} ${parts.join(", ")}`;
   }
   const filtered = Object.entries(args).filter(([k]) => k !== "reason");
   if (filtered.length === 0) return "";
@@ -66,6 +93,21 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
   const isExecuting = !!tc.executing && !isDone;
   const hasStreamingOutput = !!tc.streamingOutput;
   const showExpanded = tc.expanded || (hasError && isDone) || (isExecuting && hasStreamingOutput);
+  // Inline-preview the rendered PNG for both explicit render_drawio calls and
+  // generate_file writes of a .drawio (which now auto-render server-side).
+  const previewUrl =
+    isDone &&
+    !hasError &&
+    (tc.name === "render_drawio" ||
+      tc.name === "generate_file" ||
+      tc.name === "patch_drawio_cell")
+      ? renderDrawioPreviewUrl(tc.args, tc.call_id)
+      : null;
+  const [lightbox, setLightbox] = useState(false);
+  // generate_file's auto-render is best-effort: if drawio isn't installed or
+  // the sidecar fails, the tool still reports success but no PNG exists and
+  // the <img> would 404. Hide the preview block on load failure.
+  const [previewBroken, setPreviewBroken] = useState(false);
 
   return (
     <div
@@ -117,6 +159,40 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
           )}
         </span>
       </button>
+
+      {previewUrl && !previewBroken && (
+        <>
+          <div className="border-t border-base-700/50 px-3 py-2.5 bg-base-900/40">
+            <button
+              type="button"
+              onClick={() => setLightbox(true)}
+              className="block w-full"
+              title="Click to view full size"
+            >
+              <img
+                src={previewUrl}
+                alt={String(tc.args.filename || "rendered diagram")}
+                className="w-full max-h-[420px] object-contain rounded-lg bg-white"
+                loading="lazy"
+                onError={() => setPreviewBroken(true)}
+              />
+            </button>
+          </div>
+          {lightbox && (
+            <div
+              className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
+              onClick={() => setLightbox(false)}
+            >
+              <img
+                src={previewUrl}
+                alt="Preview"
+                className="max-w-[95vw] max-h-[95vh] object-contain rounded-lg bg-white"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          )}
+        </>
+      )}
 
       {showExpanded && (
         <div className="border-t border-base-700/50 px-3 py-2.5 text-xs space-y-2.5">

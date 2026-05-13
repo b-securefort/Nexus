@@ -317,3 +317,40 @@ Add dedicated AWS tools similar to the Azure toolset — enabling Nexus to query
 - The tool registry, approval gating, retry logic, and skill system are cloud-agnostic — no architectural changes needed
 - Can reuse `run_shell` for AWS CLI in the interim
 - New skills (e.g., `aws-architect`) would scope tool access to AWS-only tools
+
+---
+
+## learn.md Audit — Findings ✅ COMPLETED (2026-05-09)
+
+| ID | What was done | File(s) changed |
+|----|---------------|-----------------|
+| A1 | New `_split_entries()` helper normalises `\n*## [` before splitting and enforces `\n\n` on every entry on re-join — no more fused entries | `learn_tool.py` |
+| A2 | `details` capped at 4,096 chars with truncation notice before writing | `learn_tool.py` |
+| A3 | `tmp_learn_file` fixture redirects `_LEARN_FILE` via `monkeypatch`; both adversarial test classes use `autouse=True` — real `learn.md` never touched by tests | `test_tools.py` |
+| A4 | Deduplication on write: if an existing entry matches on `tool_name` + first-60-chars of summary, it is replaced (upserted) instead of appended | `learn_tool.py` |
+| A5 | `tool_name` validated against `TOOL_REGISTRY.keys() \| {"general"}`; unknown values silently fall back to `"general"` | `learn_tool.py` |
+| A6 | `_filter_override_entries` uses the same robust `_split_entries()` helper — no longer assumes a preceding `\n` before `## [` | `learn_tool.py` |
+| B1 | Module-level `_last_cost_call` timestamp enforces ≥5 s gap between Cost API REST calls; 429 responses get a "wait 30s" hint appended | `az_cost.py` |
+| B2 | `_run_cmd` detects `TF400813` and `AADSTS53003` in error output and returns step-by-step recovery instructions instead of raw Azure error text | `az_devops.py` |
+| B3 | Module-level `_PS_AZ_PIPE_RE` regex; `execute()` pre-flight returns a clear fix snippet when `shell=powershell` and `az … \|` pattern detected | `shell.py` |
+| D1/D2/D3 | One-shot cleanup script dropped 20 test-pollution entries (5 test runs × 4 entries) and huge blobs; `learn.md` reduced from 26 MB → 23 KB, 46 real entries kept | `learn.md` |
+
+### Remaining (not yet implemented)
+
+| ID | Item |
+|----|------|
+| B4 | `az_rest_api` — add workflow snippet to architect skill or KB recipe for AI deployments child-resource pattern |
+| B5 | `az_resource_graph` — create `kb/recipes/resource-graph.md` with `ResourceContainers` / `state`-field / child-deployment notes |
+| B6+B7 | Move 14 drawio/validate workflow learnings into architect `SKILL.md` (already partially present; full consolidation pending) |
+| C1 | Move "act first" behavioural norm into `chat-with-kb` SKILL.md system prompt |
+| C2 | Move Key Vault access note into `chat-with-kb` SKILL.md or `kb/recipes/keyvault-access.md` |
+
+*(All items above completed 2026-05-09 — see table below)*
+
+| ID | What was done | File(s) changed |
+|----|---------------|-----------------|
+| B4 | Added `az_rest_api` to tool selection guide in architect SKILL.md with child-resource workflow: query `/accounts/{name}/deployments` for true AI model counts; Resource Graph does not surface these | `architect/SKILL.md` |
+| B5 | Created `kb/recipes/resource-graph.md` covering `ResourceContainers` for subscriptions/RGs, missing `state` field, ARG child-resource limitation, `let`-binding unsupported, useful query patterns | `kb/recipes/resource-graph.md` *(new)* |
+| B6+B7 | Added drawio validate→render workflow (hints non-blocking but fix them; always render to PNG after PASSED), auxiliary zone placement rule, NVA hairpin pattern, App Service VNet integration, ingress topology rule, start-from-canonical-example guidance | `architect/SKILL.md` |
+| C1 | Added "Don't ask for repeat confirmation" as explicit step 6 in the How to respond section | `chat-with-kb/SKILL.md` |
+| C2 | Added "Known Azure gotchas" section covering Key Vault data-plane access (Forbidden = missing data-plane RBAC; network disabled = needs private endpoint; how to inspect with `az_rest_api`) | `chat-with-kb/SKILL.md` |

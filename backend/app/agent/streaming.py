@@ -26,6 +26,30 @@ def sse_approval_required(approval_id: str, tool_name: str, args: dict, reason: 
     )
 
 
+def sse_question_required(
+    question_id: str, call_id: str, questions: list[dict]
+) -> str:
+    """Signal the frontend that the agent is waiting for the user's answer.
+
+    `questions` is the validated list passed to ask_user (1-4 entries, each
+    with question/header/options/multi_select). The frontend renders an
+    adaptive-card-style form and POSTs the selections to resolve the wait.
+    """
+    return sse_event(
+        "question_required",
+        {"question_id": question_id, "call_id": call_id, "questions": questions},
+    )
+
+
+def sse_question_answered(question_id: str, call_id: str, answers: list[dict]) -> str:
+    """Optional companion event so live UIs can reflect the resolved answer
+    (or expiry) for the live card without re-fetching state."""
+    return sse_event(
+        "question_answered",
+        {"question_id": question_id, "call_id": call_id, "answers": answers},
+    )
+
+
 def sse_tool_result(call_id: str, name: str, content: str) -> str:
     return sse_event("tool_result", {"call_id": call_id, "name": name, "content": content})
 

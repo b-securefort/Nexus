@@ -2,7 +2,13 @@ import { useState, memo, useMemo } from "react";
 import { User, Bot } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Message, Attachment } from "../types";
+import type {
+  Message,
+  Attachment,
+  QuestionInfo,
+  QuestionAnswerEntry,
+} from "../types";
+import { QuestionCard } from "./QuestionCard";
 import { ToolCallCard } from "./ToolCallCard";
 import type { ToolCallDisplay } from "./ToolCallCard";
 
@@ -45,29 +51,68 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
 
   const isUser = message.role === "user";
 
-  // Find tool calls for this assistant message
+  // Find tool calls for this assistant message. ask_user calls are split out
+  // so they can render as natural dialogue (question card) instead of as a
+  // generic tool-call card.
   let messageTCs: ToolCallDisplay[] = [];
+  let askUserCalls: Array<{ call_id: string; question: QuestionInfo; answers?: QuestionAnswerEntry[] }> = [];
   if (message.role === "assistant" && message.tool_calls_json) {
     try {
       const calls = JSON.parse(message.tool_calls_json) as Array<{
         id: string;
         function: { name: string; arguments: string };
       }>;
-      messageTCs = calls.map((c) => {
-        // Use live streaming state if available
-        const existing = toolCalls.find((tc) => tc.call_id === c.id);
-        if (existing) return existing;
+      for (const c of calls) {
+        const args = (() => {
+          try { return JSON.parse(c.function.arguments || "{}"); }
+          catch { return {}; }
+        })();
 
-        // Historical: use pre-built map instead of scanning all messages
-        const historyContent = toolResultMap.get(c.id);
-        return {
-          call_id: c.id,
-          name: c.function.name,
-          args: JSON.parse(c.function.arguments || "{}"),
-          result: historyContent,
-          expanded: !!localExpanded[c.id],
-        };
-      });
+        if (c.function.name === "ask_user" && Array.isArray(args.questions)) {
+          // Pull answers from the corresponding tool result, if present.
+          let answers: QuestionAnswerEntry[] | undefined;
+          const raw = toolResultMap.get(c.id);
+          if (raw) {
+            try {
+              // The orchestrator wraps tool results in an envelope:
+              //   { status, tool, data: <stringified-or-parsed JSON> }
+              // For ask_user, data is a JSON string of { status, answers } or
+              // already-parsed object depending on how the envelope was built.
+              const envelope = JSON.parse(raw);
+              const inner = envelope?.data;
+              const parsed = typeof inner === "string" ? JSON.parse(inner) : inner;
+              if (parsed && Array.isArray(parsed.answers)) {
+                answers = parsed.answers as QuestionAnswerEntry[];
+              }
+            } catch { /* leave answers undefined */ }
+          }
+
+          askUserCalls.push({
+            call_id: c.id,
+            question: {
+              question_id: "", // historical - no live wait
+              call_id: c.id,
+              questions: args.questions,
+            },
+            answers,
+          });
+          continue;
+        }
+
+        // Regular tool call
+        const existing = toolCalls.find((tc) => tc.call_id === c.id);
+        if (existing) {
+          messageTCs.push(existing);
+        } else {
+          messageTCs.push({
+            call_id: c.id,
+            name: c.function.name,
+            args,
+            result: toolResultMap.get(c.id),
+            expanded: !!localExpanded[c.id],
+          });
+        }
+      }
     } catch {
       // Ignore parse errors
     }
@@ -133,6 +178,16 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
 
         {messageTCs.map((tc) => (
           <ToolCallCard key={tc.call_id} tc={tc} onToggle={handleToggle} />
+        ))}
+
+        {/* Historical ask_user calls render as a frozen question card so the
+            conversation reads as natural Q&A dialogue, not as a tool log. */}
+        {askUserCalls.map((c) => (
+          <QuestionCard
+            key={`ask-${c.call_id}`}
+            question={c.question}
+            resolved={c.answers}
+          />
         ))}
       </div>
 

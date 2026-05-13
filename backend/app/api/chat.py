@@ -19,11 +19,27 @@ from app.agent.approvals import (
     get_pending_approval_for_conversation,
     resolve_approval,
 )
+from app.agent.questions import (
+    get_pending_question_for_conversation,
+    resolve_question,
+)
 from app.agent.orchestrator import handle_chat
-from app.agent.streaming import sse_approval_required, sse_done, sse_error
+from app.agent.streaming import (
+    sse_approval_required,
+    sse_done,
+    sse_error,
+    sse_question_required,
+)
 from app.auth.models import User
 from app.db.engine import get_session
-from app.db.models import Conversation, Message, PendingApproval, UserRecord
+from app.db.models import (
+    Conversation,
+    Message,
+    PendingApproval,
+    PendingQuestion,
+    UserRecord,
+)
+from app.tools.ask_user import validate_questions
 from app.deps import current_user
 from app.config import get_settings
 from app.skills.loader import load_skill
@@ -187,6 +203,18 @@ async def _save_upload(file: UploadFile) -> dict:
 
 class ApprovalRequest(BaseModel):
     action: str  # "approve" | "deny"
+
+
+class AnswerSubmission(BaseModel):
+    """Body for POST /api/questions/{id}/answer.
+
+    `answers` is a list of objects, one per question that was asked, each with:
+      - question: str (the question text - identifies which entry this answers)
+      - selected: list[str] (the selected option labels; single-select tools
+                  pass a list of length 1)
+      - notes: optional str (free-text 'Other' content if the user picked it)
+    """
+    answers: list[dict]
 
 
 def _upsert_user(user: User) -> None:
@@ -368,6 +396,66 @@ async def handle_approval(approval_id: str, body: ApprovalRequest, user: User = 
     return {"status": "ok"}
 
 
+@router.post("/questions/{question_id}/answer")
+async def handle_question_answer(
+    question_id: str,
+    body: AnswerSubmission,
+    user: User = Depends(current_user),
+):
+    """Submit answers to a pending ask_user question batch.
+
+    Body: { "answers": [{ "question": "...", "selected": ["..."], "notes": "..."? }, ...] }
+    The orchestrator awaits this resolution and feeds the answers back to the
+    model as the ask_user tool's result.
+    """
+    if not isinstance(body.answers, list) or not body.answers:
+        raise HTTPException(status_code=400, detail="answers must be a non-empty list")
+
+    # Validate shape of each answer entry. The orchestrator trusts what's in
+    # the DB, so the API is the place to reject bad shapes.
+    cleaned: list[dict] = []
+    for i, a in enumerate(body.answers):
+        if not isinstance(a, dict):
+            raise HTTPException(
+                status_code=400, detail=f"answers[{i}] must be an object"
+            )
+        question_text = (a.get("question") or "").strip()
+        selected = a.get("selected")
+        notes = (a.get("notes") or "").strip() or None
+        if not question_text:
+            raise HTTPException(
+                status_code=400,
+                detail=f"answers[{i}].question is required",
+            )
+        if not isinstance(selected, list) or not all(isinstance(s, str) for s in selected):
+            raise HTTPException(
+                status_code=400,
+                detail=f"answers[{i}].selected must be a list of strings",
+            )
+        cleaned.append({
+            "question": question_text,
+            "selected": [s.strip() for s in selected if s.strip()],
+            **({"notes": notes} if notes else {}),
+        })
+
+    with get_session() as session:
+        record = session.get(PendingQuestion, question_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Question not found")
+        if record.user_oid != user.oid:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if record.status != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Question already {record.status}",
+            )
+
+        if not resolve_question(session, question_id, cleaned):
+            raise HTTPException(status_code=500, detail="Failed to resolve question")
+
+    return {"status": "ok"}
+
+
 @router.get("/chat/resume")
 async def resume_chat(conversation_id: int, user: User = Depends(current_user)):
     """Reconnect to a paused chat stream (e.g., after page reload during pending approval)."""
@@ -379,6 +467,7 @@ async def resume_chat(conversation_id: int, user: User = Depends(current_user)):
             raise HTTPException(status_code=403, detail="Access denied")
 
         pending = get_pending_approval_for_conversation(session, conversation_id)
+        pending_q = get_pending_question_for_conversation(session, conversation_id)
 
     async def event_stream():
         if pending:
@@ -387,6 +476,15 @@ async def resume_chat(conversation_id: int, user: User = Depends(current_user)):
                 pending.tool_name,
                 json.loads(pending.tool_args_json),
                 pending.reason,
+            )
+        elif pending_q:
+            # No call_id available on resume - the original tool_call_id lives
+            # in messages.tool_calls_json. The frontend's resume path looks up
+            # the in-flight question card by question_id, so call_id is empty.
+            yield sse_question_required(
+                pending_q.id,
+                "",
+                json.loads(pending_q.questions_json),
             )
         else:
             yield sse_done(conversation_id)
@@ -413,3 +511,32 @@ async def serve_upload(filename: str, user: User = Depends(current_user)):
         raise HTTPException(status_code=400, detail="Invalid path")
 
     return FileResponse(file_path)
+
+
+@router.get("/output/{filename}")
+async def serve_output(filename: str, user: User = Depends(current_user)):
+    """Serve a file produced by tools that write into the output/ sandbox
+    (currently render_drawio PNGs/SVGs/PDFs and generate_file artifacts).
+    Restricted to safe basenames and a small allowlist of viewer-friendly
+    extensions; the .drawio source is also served so the user can download it.
+
+    Sends Cache-Control: no-store because the same filename is overwritten
+    on every diagram iteration. Without this the browser serves a stale image
+    while the model sees the fresh one (it reads bytes directly from disk).
+    """
+    import re
+    if not re.match(r"^[A-Za-z0-9_\-. ]+\.(png|jpg|jpeg|svg|pdf|drawio)$", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    output_dir = Path("output").resolve()
+    file_path = (output_dir / filename).resolve()
+
+    if not file_path.is_relative_to(output_dir):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        file_path,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )

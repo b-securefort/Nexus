@@ -13,11 +13,14 @@ from openai import AzureOpenAI
 from sqlmodel import Session, select
 
 from app.agent.approvals import create_pending_approval, wait_for_approval
+from app.agent.questions import create_pending_question, wait_for_answer
 from app.agent.streaming import (
     sse_approval_required,
     sse_done,
     sse_error,
     sse_message_saved,
+    sse_question_answered,
+    sse_question_required,
     sse_token,
     sse_tool_call_start,
     sse_tool_executing,
@@ -144,6 +147,63 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
     )
 
     return "\n".join(parts)
+
+
+def _build_render_review_message(args: dict) -> dict | None:
+    """If a render_drawio call produced an image, build a synthetic user message
+    with the image inlined for the next model turn so the vision-capable model
+    can review the rendered output.
+
+    Returns None if the file doesn't exist, can't be read, or the format isn't
+    something the vision API accepts. Not persisted to DB - lives only in the
+    in-memory `messages` list for the current handle_chat invocation.
+    """
+    import base64
+    from pathlib import Path
+
+    filename = (args.get("filename") or args.get("file_name") or "").strip()
+    fmt = (args.get("format") or "png").strip().lower()
+
+    if not filename or not filename.endswith(".drawio"):
+        return None
+    if fmt not in ("png", "jpg", "jpeg"):
+        # PDF/SVG aren't sent through OpenAI vision; skip image injection.
+        return None
+
+    image_path = (Path("output") / filename).with_suffix(f".{fmt}")
+    try:
+        if not image_path.is_file():
+            return None
+        data = image_path.read_bytes()
+    except OSError:
+        return None
+    if not data:
+        return None
+
+    mime = "image/png" if fmt == "png" else "image/jpeg"
+    b64 = base64.b64encode(data).decode("ascii")
+    review_text = (
+        f"Rendered image of {filename} for visual review. Check: "
+        "(1) every edge label is readable and not overlapping any icon or "
+        "another label, (2) every numbered badge sits next to the connector "
+        "or icon it annotates, (3) connection lines do not pass through "
+        "unrelated icons or container titles, (4) bidirectional flows are "
+        "explicit. If you find issues, edit the .drawio with overwrite=true, "
+        "re-render, and review again. If it looks good, tell the user it's ready."
+    )
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": review_text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime};base64,{b64}",
+                    "detail": "high",
+                },
+            },
+        ],
+    }
 
 
 def _build_content_with_images(text: str, attachments_json: str) -> list[dict]:
@@ -492,6 +552,11 @@ async def handle_chat(
     failure_tracker: dict[str, int] = {}  # tool_name -> consecutive failure count
     failure_history: dict[str, list[tuple[dict, str]]] = {}  # tool_name -> [(args, error), ...]
 
+    # Track .drawio iteration count per filename so we can encourage the model
+    # to keep going after repeated validation failures. Smaller models tend to
+    # give up after 3-4 failed validate cycles even when iterations remain.
+    drawio_attempt_count: dict[str, int] = {}
+
     while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
 
@@ -625,6 +690,11 @@ async def handle_chat(
                 return
 
             # 4. Execute tool calls
+            # Synthetic user messages (e.g. rendered-PNG image attachments) are
+            # collected here and appended only AFTER every tool_call_id from the
+            # current assistant turn has been answered. Inserting a user message
+            # mid-loop would orphan later tool responses and the API would 400.
+            post_iteration_messages: list[dict] = []
             for call in tool_calls:
                 call_id = call["id"]
                 func_name = call["function"]["name"]
@@ -664,6 +734,44 @@ async def handle_chat(
                     tool_result = f"Error: {json_parse_error}"
                 elif not tool:
                     tool_result = f"Error: Unknown tool '{func_name}'"
+                elif func_name == "ask_user":
+                    # Special case: ask_user pauses the agent until the user
+                    # picks options in the UI. The tool's execute() is a
+                    # no-op fallback - the real flow is here: validate args,
+                    # persist a PendingQuestion, emit the SSE event, await
+                    # the answer, and feed the structured answers back to
+                    # the model as the tool result.
+                    from app.tools.ask_user import validate_questions
+                    validated, validation_err = validate_questions(
+                        func_args.get("questions")
+                    )
+                    if validation_err is not None:
+                        tool_result = f"Error: {validation_err}"
+                    else:
+                        record = create_pending_question(
+                            session=session,
+                            conversation_id=conversation.id,
+                            user_oid=user.oid,
+                            questions=validated,
+                        )
+                        yield sse_question_required(record.id, call_id, validated)
+                        status, answers = await wait_for_answer(record.id)
+                        if status == "answered" and answers is not None:
+                            yield sse_question_answered(record.id, call_id, answers)
+                            tool_result = json.dumps(
+                                {"status": "answered", "answers": answers},
+                                ensure_ascii=False,
+                            )
+                        else:
+                            tool_result = json.dumps({
+                                "status": "expired",
+                                "message": (
+                                    "The user did not answer in time. Make a "
+                                    "reasonable default choice based on the "
+                                    "request and proceed; tell the user which "
+                                    "assumptions you made."
+                                ),
+                            })
                 elif _tool_needs_approval(tool, func_args):
                     # Create approval
                     approval = create_pending_approval(
@@ -735,6 +843,62 @@ async def handle_chat(
                 # The UI gets the raw text for streaming/display, but can also parse the enveloped result if needed
                 yield sse_tool_result(call_id, func_name, tool_result)
 
+                # Whenever a .drawio diagram has been (re)written or rendered,
+                # queue a synthetic user message that inlines the PNG so the
+                # model can visually review the result on the next iteration.
+                # generate_file auto-renders the PNG, so this fires on every
+                # diagram generation - not just explicit render_drawio calls.
+                # Defer the append until all tool_call_ids are answered to keep
+                # API ordering valid.
+                if not is_error and func_name in (
+                    "render_drawio", "generate_file", "patch_drawio_cell"
+                ):
+                    review_msg = _build_render_review_message(func_args)
+                    if review_msg is not None:
+                        post_iteration_messages.append(review_msg)
+                        logger.info(
+                            "Queued rendered-image review message for %s (%s)",
+                            func_args.get("filename", "<unknown>"),
+                            func_name,
+                        )
+
+                # Encourage the model to keep iterating on diagram fixes
+                # instead of giving up after a few failed validations. Smaller
+                # models bail early when they see repeated FAILED reports;
+                # tell them explicitly that iterations remain and remind them
+                # to apply suggested-fix coordinates one at a time.
+                if func_name in ("generate_file", "patch_drawio_cell") and not is_error:
+                    diag_filename = (
+                        func_args.get("filename") or func_args.get("file_name") or ""
+                    )
+                    if diag_filename.endswith(".drawio"):
+                        if "Validation FAILED" in tool_result:
+                            drawio_attempt_count[diag_filename] = (
+                                drawio_attempt_count.get(diag_filename, 0) + 1
+                            )
+                            attempt = drawio_attempt_count[diag_filename]
+                            iters_left = MAX_TOOL_ITERATIONS - iteration
+                            if attempt >= 2 and iters_left >= 3:
+                                post_iteration_messages.append({
+                                    "role": "system",
+                                    "content": (
+                                        f"[diagram iteration {attempt} for "
+                                        f"{diag_filename}] Validation is still "
+                                        f"failing. You have ~{iters_left} tool "
+                                        f"iterations left this turn — keep going, "
+                                        "don't stop until the file passes and is "
+                                        "rendered. Apply ONLY THE FIRST violation's "
+                                        "suggested-fix coordinate this round (use "
+                                        "patch_drawio_cell — it's faster and won't "
+                                        "regress other parts). Trying to fix all "
+                                        "violations at once is what's causing the "
+                                        "back-and-forth: each rewrite shifts other "
+                                        "cells and creates new violations."
+                                    ),
+                                })
+                        elif "Validation PASSED" in tool_result:
+                            drawio_attempt_count.pop(diag_filename, None)
+
                 # Multi-strategy retry: track failures and escalate
                 if func_name in _COMMAND_TOOLS and is_error:
                     # Auth errors — clear cache so next attempt re-checks
@@ -802,6 +966,11 @@ async def handle_chat(
                     # Reset tracker
                     failure_tracker.pop(func_name, None)
                     failure_history.pop(func_name, None)
+
+            # All tool_call_ids in this assistant turn are now answered;
+            # safe to splice in any deferred user-role messages.
+            if post_iteration_messages:
+                messages.extend(post_iteration_messages)
 
             # 5. Loop back
 

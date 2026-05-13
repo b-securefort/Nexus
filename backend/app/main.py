@@ -106,8 +106,9 @@ async def lifespan(app: FastAPI):
 
 
 async def _approval_sweeper():
-    """Background task to expire stale approvals every 60 seconds."""
+    """Background task to expire stale approvals AND pending questions every 60s."""
     from app.agent.approvals import expire_stale_approvals
+    from app.agent.questions import expire_stale_questions
     from app.db.engine import get_session
 
     while True:
@@ -115,8 +116,9 @@ async def _approval_sweeper():
         try:
             with get_session() as session:
                 await expire_stale_approvals(session)
+                await expire_stale_questions(session)
         except Exception as e:
-            logger.error("Approval sweeper error: %s", str(e))
+            logger.error("Approval/question sweeper error: %s", str(e))
 
 
 async def _backup_loop():

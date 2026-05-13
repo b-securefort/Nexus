@@ -72,6 +72,8 @@ class GenerateFileTool(Tool):
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
+        if not isinstance(args, dict):
+            return "Error: invalid arguments — expected an object with filename and content"
         # Accept common synonyms — smaller LLMs sometimes hallucinate
         # parameter keys. The schema documents `filename` / `content`,
         # but we forgive the most frequent variants rather than fail.
@@ -118,8 +120,17 @@ class GenerateFileTool(Tool):
                 f"Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}"
             )
 
-        # Size check
-        if len(content.encode("utf-8")) > _MAX_FILE_SIZE:
+        # Size check (and reject content that isn't valid UTF-8 — lone
+        # surrogates from the LLM tokenizer would crash write_text otherwise).
+        try:
+            encoded_len = len(content.encode("utf-8"))
+        except UnicodeEncodeError as e:
+            return (
+                f"Error: content contains characters that cannot be encoded "
+                f"as UTF-8 ({e.reason} at position {e.start}). Strip lone "
+                "surrogates or non-text bytes before retrying."
+            )
+        if encoded_len > _MAX_FILE_SIZE:
             return f"Error: Content exceeds maximum file size of {_MAX_FILE_SIZE // 1024}KB"
 
         # Resolve target path within sandbox
@@ -153,6 +164,32 @@ class GenerateFileTool(Tool):
                 from app.tools.validate_drawio import validate_drawio_file
                 report = validate_drawio_file(target)
                 result += f"\n\nAuto-validation:\n{report}"
+
+                # Auto-render to PNG so the agent's vision feedback loop fires
+                # on EVERY diagram generation, not only when the model thinks
+                # to call render_drawio. The orchestrator detects the resulting
+                # <stem>.png on disk and inlines it into the next model turn.
+                # Best-effort: a render failure (drawio not installed, sidecar
+                # unreachable) doesn't fail the write.
+                if "Validation FAILED: XML parse error" not in report:
+                    try:
+                        from app.tools.render_drawio import render_drawio_to_disk
+                        out_path, mode, render_err = render_drawio_to_disk(filename, "png")
+                    except Exception as e:  # noqa: BLE001
+                        out_path, mode, render_err = None, None, str(e)
+                    if out_path is not None:
+                        size_kb = out_path.stat().st_size // 1024
+                        result += (
+                            f"\n\nAuto-render: output/{out_path.name} "
+                            f"({size_kb} KB, via {mode}). The image is being "
+                            "attached to your next turn for visual review."
+                        )
+                    elif render_err:
+                        # Surface only when the cause might be actionable; the
+                        # 'draw.io desktop is not installed' case is benign in
+                        # dev environments and would just add noise.
+                        if "not installed" not in render_err.lower():
+                            result += f"\n\nAuto-render skipped: {render_err}"
             return result
         except OSError as e:
             return f"Error writing file: {e}"

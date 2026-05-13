@@ -57,6 +57,30 @@ export interface ApprovalInfo {
   reason: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface QuestionItem {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multi_select: boolean;
+}
+
+export interface QuestionInfo {
+  question_id: string;
+  call_id: string;
+  questions: QuestionItem[];
+}
+
+export interface QuestionAnswerEntry {
+  question: string;
+  selected: string[];
+  notes?: string;
+}
+
 // SSE event types
 export type SSEEvent =
   | { type: "token"; data: { text: string } }
@@ -64,6 +88,8 @@ export type SSEEvent =
   | { type: "tool_executing"; data: { call_id: string; name: string } }
   | { type: "tool_output_chunk"; data: { call_id: string; chunk: string } }
   | { type: "approval_required"; data: ApprovalInfo }
+  | { type: "question_required"; data: QuestionInfo }
+  | { type: "question_answered"; data: { question_id: string; call_id: string; answers: QuestionAnswerEntry[] } }
   | { type: "tool_result"; data: { call_id: string; name: string; content: string } }
   | { type: "message_saved"; data: { message_id: number; role: string } }
   | { type: "done"; data: { conversation_id: number } }

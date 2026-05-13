@@ -136,6 +136,26 @@ export async function resolveApproval(
   }
 }
 
+export interface QuestionAnswer {
+  question: string;
+  selected: string[];
+  notes?: string;
+}
+
+export async function submitQuestionAnswers(
+  questionId: string,
+  answers: QuestionAnswer[]
+): Promise<void> {
+  const response = await apiFetch(`/api/questions/${questionId}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ answers }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Failed" }));
+    throw new Error(err.detail || "Failed to submit answers");
+  }
+}
+
 export async function fetchGreeting(): Promise<string> {
   const response = await apiFetch("/api/greeting");
   if (!response.ok) return "";

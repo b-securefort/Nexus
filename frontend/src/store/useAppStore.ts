@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { Message, ApprovalInfo, ConversationSummary } from "../types";
+import type {
+  Message,
+  ApprovalInfo,
+  ConversationSummary,
+  QuestionInfo,
+  QuestionAnswerEntry,
+} from "../types";
 
 export type StreamingSegment =
   | { type: "text"; content: string }
@@ -13,6 +19,10 @@ interface AppState {
   streamingContent: string;
   isStreaming: boolean;
   pendingApproval: ApprovalInfo | null;
+  pendingQuestion: QuestionInfo | null;
+  // Resolved answers keyed by question_id, kept around so the live card can
+  // render its frozen "answered" state until the next chat turn replaces it.
+  resolvedAnswers: Record<string, QuestionAnswerEntry[]>;
   error: string | null;
 
   // Pending file attachments for next message
@@ -48,6 +58,8 @@ interface AppState {
   appendStreamingContent: (chunk: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   setPendingApproval: (approval: ApprovalInfo | null) => void;
+  setPendingQuestion: (question: QuestionInfo | null) => void;
+  setQuestionAnswers: (questionId: string, answers: QuestionAnswerEntry[]) => void;
   setError: (error: string | null) => void;
   addToolCall: (call: { call_id: string; name: string; args: Record<string, unknown> }) => void;
   setToolCallExecuting: (call_id: string) => void;
@@ -72,6 +84,8 @@ export const useAppStore = create<AppState>((set) => ({
   streamingContent: "",
   isStreaming: false,
   pendingApproval: null,
+  pendingQuestion: null,
+  resolvedAnswers: {},
   error: null,
   pendingAttachments: [],
   toolCalls: [],
@@ -102,6 +116,11 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
   setPendingApproval: (approval) => set({ pendingApproval: approval }),
+  setPendingQuestion: (question) => set({ pendingQuestion: question }),
+  setQuestionAnswers: (questionId, answers) =>
+    set((state) => ({
+      resolvedAnswers: { ...state.resolvedAnswers, [questionId]: answers },
+    })),
   setError: (error) => set({ error }),
   addToolCall: (call) =>
     set((state) => ({
@@ -153,6 +172,8 @@ export const useAppStore = create<AppState>((set) => ({
       streamingContent: "",
       isStreaming: false,
       pendingApproval: null,
+      pendingQuestion: null,
+      resolvedAnswers: {},
       error: null,
       pendingAttachments: [],
       toolCalls: [],

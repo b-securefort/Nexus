@@ -139,14 +139,69 @@ def _render_via_cli(
     return None
 
 
+def render_drawio_to_disk(
+    filename: str, fmt: str = "png"
+) -> tuple[Path | None, str | None, str | None]:
+    """Render a .drawio file in output/ to <stem>.<fmt> next to the source.
+
+    Returns (output_path, mode, error). On success, output_path and mode are
+    set and error is None. On failure, output_path is None and error explains
+    why; mode is None. Used by both the explicit `render_drawio` tool and the
+    `generate_file` auto-render so a single rendering pipeline serves both
+    call sites.
+    """
+    if not filename or not filename.endswith(".drawio"):
+        return None, None, "filename must end with .drawio"
+    if ".." in filename or filename.startswith(("/", "\\")):
+        return None, None, "invalid filename - path traversal not allowed"
+    if fmt not in {"png", "svg", "pdf", "jpg"}:
+        return None, None, f"unsupported format '{fmt}'. Use png, svg, pdf, or jpg"
+
+    target = (_OUTPUT_DIR / filename).resolve()
+    sandbox = _OUTPUT_DIR.resolve()
+    try:
+        target.relative_to(sandbox)
+    except ValueError:
+        return None, None, "path escapes output/ sandbox"
+    if not target.exists():
+        return None, None, f"{filename} not found in output/"
+
+    out_path = target.with_suffix(f".{fmt}")
+    settings = get_settings()
+
+    if settings.DRAWIO_EXPORT_URL:
+        try:
+            xml = target.read_text(encoding="utf-8")
+        except OSError as e:
+            return None, None, f"could not read source file: {e}"
+        err = _render_via_sidecar(
+            xml=xml,
+            fmt=fmt,
+            out_path=out_path,
+            sidecar_url=settings.DRAWIO_EXPORT_URL,
+            timeout=settings.DRAWIO_EXPORT_TIMEOUT_SECONDS,
+        )
+        mode = "sidecar"
+    else:
+        err = _render_via_cli(target=target, fmt=fmt, out_path=out_path)
+        mode = "local CLI"
+
+    if err is not None:
+        return None, None, err
+    if not out_path.exists():
+        return None, None, f"rendering completed but output file {out_path.name} not found"
+    return out_path, mode, None
+
+
 class RenderDrawioTool(Tool):
     name = "render_drawio"
     description = (
         "Render a .drawio file in output/ to an image (PNG by default) so you can "
-        "visually review the rendered diagram. Use this AFTER validate_drawio passes, "
-        "to catch issues the structural validator cannot - overlapping edge labels, "
-        "badges colliding with icons, ambiguous arrows, poorly-routed long edges. "
-        "The image is written next to the source as <name>.<format>. "
+        "visually review the rendered diagram. generate_file already auto-renders "
+        ".drawio writes, so call this only when you want to re-render an existing "
+        "file (e.g. after manual XML edits) or pick a non-PNG format. "
+        "When format is png/jpg, the rendered image is automatically attached to the "
+        "next model turn for vision-based review. "
         "Uses a drawio-image-export2 sidecar when DRAWIO_EXPORT_URL is configured "
         "(production), otherwise falls back to a local draw.io desktop install (dev)."
     )
@@ -176,58 +231,26 @@ class RenderDrawioTool(Tool):
 
         if not filename:
             return "Error: filename is required."
-        if not filename.endswith(".drawio"):
-            return "Error: filename must end with .drawio"
-        if ".." in filename or filename.startswith(("/", "\\")):
-            return "Error: invalid filename - path traversal not allowed."
-        if fmt not in {"png", "svg", "pdf", "jpg"}:
-            return f"Error: unsupported format '{fmt}'. Use png, svg, pdf, or jpg."
 
-        target = (_OUTPUT_DIR / filename).resolve()
-        sandbox = _OUTPUT_DIR.resolve()
-        try:
-            target.relative_to(sandbox)
-        except ValueError:
-            return "Error: path escapes output/ sandbox."
-        if not target.exists():
-            return f"Error: {filename} not found in output/."
-
-        out_path = target.with_suffix(f".{fmt}")
-        settings = get_settings()
-
-        # Mode 1: HTTP sidecar (production)
-        if settings.DRAWIO_EXPORT_URL:
-            try:
-                xml = target.read_text(encoding="utf-8")
-            except OSError as e:
-                return f"Error reading source file: {e}"
-            err = _render_via_sidecar(
-                xml=xml,
-                fmt=fmt,
-                out_path=out_path,
-                sidecar_url=settings.DRAWIO_EXPORT_URL,
-                timeout=settings.DRAWIO_EXPORT_TIMEOUT_SECONDS,
-            )
-            mode = "sidecar"
-        else:
-            # Mode 2: local CLI (dev fallback)
-            err = _render_via_cli(target=target, fmt=fmt, out_path=out_path)
-            mode = "local CLI"
-
-        if err is not None:
+        out_path, mode, err = render_drawio_to_disk(filename, fmt)
+        if err is not None or out_path is None:
             return f"Error: {err}"
-        if not out_path.exists():
-            return f"Error: rendering completed but output file {out_path.name} not found."
 
         size_kb = out_path.stat().st_size // 1024
         logger.info(
             "Rendered %s -> %s (%d KB) via %s for %s",
             filename, out_path.name, size_kb, mode, user.email,
         )
+        vision_note = (
+            "The rendered image is being attached to the next turn for visual review. "
+            "Inspect it and look for:\n"
+            if fmt in ("png", "jpg")
+            else "Visually review the image for issues the structural validator cannot detect:\n"
+        )
         return (
             f"Rendered: output/{out_path.name} ({size_kb} KB, via {mode})\n"
             f"Full path: {out_path}\n\n"
-            "Visually review the image for issues the structural validator cannot detect:\n"
+            f"{vision_note}"
             "  - Edge labels overlapping icons or other labels\n"
             "  - Numbered badges sitting on top of edge labels\n"
             "  - Long edges routed through busy areas\n"

@@ -93,8 +93,7 @@ Instead of just suggesting commands, Nexus **executes them**. It retries failed 
 | **Architect** | Senior cloud architect mode: ADR-style outputs, trade-off analysis, WAF alignment |
 | **KB Searcher** | Read-only knowledge retrieval — no execution, just search and cite |
 | **DrawIO Diagrammer** | Generates valid Azure architecture diagrams as `.drawio` files |
-| **Deploy Backend** | Guided Azure Container Apps backend deployment workflow |
-| **Deploy Frontend** | Guided Azure Static Web Apps / CDN frontend deployment workflow |
+| **DrawIO from Python** | Describe architecture in mingrammer Python, emits an editable `.drawio` file |
 | **Azure Principal Architect** | Deep architectural review with live Azure state queries |
 
 **Callout**: "You can create your own skills. Your team's custom persona, with your rules, in minutes."

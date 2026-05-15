@@ -122,10 +122,10 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
 
         return (
           <div key={qIdx} className="space-y-2">
-            <div className="flex items-baseline gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-800/40 text-blue-200">
-                {q.header}
-              </span>
+            <div className="text-xs font-semibold uppercase tracking-wider text-blue-300">
+              {q.header}
+            </div>
+            <div className="flex items-baseline gap-2 flex-wrap">
               <span className="text-base-100 text-sm font-medium">
                 {q.question}
               </span>

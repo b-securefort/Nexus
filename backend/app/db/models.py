@@ -34,6 +34,10 @@ class Conversation(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     updated_at: datetime = Field(default_factory=_utcnow, nullable=False)
     deleted_at: Optional[datetime] = Field(default=None)
+    # Cached summary of older history past summary_through_message_id, set by
+    # the compaction module when the in-prompt history exceeds thresholds.
+    summary_text: Optional[str] = Field(default=None)
+    summary_through_message_id: Optional[int] = Field(default=None)
 
 
 class Message(SQLModel, table=True):
@@ -47,6 +51,16 @@ class Message(SQLModel, table=True):
     tool_call_id: Optional[str] = Field(default=None)
     tool_name: Optional[str] = Field(default=None)
     attachments_json: Optional[str] = Field(default=None)  # JSON array of {filename, content_type, url}
+    # Cached high-quality summary of a long user paste, populated lazily by
+    # compaction when the original content exceeds USER_PASTE_THRESHOLD and
+    # the message isn't the latest user turn. Persisted so the LLM cost is
+    # paid once across the lifetime of the conversation.
+    text_summary: Optional[str] = Field(default=None)
+    # Cached vision-LLM description of attached images, populated lazily for
+    # user messages with attachments that aren't the most recent image-bearing
+    # turn. Lets the model "remember" earlier images without paying for the
+    # full multipart payload each turn.
+    image_summary: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 
 
@@ -78,6 +92,30 @@ class PendingApproval(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     resolved_at: Optional[datetime] = Field(default=None)
     result_json: Optional[str] = Field(default=None)
+
+
+class KBChunk(SQLModel, table=True):
+    """A chunk of a KB markdown file, used by the local hybrid retrieval path.
+
+    The companion FTS5 (`kb_chunks_fts`) and sqlite-vec (`kb_chunks_vec`)
+    virtual tables are managed in raw DDL — SQLModel only owns this regular
+    content table. The FTS table is kept in sync by triggers; the vec0 table
+    is written explicitly from the reindexer because embeddings aren't
+    SQL-derivable.
+    """
+    __tablename__ = "kb_chunks"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    kb_path: str = Field(nullable=False, index=True)
+    chunk_idx: int = Field(nullable=False)
+    heading: str = Field(nullable=False)  # "Doc Title > Section > Subsection"
+    text: str = Field(nullable=False)
+    content_hash: str = Field(nullable=False)  # sha256 of source file content
+    file_mtime: float = Field(nullable=False)
+    source_url: Optional[str] = Field(default=None)  # from ingested front-matter
+    embed_model: str = Field(nullable=False)  # e.g. "bge-small-en-v1.5"
+    created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 
 
 class PendingQuestion(SQLModel, table=True):

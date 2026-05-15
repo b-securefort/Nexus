@@ -31,6 +31,29 @@ class Settings(BaseSettings):
     KB_SYNC_INTERVAL_SECONDS: int = 900
     KB_REPO_LOCAL_ONLY: bool = False
 
+    # KB local hybrid retrieval (Phase 2)
+    KB_EMBED_MODEL_NAME: str = "bge-small-en-v1.5"
+    KB_EMBED_MODEL_DIR: str = "./models"  # parent dir; per-model subdirs created underneath
+    KB_CHUNK_MAX_CHARS: int = 6000
+    KB_CHUNK_OVERLAP_FRACTION: float = 0.15
+    KB_BM25_TOP_K: int = 50
+    KB_VEC_TOP_K: int = 50
+    KB_RRF_K: int = 60
+    KB_RERANK_TOP_N: int = 30
+    KB_RESULT_LIMIT: int = 5
+    # Skip reranker when RRF top-1 fused score is at least this multiple
+    # of the next candidate's score — saves the ~1.5-3 sec rerank pass on
+    # queries with a clear winner.
+    KB_RERANK_CONFIDENCE_GAP: float = 2.0
+
+    # KB ingestion (Phase 2a, pilot)
+    INGEST_ADO_WIKI_ENABLED: bool = False
+    INGEST_ADO_WIKI_ORG: str = ""
+    INGEST_ADO_WIKI_PROJECT: str = ""
+    INGEST_ADO_WIKI_NAME: str = ""
+    INGEST_PDF_LIST_ENABLED: bool = False
+    INGEST_PDF_LIST_WIKI_PATH: str = ""
+
     # DB
     DATABASE_URL: str = "sqlite:///./app.db"
 
@@ -67,6 +90,8 @@ class Settings(BaseSettings):
     TOOL_DIAGRAM_GEN_ENABLED: bool = True
     TOOL_WEB_FETCH_ENABLED: bool = True
     TOOL_RENDER_DRAWIO_ENABLED: bool = True
+    TOOL_PYTHON_DIAGRAM_ENABLED: bool = True
+    TOOL_DRAWIO_FROM_PYTHON_ENABLED: bool = True
     # Optional: HTTP endpoint of a drawio-image-export2 sidecar.
     # When set, render_drawio POSTs the XML to this URL instead of calling
     # the local draw.io desktop CLI. Use this for containerized deployments

@@ -275,9 +275,6 @@ After implementing new tools, update these skill definitions:
 | `chat-with-kb` | `az_cost_query`, `az_monitor_logs`, `az_rest_api`, `generate_file`, `network_test`, `web_fetch` |
 | `architect` | `az_cost_query`, `az_monitor_logs`, `az_rest_api`, `generate_file`, `az_policy_check`, `diagram_gen`, `az_advisor`, `network_test` |
 | `kb-searcher` | No changes (KB-only skill) |
-| `deploy-backend` | `generate_file`, `az_devops` |
-| `deploy-frontend` | `generate_file`, `az_devops` |
-| `local-runner` | `network_test` |
 
 ## Implementation Order
 

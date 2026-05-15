@@ -77,11 +77,23 @@ def test_validate_rejects_too_many_options():
     assert "options" in err
 
 
-def test_validate_rejects_long_header():
+def test_validate_accepts_natural_phrase_header():
+    cleaned, err = validate_questions([
+        {
+            "question": "Why?",
+            "header": "Backend access pattern",
+            "options": [{"label": "A"}, {"label": "B"}],
+        }
+    ])
+    assert err is None
+    assert cleaned[0]["header"] == "Backend access pattern"
+
+
+def test_validate_rejects_excessively_long_header():
     _, err = validate_questions([
         {
             "question": "Why?",
-            "header": "A" * 30,
+            "header": "A" * 200,
             "options": [{"label": "A"}, {"label": "B"}],
         }
     ])

@@ -13,6 +13,7 @@ from openai import AzureOpenAI
 from sqlmodel import Session, select
 
 from app.agent.approvals import create_pending_approval, wait_for_approval
+from app.agent.compaction import get_original_task, load_compacted_history
 from app.agent.questions import create_pending_question, wait_for_answer
 from app.agent.streaming import (
     sse_approval_required,
@@ -32,7 +33,7 @@ from app.config import get_settings
 from app.db.models import Conversation, Message
 from app.kb.indexer import get_index_summary
 from app.skills.models import Skill
-from app.tools.base import Tool, resolve_tools
+from app.tools.base import Tool, resolve_tools, set_arm_token
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,76 @@ _COMMAND_TOOLS = {"az_cli", "run_shell", "az_resource_graph"}
 # Max consecutive failures on the same type of tool before giving up
 _MAX_RETRIES_PER_TOOL = 3
 MAX_HISTORY_MESSAGES = 50
+
+# Per-tool size caps for the in-memory `messages` list that goes back to the
+# LLM. The full result is still persisted to DB and streamed to the UI; only
+# the prompt copy is trimmed. Keeps long shell/CLI dumps from drowning out
+# the original task across iterations.
+_TOOL_RESULT_LIMITS = {
+    "az_cli": 4_000,
+    "az_resource_graph": 4_000,
+    "run_shell": 4_000,
+    "read_kb_file": 6_000,
+}
+_DRAWIO_TOOLS = {"render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell"}
+
+
+def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
+    """Trim an enveloped tool result for the in-memory messages list.
+
+    DB content stays full — this only affects what we send back to OpenAI on
+    the next iteration so retries and tool dumps don't push the original task
+    out of context.
+    """
+    # For drawio tools, strip echoed XML from the envelope.data.xml field
+    # if it's present — the validator/renderer often echoes the whole file
+    # and we don't need the model to re-read it.
+    if tool_name in _DRAWIO_TOOLS and len(enveloped_result) > 4_000:
+        try:
+            envelope = json.loads(enveloped_result)
+            data = envelope.get("data")
+            if isinstance(data, dict) and isinstance(data.get("xml"), str):
+                xml_len = len(data["xml"])
+                if xml_len > 500:
+                    data["xml"] = f"[XML omitted, {xml_len} chars — full content in DB]"
+                    return json.dumps(envelope, indent=2)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    limit = _TOOL_RESULT_LIMITS.get(tool_name)
+    if limit and len(enveloped_result) > limit:
+        head_size = int(limit * 0.75)
+        tail_size = limit - head_size
+        head = enveloped_result[:head_size]
+        tail = enveloped_result[-tail_size:]
+        omitted = len(enveloped_result) - head_size - tail_size
+        return f"{head}\n...[truncated {omitted} chars — full output in DB]...\n{tail}"
+    return enveloped_result
+
+
+def _strip_retry_messages_for_tool(messages: list[dict], tool_name: str) -> int:
+    """Remove any `[RETRY STRATEGY ...]` system messages mentioning `tool_name`
+    from the in-memory messages list. Called after a successful retry so the
+    chatter that scaffolded the recovery doesn't linger across iterations.
+    Returns the count removed.
+    """
+    marker = "[RETRY STRATEGY"
+    keep: list[dict] = []
+    removed = 0
+    for m in messages:
+        content = m.get("content")
+        if (
+            m.get("role") == "system"
+            and isinstance(content, str)
+            and content.startswith(marker)
+            and tool_name in content
+        ):
+            removed += 1
+            continue
+        keep.append(m)
+    if removed:
+        messages[:] = keep
+    return removed
 
 
 def _get_openai_client() -> AzureOpenAI:
@@ -69,8 +140,13 @@ def _tool_needs_approval(tool: Tool, args: dict) -> bool:
     return tool.requires_approval
 
 
-def _compose_system_prompt(skill: Skill, user: User) -> str:
-    """Compose the final system prompt per §11.6."""
+def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") -> str:
+    """Compose the final system prompt per §11.6.
+
+    `original_task` is the very first user message of the conversation; it is
+    pinned at the end of the prompt so it survives history compaction and
+    keeps the model focused across long tool-heavy turns.
+    """
     from app.tools.learn_tool import get_learnings_content
     from app.tools.az_login_check import get_az_context_prompt
 
@@ -146,6 +222,21 @@ def _compose_system_prompt(skill: Skill, user: User) -> str:
         f"{az_context}"
     )
 
+    if original_task.strip():
+        # Pin the user's first message so it can't be summarized away. The
+        # truncation cap protects against pathological pastes; long tasks
+        # should be in the message history too, this is just an anchor.
+        task = original_task.strip()
+        if len(task) > 2000:
+            task = task[:2000] + " …[truncated]"
+        parts.append(
+            "\n---\n"
+            "[Original task from user — always stay focused on this. Tool "
+            "results and intermediate messages are scaffolding, not the goal]:\n"
+            f"{task}\n"
+            "---"
+        )
+
     return "\n".join(parts)
 
 
@@ -164,8 +255,12 @@ def _build_render_review_message(args: dict) -> dict | None:
     filename = (args.get("filename") or args.get("file_name") or "").strip()
     fmt = (args.get("format") or "png").strip().lower()
 
-    if not filename or not filename.endswith(".drawio"):
+    if not filename:
         return None
+    # Tools like generate_drawio_from_python pass a stem (no extension) — the
+    # .drawio file is what gets written + rendered to .png next to it.
+    if not filename.endswith(".drawio"):
+        filename = f"{filename}.drawio"
     if fmt not in ("png", "jpg", "jpeg"):
         # PDF/SVG aren't sent through OpenAI vision; skip image injection.
         return None
@@ -531,6 +626,10 @@ async def handle_chat(
     """
     settings = get_settings()
 
+    # Propagate the user's ARM token into the tool execution context so every
+    # Azure tool subprocess authenticates as the current user.
+    set_arm_token(user.arm_token)
+
     # 1. Persist user message
     user_msg = _save_message(
         session, conversation.id, role="user", content=user_message,
@@ -540,12 +639,15 @@ async def handle_chat(
 
     # 2. Build request
     skill = _skill_from_snapshot(conversation.skill_snapshot_json)
-    messages = _load_message_history(session, conversation.id)
-    system_prompt = _compose_system_prompt(skill, user)
+    client = _get_openai_client()
+    messages = load_compacted_history(
+        session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
+    )
+    original_task = get_original_task(session, conversation.id)
+    system_prompt = _compose_system_prompt(skill, user, original_task=original_task)
     tools = resolve_tools(skill.tools)
     tool_schemas = [t.to_openai_schema() for t in tools] if tools else None
 
-    client = _get_openai_client()
     iteration = 0
 
     # Track consecutive failures per tool type for multi-strategy retry
@@ -838,7 +940,9 @@ async def handle_chat(
                     tool_call_id=call_id,
                     tool_name=func_name,
                 )
-                messages.append({"role": "tool", "content": enveloped_result, "tool_call_id": call_id})
+                # In-memory copy is trimmed; DB and UI still get the full envelope.
+                trimmed_for_prompt = _truncate_tool_result(func_name, enveloped_result)
+                messages.append({"role": "tool", "content": trimmed_for_prompt, "tool_call_id": call_id})
                 
                 # The UI gets the raw text for streaming/display, but can also parse the enveloped result if needed
                 yield sse_tool_result(call_id, func_name, tool_result)
@@ -851,7 +955,8 @@ async def handle_chat(
                 # Defer the append until all tool_call_ids are answered to keep
                 # API ordering valid.
                 if not is_error and func_name in (
-                    "render_drawio", "generate_file", "patch_drawio_cell"
+                    "render_drawio", "generate_file", "patch_drawio_cell",
+                    "generate_drawio_from_python",
                 ):
                     review_msg = _build_render_review_message(func_args)
                     if review_msg is not None:
@@ -944,6 +1049,14 @@ async def handle_chat(
                     # Tool succeeded — check if there were prior failures to learn from
                     prior_failures = failure_history.get(func_name)
                     if prior_failures:
+                        # Strip the retry-strategy chatter from in-memory history
+                        # now that we no longer need it to scaffold the recovery.
+                        stripped = _strip_retry_messages_for_tool(messages, func_name)
+                        if stripped:
+                            logger.info(
+                                "Pruned %d retry-strategy messages for %s after success",
+                                stripped, func_name,
+                            )
                         summary = _build_failure_summary_for_learning(func_name, prior_failures)
                         learn_msg = (
                             f"[SUCCESS AFTER FAILURES] `{func_name}` succeeded after "

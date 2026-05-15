@@ -4,21 +4,6 @@ This file records known issues, mistakes, and solutions discovered during tool e
 The agent consults this before running commands to avoid repeating errors.
 
 ---
-## [gotcha] Cost Management REST API can return HTTP 429 on back-to-back queries
-- **Date**: 2026-04-21 16:37 UTC
-- **Tool**: az_cost_query
-- **Details**: When querying multiple subscriptions for Cost Management data, do not call the second subscription immediately after the first. The API can rate-limit per subscription or tenant. The az_cost_query tool retries once on 429, but if it persists, wait a few minutes before retrying. Querying one subscription at a time with a delay is more reliable.
-
-## [gotcha] Key Vault access can be blocked by missing data-plane permissions or network restrictions
-- **Date**: 2026-04-21 16:17 UTC
-- **Tool**: az_cli
-- **Details**: Listing secrets in Key Vaults can fail with `Forbidden` (missing secrets list permission) or `Public network access is disabled` (needs private endpoint). Resource Graph confirms vault existence but not data-plane access. Always check both RBAC and network config before assuming Key Vault is inaccessible.
-
-## [best-practice] Act first instead of asking for repeat confirmation when a tool path already implies approval
-- **Date**: 2026-04-21 16:38 UTC
-- **Tool**: general
-- **Details**: When the user asks for an action and the workflow already provides a tool-based acceptance path (for example a yes/no tool call), do not ask the user again for confirmation. Proceed by attempting the tool call directly and use the tool response as the acceptance signal.
-
 ## [known-issue] Azure DevOps CLI requires proper authorization — TF400813
 - **Date**: 2026-04-22 00:34 UTC
 - **Tool**: az_devops
@@ -248,4 +233,29 @@ The agent consults this before running commands to avoid repeating errors.
 - **Date**: 2026-05-09 23:35 UTC
 - **Tool**: generate_file
 - **Details**: In Azure diagrams, the Web Application Firewall policy icon is a policy attachment to Application Gateway, not a network hop. Draw only an association between WAF policy and Application Gateway; do not route traffic through the WAF policy. The Application Gateway itself remains the traffic-processing component and forwards traffic to its backends.
+
+## [gotcha] generate_python_diagram "Graphviz not found" usually means stale backend PATH, not missing install
+- **Date**: 2026-05-14 00:30 UTC
+- **Tool**: generate_python_diagram
+- **Details**: If `generate_python_diagram` reports Graphviz `dot` is missing, do NOT assume Graphviz needs to be installed. The common cause is that Graphviz was installed AFTER the backend process started, so the backend's environment is using a stale PATH. The tool defensively prepends `C:\Program Files\Graphviz\bin` on Windows when `dot.exe` is present there, so on a current build this error means `dot` is genuinely absent from that standard location too. Check the install first (`Test-Path "C:\Program Files\Graphviz\bin\dot.exe"`) before recording a learning or asking the user to install anything. Restarting the backend resolves stale-PATH cases.
+
+## [gotcha] Stop iterating when the user signals acceptance — don't manufacture problems
+- **Date**: 2026-05-15 12:00 UTC
+- **Tool**: generate_drawio_from_python, generate_file
+- **Details**: The Phase 5 "review and invite critique" pattern from the collaborative diagramming skill becomes a UX failure if the agent keeps finding new problems after the user signals acceptance. Acceptance signals include: "ship it", "enough", "just create / generate / make it", "go ahead with what you have", "good enough", "stop iterating", "looks fine". When you see any of those, stop. Make at most one final tool call (or zero if the latest file is already the one to ship), then respond with only: one sentence on what the diagram shows + the file path. Do NOT add "I'd still adjust X" or offer further iterations — that pattern exhausted the user across ~15 regenerations in one observed session. Also: cap unsolicited polish iterations at TWO per successful render. After the second, let the user drive. Real architectural corrections from the user reset the counter; pure layout preferences don't. And Phase 5 review should only flag issues that are visible and meaningful — overlapping labels you can SEE, an icon that's plain wrong, a flow that's misleading. Not generic "spacing could be tighter" critiques.
+
+## [gotcha] mingrammer diagrams class names — common hallucinations to avoid
+- **Date**: 2026-05-15 12:00 UTC
+- **Tool**: generate_drawio_from_python, generate_python_diagram
+- **Details**: The installed `diagrams` library has specific class names that the LLM tends to hallucinate variants of. Confirmed bad imports observed during a real session (each one wasted a tool call): `from diagrams.azure.network import Subnet` (use `Subnets` plural), `from diagrams.azure.management import Monitor` (use `from diagrams.azure.monitor import Monitor`), `from diagrams.azure.security import WAFPolicies` (no such class — use `AzureGeneric(azure_icon="waf_policy")`), `from diagrams import AzureGeneric` (it's injected by the tool, never imported), `from diagrams.azure.network import NSG` (use `NetworkSecurityGroupsClassic`). When a service isn't sure to be in the catalog, default to `AzureGeneric("Display Name", azure_icon="<kind>")` rather than guessing a class name that "looks right" — the Phase 4b table in the drawio-from-python SKILL.md lists every valid azure_icon kind. The SKILL.md now carries the guaranteed-good imports inline (Phase 4a) and a forbidden-imports list (Phase 4c); consult them rather than guessing.
+
+## [gotcha] AzureGeneric kind aliases must match the emitter's _KIND_TO_SVG keys exactly
+- **Date**: 2026-05-15 12:00 UTC
+- **Tool**: generate_drawio_from_python
+- **Details**: When you use `AzureGeneric("Foo", azure_icon="<kind>")`, the kind string must be a key in the emitter's _KIND_TO_SVG dict, otherwise the node falls back to a plain rectangle in drawio (not what the user expects). Observed in a real session where AzureGeneric with `azure_icon="app_service"` rendered as an empty box because that alias wasn't mapped. The mapping has been broadened; current valid kinds are listed in the SKILL.md Phase 4b table. If you need a service icon and the kind isn't listed, do NOT invent a kind — instead pick the closest one or fall through to the mingrammer class for the service.
+
+## [best-practice] Diagramming is architect-to-architect collaboration, not order-taking — and the loop continues on every change
+- **Date**: 2026-05-14 01:15 UTC
+- **Tool**: generate_drawio_from_python, generate_file, ask_user
+- **Details**: When the user requests a diagram, do NOT jump to generating output. The expected flow is: (1) research — read the relevant KB files and learnings, name them explicitly; (2) reflect — briefly tell the user what you understood, which KB sources you're drawing from, and which architectural choices are still open; (3) confirm — call `ask_user` with concrete multi-select options for every open decision (backend service, access pattern, hub presence, DNS strategy, monitoring/identity inclusion); (4) generate only after the user has answered; (5) review — describe what the rendered PNG actually shows and INVITE the user to confirm or redirect. Never say "the diagram is ready" — only the user decides acceptance. Never assume a default (backend, access pattern, topology) just because it's "common"; if the KB doesn't justify it, ask. **The loop repeats for EVERY user-requested change.** "Add a Key Vault", "add another VM with SQL in its own subnet", "move the SQL DB to another subnet", "make it hub-and-spoke" — each triggers another reflect → confirm → generate → review round. The only changes that skip ask_user are ones fully specified by the user's exact words: pure renames, coordinate-free cosmetic changes, or changes where the user has already named every decision in their message. This applies to all diagram skills, not just python_to_drawio.
 

@@ -1,0 +1,506 @@
+# Nexus — Architecture & Design
+
+> **Reading this**: a moderator should be able to read this doc in 15 minutes
+> and answer "what does Nexus do, how is it built, why these choices, what
+> depends on what." If something is unclear after this doc, that's a bug in
+> the doc — open a PR.
+
+## 0. How to update this document
+
+This is a **living document**. Every PR that changes architecture, dependencies,
+tools, data model, or makes a non-obvious decision MUST update the relevant
+section in the same PR. The PR template has a checkbox for this.
+
+Update protocol:
+
+| Change | Update section |
+|---|---|
+| New Python/JS dependency | §3 Dependencies — add a row; explain *why this one* |
+| New table or column | §4 Data model |
+| New tool exposed to the agent | §2 Components → Tools table |
+| Architectural / design decision worth defending later | §5 Decision log — date, decision, why, trade-offs |
+| New operational concern (background task, env var) | §6 Operations |
+| Item retired or replaced | strike-through with a §5 entry pointing to the replacement |
+
+If a change makes an old decision obsolete, **don't delete the old entry** —
+add a new §5 entry referencing it. The history is the value.
+
+---
+
+## 1. What Nexus is
+
+Nexus is a self-hosted AI assistant for Azure cloud teams. It combines an LLM
+(Azure OpenAI) with a team knowledge base (KB) synced from Git, a switchable
+"skills" system (named personas with scoped toolsets), and approval-gated
+execution of real tools (`az` CLI, PowerShell, Azure Resource Graph queries,
+Azure REST). Unlike a chat-only assistant, Nexus *runs commands* — it learns
+from mistakes via a persistent `learn.md`, retries failed commands with
+three different strategies, and produces architecture diagrams alongside
+text answers.
+
+```
+┌─────────────┐    chat (SSE)     ┌─────────────────────────────┐
+│  Frontend   │ ────────────────► │   Backend (FastAPI)         │
+│  React+Vite │ ◄──── tokens ──── │   ┌─ Orchestrator (agent)─┐ │
+└─────────────┘                   │   │  Compaction           │ │      ┌──────────┐
+                                  │   │  Tool execution       │ │ ───► │  Azure   │
+       ┌─ KB sync ─►┌───────────┐ │   │  Approvals / askuser  │ │      │  OpenAI  │
+       │            │ kb_data/  │ │   └───────────────────────┘ │      └──────────┘
+       │            │ kb/*.md   │ │   ┌─ Tools ────────────────┐│      ┌──────────┐
+   ┌───────┐        │ skills/   │ │   │  az_*, run_shell,      ││ ───► │  Azure   │
+   │ ADO   │        │ learn.md  │ │   │  read_kb_file,         ││      │  CLI /   │
+   │ wiki  │        └───────────┘ │   │  search_kb_*,          ││      │  ARM     │
+   │ + git │ ──────►               │   │  generate_file,        ││      └──────────┘
+   │ + pdf │       (planned        │   │  ms_docs, learnings    ││
+   └───────┘        ingestion)     │   └────────────────────────┘│
+                                  │   ┌─ SQLite app.db ────────┐ │
+                                  │   │  users, conversations, │ │
+                                  │   │  messages, approvals,  │ │
+                                  │   │  questions, kb_chunks  │ │
+                                  │   └────────────────────────┘ │
+                                  └─────────────────────────────┘
+```
+
+---
+
+## 2. Components
+
+### Chat orchestrator
+**Files**: [backend/app/agent/orchestrator.py](../backend/app/agent/orchestrator.py)
+
+The agent loop. Receives a user message via SSE, composes the system prompt
+(skill prompt + tool hierarchy + retry policy + KB index summary + learnings
++ Azure context + pinned original-task block), calls Azure OpenAI streaming,
+executes any tool calls (with approval gates and ask-user prompts), feeds
+results back, and loops up to 15 iterations. Tool failures trigger a
+multi-strategy retry escalation; success-after-failure prompts a learning
+record.
+
+### Conversation compaction
+**Files**: [backend/app/agent/compaction.py](../backend/app/agent/compaction.py)
+
+Solves the "context window bloats during long tool-heavy turns and the agent
+forgets the original ask" problem. Asymmetric strategy: **every user message
+is preserved verbatim** (with two exceptions cached on the `messages` row:
+long pastes > 3 KB get a high-quality summary in `text_summary`; older
+images get a vision-LLM description in `image_summary`; the latest image
+always stays as a real image). **Assistant + tool scaffolding between user
+messages** is the part that gets compressed — each gap collapses into one
+synthetic `[Outcomes from intermediate tool work]` bullet message. Recent
+N messages stay verbatim. Cumulative outcome cache lives on
+`Conversation.summary_text` so re-summarization is paid only once per
+compression event.
+
+### KB retrieval — two parallel paths (Phase 2 in flight)
+**Files**: [backend/app/kb/](../backend/app/kb), [backend/app/tools/kb_tools.py](../backend/app/tools/kb_tools.py)
+
+Path A (existing, cloud): `search_kb_semantic` — keyword index + Azure OpenAI
+query expansion + Azure OpenAI rerank. File-level results. Stays as-is until
+Path B is validated.
+
+Path B (Phase 2, local hybrid): `search_kb_hybrid` — chunked markdown,
+SQLite FTS5 (BM25) + sqlite-vec (cosine over 384-dim bge-small-en-v1.5
+embeddings), Reciprocal Rank Fusion, optional cross-encoder rerank
+(`bge-reranker-base`). Runs entirely on-device. Returns chunk-level results
+with `source_url` cite.
+
+### KB ingestion (Phase 2a, planned)
+Pulls content from ADO wikis, ADO repos (already handled by `git_sync.py`),
+and PDF link lists (SharePoint / open web). Normalizes everything to
+markdown with front-matter (`source_url`, `last_synced`, `source`,
+`original_path`). Pilot scope: 50-200 documents.
+
+### Skills system
+**Files**: [backend/app/skills/](../backend/app/skills/), `kb_data/skills/shared/<skill>/SKILL.md`
+
+A skill is a YAML-frontmatter markdown file specifying a `display_name`,
+`description`, `system_prompt`, and a `tools:` allowlist. Switching skills
+swaps the agent's persona and scoped toolset. Personal skills live in the
+`personal_skills` table; shared skills live in the synced KB repo.
+
+### Tools
+
+| Tool | Approval | Purpose |
+|---|---|---|
+| `read_kb_file` | No | Read a KB file by relative path |
+| `search_kb` | No | Token-scored search over titles/summaries/tags |
+| `search_kb_semantic` | No | **Cloud** path: Azure-OpenAI query expansion + rerank over file-level index. Kept side-by-side with `search_kb_hybrid`. |
+| `search_kb_hybrid` *(Phase 2)* | No | **Local** path: chunked hybrid retrieval, no cloud calls |
+| `fetch_ms_docs` | No | Microsoft Learn doc search |
+| `read_learnings` | No | Read the agent's persistent `learn.md` |
+| `update_learnings` | No | Append a categorized learning entry |
+| `az_resource_graph` | No | KQL queries against Azure Resource Graph |
+| `az_cost_query` | No | Cost Management API queries |
+| `az_monitor_logs` | No | Log Analytics KQL queries |
+| `az_advisor` / `az_policy_check` | No | Advisor recs and policy compliance |
+| `az_cli` | **Yes** | General Azure CLI commands |
+| `az_rest_api` | GET=No / mutations=Yes | Direct ARM REST calls |
+| `az_devops` | Read=No / mutations=Yes | ADO pipelines/PRs/builds |
+| `run_shell` | **Yes** | PowerShell / shell commands |
+| `network_test` | No | DNS / TCP / ping diagnostics |
+| `generate_file` | No | Write artifacts (bicep, csv, etc.) to `output/` sandbox |
+| `validate_drawio` / `render_drawio` / `patch_drawio_cell` | No | Diagram authoring + validation |
+| `python_diagram` / `drawio_from_python` | No | Diagram-as-code → drawio |
+| `web_fetch` | No | HTTP GET for documentation URLs |
+| `ask_user` | No (pauses for UI) | Surface options to the user via the UI; resumes on answer |
+
+### Auth
+**Files**: [backend/app/auth/](../backend/app/auth/)
+
+Microsoft Entra ID JWT validation. `DEV_AUTH_BYPASS=true` in dev short-circuits
+this to a fake `dev-user` identity so local development doesn't need a tenant.
+
+**User-identity Azure passthrough**: The frontend acquires a second MSAL token
+scoped to `https://management.azure.com/user_impersonation` and sends it as
+`X-ARM-Token`. The auth layer extracts and light-validates it (audience check +
+tenant check, no signature re-verification), attaches it to `User.arm_token`.
+The orchestrator calls `set_arm_token(user.arm_token)` at the start of every
+chat turn, setting a `ContextVar` that `AzureToolBase._run_az()` and
+`AzCliTool` read to inject `AZURE_ACCESS_TOKEN` into every subprocess env.
+Result: all Azure tool calls (`az_cli`, `az_resource_graph`, `az_cost_query`,
+`az_monitor_logs`, `az_rest_api`, `az_advisor`, `az_policy_check`, `az_devops`,
+`network_test`) run as the signed-in user, not the server identity.
+If the token is absent (user hasn't consented the ARM scope yet, or
+`DEV_AUTH_BYPASS=true`), tools fall back to whatever credentials are in the
+server's `az` CLI session — no error, just no user identity.
+
+### Frontend
+**Files**: [frontend/src/](../frontend/src/)
+
+React 19 + Vite + Tailwind v4 + Zustand + React-Query. SSE consumer for chat
+streaming. Conversation list, skill picker, approval cards, ask-user question
+cards, message bubbles with image attachments.
+
+---
+
+## 3. Dependencies
+
+Only the *non-obvious* deps and *why this one specifically* — not a copy of
+`requirements.txt`. If a dep is "the standard for X" we still record why
+it's a fit for our constraints (Windows-supported, single DB, local-only
+retrieval, etc.).
+
+| Library | Used in | Why this one (vs alternatives) |
+|---|---|---|
+| `fastapi` | Backend HTTP | SSE streaming is first-class, async-native, type hints flow into OpenAPI |
+| `sqlmodel` | ORM | Sits on SQLAlchemy + Pydantic — one model class drives table + API schema |
+| `sqlite` (stdlib) | DB | Single-file, no infra, WAL mode supports our concurrency. Backup is `cp app.db`. |
+| `openai` | Azure OpenAI client | Official; supports streaming + tool calling with the OpenAI tool-call schema |
+| `gitpython` | KB git sync | Wraps system git; same auth options as the CLI |
+| `msal` | Entra auth | Microsoft's official ID library — required for parity with prod IT policy |
+| `pydantic-settings` | Config | Env-var-first config with type validation |
+| `prometheus-client` | Metrics | Standard scrape target; aligns with the rest of the Azure shop |
+| `pypdf` *(Phase 2a)* | PDF text extraction | Pure-Python, no Java/Tesseract, sufficient for born-digital PDFs which is what we have |
+| `sqlite-vec` *(Phase 2)* | Local vector search | Runs as a SQLite extension *in the existing app.db* — no separate vector DB, no Node runtime. Ships Win/Linux wheels. |
+| `onnxruntime` *(Phase 2)* | Local embeddings + reranker | ~50 MB CPU runtime; ~5× lighter than sentence-transformers (which transitively pulls torch ~750 MB). Faster cold start, no GPU needed. |
+| `tokenizers` *(Phase 2)* | bge tokenization | HF's Rust tokenizer — matches the upstream bge tokenizer exactly |
+| `huggingface-hub` *(Phase 2)* | First-run model fetch | Authoritative source of the bge ONNX exports; supports `KB_EMBED_MODEL_DIR` override for air-gapped installs |
+| `numpy` *(Phase 2)* | Vector math | Required transitively by onnxruntime; we use it directly for embedding pooling + normalization |
+| `diagrams` | python_diagram tool | Renders Azure architecture diagrams as code; only used by the diagram-authoring tools |
+
+**Rejected (and why)** — short list of options we considered and didn't take:
+- `qmd` — Node.js + 2 GB GGUF models. Too much infra for what `sqlite-vec` + `onnxruntime` give us in Python.
+- `sentence-transformers` — pulls torch (~750 MB). Pure inference doesn't need a training framework.
+- `Mem0` — paid cross-session memory service. Violates the local-only constraint and we already have `learn.md` for system-wide mistake memory.
+- `Faiss` — better at billions of vectors, but separate-file index and harder ops. We're at thousands of chunks.
+
+---
+
+## 4. Data model
+
+All in `backend/app.db` (SQLite). Schema changes go in
+`_apply_lightweight_migrations` in [main.py](../backend/app/main.py) only —
+add the column to the SQLModel model and add an `ALTER TABLE` guard in that
+function. The shim runs on every startup and is a no-op on fresh installs
+(`SQLModel.metadata.create_all` handles those). Alembic migration files exist
+in `backend/app/db/migrations/versions/` for reference but are not the active
+migration path (see §5 decision log).
+
+| Table | Columns (short) | Who writes | Who reads | Retention |
+|---|---|---|---|---|
+| `users` | oid, email, display_name, last_seen_at | auth middleware | everywhere | forever |
+| `conversations` | user_oid, title, skill_id, skill_snapshot_json, summary_text, summary_through_message_id | api/conversations, compaction | orchestrator | until user deletes |
+| `messages` | conversation_id, role, content, tool_calls_json, tool_call_id, attachments_json, text_summary, image_summary | orchestrator, compaction | orchestrator (history + compaction) | until conversation deleted |
+| `pending_approvals` | tool_name, tool_args_json, reason, status | orchestrator | api/chat | expire via sweeper after 10 min |
+| `pending_questions` | conversation_id, questions_json, status, answers_json | orchestrator (ask_user) | api/chat | expire via sweeper |
+| `personal_skills` | user_oid, name, system_prompt, tools_json | api/skills | skills loader | until user deletes |
+| **`kb_chunks`** *(Phase 2)* | kb_path, chunk_idx, heading, text, content_hash, file_mtime, source_url, embed_model | KB reindexer | search_kb_hybrid | until source file removed/changed |
+| **`kb_chunks_fts`** *(virtual)* | FTS5 over `kb_chunks.text + heading`, `tokenize=unicode61` | triggers on `kb_chunks` | search_kb_hybrid (BM25 stage) | n/a |
+| **`kb_chunks_vec`** *(virtual)* | vec0(float[384]), joined by rowid==kb_chunks.id | reindexer (explicit) | search_kb_hybrid (vector stage) | n/a |
+
+WAL mode is enabled on every new SQLite connection by
+[sqlite_vec_loader.py](../backend/app/db/sqlite_vec_loader.py) so periodic
+KB re-indexing doesn't block in-flight chat reads.
+
+---
+
+## 5. Decision log
+
+A chronological record. Newest decisions at the **bottom**. Each entry: date,
+decision, why, trade-offs accepted.
+
+### 2026-05-13 — Pin the original user task in the system prompt
+Long tool-heavy turns push the original user message past the 50-message
+history window or compress it away. We append a fixed `[Original task from
+user]` block to the system prompt every turn, drawn from the conversation's
+first user message. Capped at 2000 chars to bound the prompt.
+**Trade-off**: a small fixed system-prompt cost on every turn; in exchange,
+the agent reliably stays on-task across long iterations.
+
+### 2026-05-13 — Conversation compaction: summarize older messages with a Conversation-row cache
+When history exceeds 30 messages or ~12 KB, summarize the older half into a
+single synthetic assistant message. Cache the summary on the Conversation row
+(`summary_text` + `summary_through_message_id`) so we don't re-summarize from
+scratch every turn.
+**Trade-off**: one extra Azure OpenAI call when the cache is invalidated; in
+exchange, dramatic reduction in prompt size on long conversations.
+
+### 2026-05-14 — Asymmetric compaction: preserve all user messages, only compress scaffolding
+**Replaces the 2026-05-13 "summarize the older half" decision.** User
+messages are short (20-200 tokens, high info density, anchor intent); tool
+outputs are long (thousands of tokens, mostly noise after the conclusion is
+reached). Compress asymmetrically: every user message stays verbatim; the
+assistant+tool scaffolding between consecutive user messages collapses into
+one `[Outcomes from intermediate tool work]` bullet. Long pastes (>3 KB) and
+older images on user messages get cached `text_summary` / `image_summary`
+columns. The latest image-bearing user message keeps its actual images.
+**Trade-off**: more total tokens preserved (because every user message
+survives), but the agent never loses sight of *what the user asked for*
+across long turns. The model-visible prompt remains compact because tool
+output is what gets compressed.
+
+### 2026-05-14 — Local hybrid KB retrieval (Phase 2) over qmd
+**Chose** `sqlite-vec` + `onnxruntime` in Python over the qmd Node.js
+runtime. qmd's architecture (BM25 + dense vectors + reranker) is correct;
+its runtime cost (Node ≥ 22 + ~2 GB GGUF models) isn't justified when we
+can have the same architecture in our existing Python stack with a 220 MB
+install.
+**Trade-off**: one-time ONNX export work; in exchange, single-language
+stack, single DB, no extra process.
+
+### 2026-05-14 — Skipped OCR for PDF ingestion (Phase 2a)
+The target PDF corpus (~100 docs) is all born-digital text. `pypdf` is
+sufficient. **Trade-off**: scanned PDFs (if any later appear) will produce
+empty/garbage content; we'd add Tesseract OCR then.
+
+### 2026-05-14 — Keep cloud `search_kb_semantic` alongside new local `search_kb_hybrid` during POC
+Don't delete the existing cloud path. Run both in parallel; eyeball top-3
+agreement on a hand-picked golden set before retiring the cloud path.
+**Trade-off**: two tools the agent sees in skills' tool lists during the
+POC — minor cognitive load.
+
+### 2026-05-15 — `unicode61 remove_diacritics 2` FTS5 tokenizer, no porter stemming
+Porter stemming truncates "kubernetes" → "kubernet", "azure" → "azur",
+hurting matches against technical jargon. `unicode61` plain (with diacritic
+folding) preserves the distinctive token. **Trade-off**: slightly less recall
+on natural-language morphology variations; acceptable for a technical KB.
+
+### 2026-05-15 — `embed_model` column on `kb_chunks`
+If we ever swap embedding models (different name or different dim), the
+existing chunks become invalid. Storing the model name per row lets the
+reindexer auto-detect the swap and force-reembed without manual DB cleanup.
+**Trade-off**: a few extra bytes per row.
+
+### 2026-05-15 — `kb_chunks_vec` is a sqlite-vec `vec0` virtual table, joined by rowid
+Rejected the alternative of storing the embedding as a BLOB column on
+`kb_chunks` directly, because querying nearest neighbors on a BLOB column
+requires a full table scan + `vec_distance_cosine()` in Python. vec0 owns
+its own ANN-friendly layout and supports `MATCH '[...]' ORDER BY distance`
+natively. **Trade-off**: the reindexer must explicitly write to both
+tables (FTS triggers handle their own sync, but vec0 doesn't because
+embeddings are computed in Python).
+
+### 2026-05-15 — Conditional cross-encoder reranking
+The cross-encoder rerank pass (`bge-reranker-base` on 30 candidates) adds
+~1.5-3 sec/query. Skip it when RRF already has a confident top-1 (top score
+≥ `KB_RERANK_CONFIDENCE_GAP=2.0` × the next candidate's score). On
+ambiguous queries, run rerank.
+**Trade-off**: a small loss of top-3 precision on queries that *would* have
+benefited from rerank but had a confident-but-wrong RRF top-1. Acceptable;
+we observed RRF agreement-on-correctness is high for clear queries.
+
+### 2026-05-15 — Living `Documentation/DESIGN.md` is the source of truth for architecture
+This document. Update lives in the same PR as the code change. PR template
+has a checkbox. **Trade-off**: small PR-author overhead; in exchange, the
+project remains explainable to a new moderator without re-reading commits.
+
+### 2026-05-15 — Removed deploy-backend / deploy-frontend / local-runner / python-diagrammer skills
+These four Nexus skills were self-referential: they described how to deploy or
+run *Nexus itself*, which is IDE work, not agent work. Replaced by three
+`.claude/commands/` files (`deploy-backend.md`, `deploy-frontend.md`,
+`run-local.md`) that Claude Code picks up as `/deploy-backend`,
+`/deploy-frontend`, `/run-local` slash commands. `python-diagrammer` was
+superseded by `drawio-from-python` which produces an editable `.drawio` rather
+than a static PNG. **Trade-off**: the commands are only accessible inside
+Claude Code IDE, not through the Nexus chat UI — acceptable because deploying
+Nexus is always a developer action, never a user action.
+
+### 2026-05-15 — Tool auto-registration via `__init_subclass__`
+Every `Tool` subclass that defines a `name` attribute is automatically inserted
+into `TOOL_REGISTRY` at class-definition time via Python's `__init_subclass__`
+hook — no explicit `register_tool()` call required. This means importing a
+tool module is the act of registration; `init_tools()` just imports all modules
+under `app/tools/`.
+**Trade-off**: magic registration is non-obvious to contributors (a new tool
+"appears" without an explicit step), but it eliminates a whole class of bugs
+where a tool is implemented but never wired in. The alternative — an explicit
+registry list — drifts out of sync in practice.
+
+### 2026-05-15 — Shell injection blocks only backtick and NUL, not pipe/ampersand
+`check_shell_injection()` in `base.py` deliberately allows `|`, `&`, `;`, `<`,
+`>`, and `$` in tool arguments. These characters are valid inside KQL queries,
+JSON bodies, and file paths; blocking them broke `az_resource_graph` and
+`az_monitor_logs`. Only backtick (PowerShell escape character) and NUL (C
+string truncator) survive `list2cmdline()` quoting and are blocked.
+**Trade-off**: narrower injection surface than a traditional blocklist, but
+the primary protection is `subprocess` with a list argument (not a shell
+string), which quotes each element before cmd.exe sees it.
+
+### 2026-05-15 — Hardcoded blocked prefixes in `az_cli` bypass the approval gate
+Six `az` subcommand sequences (`account clear`, `ad app/sp create/delete`,
+`role assignment/definition delete`) are permanently rejected in `_is_blocked()`
+even after the user grants Approval. These operations can wipe credentials or
+lock the team out of Azure — consequences that cannot be undone by the
+next approval cycle.
+**Trade-off**: the approval gate is bypassed for these specific operations,
+which slightly undermines the "approval covers everything" mental model. The
+alternative — trusting a user to deny a credential-wipe approval under pressure
+— was judged unacceptable.
+
+### 2026-05-15 — Learning override-pattern guard prevents agent self-poisoning
+`update_learnings` rejects entries whose text matches `_OVERRIDE_PATTERNS` — a
+regex that catches phrases like "ignore the validator", "too noisy", "skip the
+check". The same filter is applied at read time to strip entries that slipped
+through. Without this, the agent can observe a tool hint it dislikes, write
+"ignore that hint" as a learning, and on the next run the system prompt
+silently suppresses the tool's guidance.
+**Trade-off**: the agent cannot record factually correct observations about
+tool behaviour if phrased as "ignore X" — it must rephrase them as "X flags Y
+when condition Z". This is intentional friction.
+
+### 2026-05-15 — Output sandbox defense-in-depth with path-traversal regex
+`generate_file` and the diagram tools restrict writes to `backend/output/`.
+Beyond the `Path.resolve().relative_to(sandbox)` check, a regex
+(`_DANGEROUS_PATTERNS`) rejects `..`, absolute paths, and shell-special
+characters in filenames before any filesystem call is made.
+**Trade-off**: two overlapping checks for the same invariant. The regex is
+the fast path that catches obvious attacks without touching the filesystem;
+the `relative_to` check is the definitive guard. Belt and suspenders is
+intentional here — a path-traversal in a file-write tool is high severity.
+
+### 2026-05-15 — SSE event protocol: nine typed events over a single stream
+The `POST /api/chat` endpoint emits nine distinct event types rather than a
+single `data` stream, so the frontend can render approval gates, question
+cards, tool status, and streaming text from one connection without polling.
+Each event carries a `type` discriminator and a `data` payload; the frontend
+switches on `type` to decide whether to append a token, show an approval
+card, or mark a tool as running.
+**Trade-off**: nine event types are more surface area than a simple
+`token`/`done` pair, but the alternative — polling separate endpoints for
+approval and question state — introduces race conditions and extra round-trips.
+
+### 2026-05-15 — Single schema migration path: lightweight startup shim only
+
+Schema changes are applied exclusively via `_apply_lightweight_migrations` in
+`main.py`, which runs on every startup and is a no-op on fresh installs
+(`SQLModel.metadata.create_all` handles those). Alembic migration files exist
+in `db/migrations/versions/` but are not the active path.
+**Trade-off**: no rollback support and no version-tracking across deployments;
+accepted because Nexus is a self-hosted internal tool with a single DB file
+and infrequent schema changes. If multi-instance deployment or complex
+data-transform migrations arise, Alembic can be reinstated as the active path.
+
+### 2026-05-15 — User-identity ARM token passthrough via X-ARM-Token header
+Azure tool calls previously ran as the server's managed identity / service
+principal. Changed to user-identity: frontend acquires
+`https://management.azure.com/user_impersonation` from MSAL, passes it as
+`X-ARM-Token`, backend attaches it to `User.arm_token`, orchestrator sets a
+`ContextVar`, and `AzureToolBase._run_az()` injects `AZURE_ACCESS_TOKEN` into
+every subprocess environment. **Why this over OBO (On-Behalf-Of)**:
+OBO requires a client secret on the backend app registration and an extra
+token-exchange call per request. Header passthrough needs only one delegated
+permission added to the existing app registration and no new secrets.
+**Trade-off**: the ARM token travels from the frontend to the backend over
+HTTPS — acceptable for a self-hosted internal tool. If a client secret becomes
+available, OBO is a drop-in replacement that keeps the ARM token purely
+server-side. **Graceful degradation**: if the user hasn't consented to the ARM
+scope (or the permission hasn't been granted yet), `arm_token` is `None` and
+tools fall back to server-side credentials with no error surfaced to the user.
+
+---
+
+## 6. Operations
+
+### Running locally
+
+```bash
+# Backend  (port 8002)
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --port 8002
+
+# Frontend (port 5174)
+cd frontend
+npm install
+npm run dev
+```
+
+Both `.env` files (`backend/.env`, `frontend/.env`) must exist. `DEV_AUTH_BYPASS=true`
+short-circuits Entra auth in dev to a fake `dev-user` identity.
+
+### Tests
+
+```bash
+cd backend && python -m pytest tests/ -x -q   # 469 tests as of 2026-05-15
+cd frontend && npm test                       # 109 tests
+```
+
+### Background tasks (started in [main.py `lifespan`](../backend/app/main.py))
+
+| Task | What | Cadence |
+|---|---|---|
+| `start_periodic_sync` | Git-pull KB repo, normalize, then trigger reindex | `KB_SYNC_INTERVAL_SECONDS` (default 15 min) |
+| `_approval_sweeper` | Expire stale `pending_approvals` + `pending_questions` | Every 60 s |
+| `_backup_loop` | Snapshot `app.db` to `app-db-<ts>.db` | `BACKUP_INTERVAL_SECONDS` (default 24 h); off by default |
+| KB reindex (Phase 2) | Diff per file by sha256; chunk + embed + upsert changed files | After each `sync_repo()` + on startup (background) |
+
+### Health endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /healthz` | Liveness — always returns 200 if the process is up |
+| `GET /metrics` | Prometheus scrape — request counts, durations, token usage, tool calls |
+| `GET /api/kb/index/status` *(Phase 2)* | Hybrid-retrieval index progress (state, indexed/total files, errors) |
+| `POST /api/kb/index/rebuild` *(Phase 2)* | Force a full re-embed (use after model swap or chunker change) |
+
+### Concurrency assumption
+Currently single-process (one uvicorn worker). The KB re-indexer uses an
+in-process `threading.Lock` to prevent overlapping runs. If we ever scale
+to multiple workers, we'll need a DB-level advisory lock or to pin reindex
+to worker 0. Logged here so a future change doesn't quietly break
+indexing.
+
+### Logs to watch
+- `Token usage — prompt: N (cached: M, X%), completion: K` — Azure OpenAI cache hit rate per turn
+- `Compacted N older msgs ...` — compaction firing
+- `Cached text_summary for msg N` / `Cached image_summary for msg N` — message-level compression
+- `KB schema DDL skipped: ...` — sqlite-vec extension didn't load (check Python build)
+- `sqlite-vec load failed: ...` — `search_kb_hybrid` is disabled this session
+
+---
+
+## 7. Open questions / future work
+
+- **Per-document access control**: currently all KB chunks are globally
+  readable. Importing ADO content with restricted permissions will need an
+  ACL column on `kb_chunks` + query-time Entra group check.
+- **Multi-worker deployment**: see §6 concurrency note.
+- **OCR for scanned PDFs**: not currently needed (corpus is born-digital);
+  add Tesseract path when first scanned PDF appears.
+- **Retire cloud `search_kb_semantic`**: after the local path is validated
+  on real ingested content with a golden-set comparison.
+- **DSPy refactor** (Phase 3): clean up ad-hoc `chat.completions.create`
+  calls in the compaction summarizer and the eventual query-expansion path
+  into typed signatures. Code-quality, not a new capability.
+- **Full corpus ingestion** (1000 wiki + 100 PDF): same code as the pilot,
+  just turn on more wiki spaces / longer link lists.

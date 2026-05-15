@@ -88,6 +88,36 @@ def _decode_token(token: str, jwks: dict, settings) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def _extract_arm_token(request: Request, expected_tenant_id: str) -> str | None:
+    """Read the X-ARM-Token header and do a basic sanity check.
+
+    The frontend acquires this token from MSAL with scope
+    'https://management.azure.com/user_impersonation'. We decode the JWT
+    (without full signature verification — that happens implicitly when Azure
+    rejects invalid tokens) just to confirm it's for the right tenant and the
+    right audience before attaching it to the User.
+    """
+    raw = request.headers.get("X-ARM-Token", "").strip()
+    if not raw:
+        return None
+    try:
+        # Decode without verification to read claims
+        claims = jwt.decode(raw, options={"verify_signature": False, "verify_exp": False})
+        aud = claims.get("aud", "")
+        tid = claims.get("tid", "")
+        # Must be an ARM token for the right tenant
+        if "management.azure.com" not in aud:
+            logger.warning("X-ARM-Token rejected: unexpected audience %r", aud[:80])
+            return None
+        if tid and tid != expected_tenant_id:
+            logger.warning("X-ARM-Token rejected: tenant mismatch (got %s)", tid)
+            return None
+        return raw
+    except Exception as e:
+        logger.warning("X-ARM-Token decode failed: %s", e)
+        return None
+
+
 async def get_current_user(request: Request) -> User:
     """Extract and validate user from the Authorization header."""
     settings = get_settings()
@@ -118,4 +148,7 @@ async def get_current_user(request: Request) -> User:
     if not oid:
         raise HTTPException(status_code=401, detail="Token missing oid claim")
 
-    return User(oid=oid, email=email, display_name=display_name)
+    # Attach ARM token if the frontend provided one
+    arm_token = _extract_arm_token(request, settings.ENTRA_TENANT_ID)
+
+    return User(oid=oid, email=email, display_name=display_name, arm_token=arm_token)

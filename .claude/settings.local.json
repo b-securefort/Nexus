@@ -40,7 +40,10 @@
       "Bash(python -m pytest tests/test_validate_drawio.py tests/test_patch_drawio.py -x -q)",
       "Bash(python -m pytest tests/ -q)",
       "Bash(python -m pytest tests/ -q --deselect tests/test_new_tools.py::TestGenerateFileTool)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "WebFetch(domain:github.com)",
+      "Bash(python -m pytest tests/test_compaction.py -x)",
+      "Bash(python -m pytest tests/ -q --no-header)"
     ]
   }
 }

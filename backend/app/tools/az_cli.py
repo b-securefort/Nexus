@@ -8,8 +8,10 @@ import sys
 import threading
 from typing import Generator
 
+import os
+
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool, check_shell_injection, _find_az
+from app.tools.base import SUBPROCESS_FLAGS, Tool, check_shell_injection, _find_az, get_arm_token
 from app.tools.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,13 @@ def _is_blocked(az_args: list[str]) -> str | None:
 
 class AzCliTool(Tool):
     name = "az_cli"
-    description = "Execute an Azure CLI command. Requires explicit user approval. The container's managed identity or pre-configured service principal is used for authentication."
+    description = (
+        "Execute an Azure CLI command. Requires explicit user approval. "
+        "Commands run as the authenticated user's own Azure identity — the same permissions "
+        "they have in the Azure portal. If subscription context is needed, use "
+        "['account', 'list'] first to discover available subscriptions, then pass "
+        "'--subscription <id>' in subsequent commands."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -100,6 +108,11 @@ class AzCliTool(Tool):
 
         cmd = [az_path] + [str(a) for a in az_args]
 
+        env = os.environ.copy()
+        arm_token = get_arm_token()
+        if arm_token:
+            env["AZURE_ACCESS_TOKEN"] = arm_token
+
         try:
             result = subprocess.run(
                 cmd,
@@ -107,6 +120,7 @@ class AzCliTool(Tool):
                 text=True,
                 timeout=60,
                 shell=(sys.platform == "win32"),
+                env=env,
                 **SUBPROCESS_FLAGS,
             )
 
@@ -159,8 +173,13 @@ class AzCliTool(Tool):
             err = "Error: Azure CLI is not installed on this server. Circuit breaker is open. Tool disabled."
             yield err
             return err
-            
+
         cmd = [az_path] + [str(a) for a in az_args]
+
+        env = os.environ.copy()
+        arm_token = get_arm_token()
+        if arm_token:
+            env["AZURE_ACCESS_TOKEN"] = arm_token
 
         try:
             proc = subprocess.Popen(
@@ -169,6 +188,7 @@ class AzCliTool(Tool):
                 stderr=subprocess.PIPE,
                 text=True,
                 shell=(sys.platform == "win32"),
+                env=env,
                 **SUBPROCESS_FLAGS,
             )
 

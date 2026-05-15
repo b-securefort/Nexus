@@ -3,16 +3,32 @@ Tool base class and registry.
 """
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import Generator
 
 from app.auth.models import User
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Per-request ARM token for user-identity Azure calls.
+# Set by the orchestrator at the start of each chat turn; read by AzureToolBase._run_az()
+# so every az subprocess authenticates as the current user rather than the server identity.
+_current_arm_token: ContextVar[str | None] = ContextVar("arm_token", default=None)
+
+
+def set_arm_token(token: str | None) -> None:
+    """Store the user's ARM token for the current request context. Called by the orchestrator."""
+    _current_arm_token.set(token)
+
+
+def get_arm_token() -> str | None:
+    return _current_arm_token.get()
 
 
 _az_executable_path: str | None = None
@@ -176,6 +192,13 @@ class AzureToolBase(Tool):
             if injection_err:
                 return injection_err
 
+        # Build subprocess env: inherit everything, then overlay the user's ARM
+        # token so az authenticates as the current user rather than the server identity.
+        env = os.environ.copy()
+        arm_token = _current_arm_token.get()
+        if arm_token:
+            env["AZURE_ACCESS_TOKEN"] = arm_token
+
         try:
             def _run():
                 return subprocess.run(
@@ -184,6 +207,7 @@ class AzureToolBase(Tool):
                     text=True,
                     timeout=timeout,
                     shell=(sys.platform == "win32"),
+                    env=env,
                     **SUBPROCESS_FLAGS,
                 )
             
@@ -278,6 +302,8 @@ def init_tools() -> None:
         "generate_file": settings.TOOL_GENERATE_FILE_ENABLED,
         "validate_drawio": settings.TOOL_VALIDATE_DRAWIO_ENABLED,
         "render_drawio": settings.TOOL_RENDER_DRAWIO_ENABLED,
+        "generate_python_diagram": settings.TOOL_PYTHON_DIAGRAM_ENABLED,
+        "generate_drawio_from_python": settings.TOOL_DRAWIO_FROM_PYTHON_ENABLED,
         "az_devops": settings.TOOL_AZ_DEVOPS_ENABLED,
         "az_policy_check": settings.TOOL_AZ_POLICY_ENABLED,
         "az_advisor": settings.TOOL_AZ_ADVISOR_ENABLED,

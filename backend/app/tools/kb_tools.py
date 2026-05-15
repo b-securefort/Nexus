@@ -16,7 +16,12 @@ logger = logging.getLogger(__name__)
 
 class ReadKBFileTool(Tool):
     name = "read_kb_file"
-    description = "Read the contents of a file from the knowledge base. Path should be relative to the KB root, e.g. 'kb/adrs/adr-001.md'."
+    description = (
+        "Read the full contents of a file from the knowledge base. "
+        "Path must be relative to the KB root (e.g. 'kb/adrs/adr-001.md'). "
+        "Use search_kb or search_kb_semantic first to discover valid paths — "
+        "guessing a path will return 'File not found'."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -50,7 +55,11 @@ class ReadKBFileTool(Tool):
 
 class SearchKBTool(Tool):
     name = "search_kb"
-    description = "Search the knowledge base index by keyword. Returns matching entries with path, title, and summary."
+    description = (
+        "Search the knowledge base index by keyword. Returns matching entries with path, title, and summary. "
+        "Use the returned path values with read_kb_file to read full content. "
+        "If this returns no results or clearly off-topic results, fall back to search_kb_semantic."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {

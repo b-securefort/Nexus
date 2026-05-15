@@ -22,9 +22,11 @@ logger = logging.getLogger(__name__)
 _MAX_QUESTIONS = 4
 _MIN_OPTIONS = 2
 _MAX_OPTIONS = 4
-# Headers are short chips shown next to each question; cap matches Claude
-# Code's AskUserQuestion convention.
-_MAX_HEADER_LEN = 12
+# Headers are short section titles rendered on their own row above each
+# question. A generous backstop keeps a confused model from pasting a
+# paragraph here, but the limit is high enough that natural phrases never
+# trip it.
+_MAX_HEADER_LEN = 80
 
 
 def validate_questions(raw: object) -> tuple[list[dict] | None, str | None]:
@@ -119,8 +121,11 @@ class AskUserTool(Tool):
                         "header": {
                             "type": "string",
                             "description": (
-                                f"Short chip/tag displayed next to the question, "
-                                f"max {_MAX_HEADER_LEN} chars (e.g. 'Topology', 'Region')."
+                                f"Section title rendered on its own row above "
+                                f"the question. Should be a natural phrase like "
+                                f"'Topology', 'Backend access pattern', "
+                                f"'Monitoring and identity'. Max "
+                                f"{_MAX_HEADER_LEN} chars."
                             ),
                         },
                         "options": {

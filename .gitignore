@@ -8,6 +8,8 @@ build/
 .venv/
 venv/
 *.db
+*.db-shm
+*.db-wal
 
 # Environment
 .env
@@ -32,3 +34,10 @@ dist/
 
 # Uploads
 uploads/
+
+# KB embedding/reranker model cache (downloaded on first run)
+backend/models/
+
+# Generated diagram/script artifacts — runtime sandbox, never commit
+backend/output/*
+!backend/output/.gitkeep

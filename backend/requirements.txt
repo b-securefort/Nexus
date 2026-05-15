@@ -14,3 +14,12 @@ pyyaml>=6.0.2
 aiosqlite>=0.20.0
 PyJWT>=2.9.0
 cryptography>=43.0.0
+diagrams>=0.24.0
+
+# KB hybrid retrieval (Phase 2)
+sqlite-vec>=0.1.9
+onnxruntime>=1.26.0
+tokenizers>=0.21.0
+numpy>=1.26.0
+huggingface-hub>=0.27.0
+pypdf>=5.0.0

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from sqlmodel import Session, create_engine
 
 from app.config import get_settings
+from app.db.sqlite_vec_loader import attach_sqlite_vec
 
 _engine = None
 
@@ -21,6 +22,9 @@ def get_engine():
             connect_args=connect_args,
             echo=(settings.APP_ENV == "dev"),
         )
+        # Loads the sqlite-vec extension on every new connection so vec0 virtual
+        # tables and the WAL pragma are in effect for KB hybrid retrieval.
+        attach_sqlite_vec(_engine)
     return _engine
 
 

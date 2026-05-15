@@ -161,10 +161,10 @@ Nexus/
         └── shared/                # Shared skill definitions
             ├── chat-with-kb/SKILL.md      # Default skill — full tool access, proactive execution
             ├── architect/SKILL.md         # Senior architect persona
-            ├── deploy-backend/SKILL.md    # Backend deployment guide
-            ├── deploy-frontend/SKILL.md   # Frontend deployment guide
+            ├── azure-principal-architect/SKILL.md  # Deep architectural review with live Azure queries
             ├── kb-searcher/SKILL.md       # KB-only search skill
-            └── local-runner/SKILL.md      # Local dev server skill
+            ├── drawio-diagrammer/SKILL.md # Azure architecture diagrams as .drawio files
+            └── drawio-from-python/SKILL.md # Draw.io from mingrammer Python DSL
 ```
 
 ## Architecture & Key Concepts

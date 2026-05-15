@@ -65,6 +65,100 @@ def _apply_lightweight_migrations(engine):
             conn.execute(sqlalchemy.text("ALTER TABLE messages ADD COLUMN attachments_json TEXT"))
             conn.commit()
 
+        # Compaction summary cache columns on conversations
+        try:
+            conn.execute(sqlalchemy.text("SELECT summary_text FROM conversations LIMIT 0"))
+        except Exception:
+            logger.info("Adding summary_text column to conversations table")
+            conn.execute(sqlalchemy.text("ALTER TABLE conversations ADD COLUMN summary_text TEXT"))
+            conn.commit()
+        try:
+            conn.execute(sqlalchemy.text("SELECT summary_through_message_id FROM conversations LIMIT 0"))
+        except Exception:
+            logger.info("Adding summary_through_message_id column to conversations table")
+            conn.execute(sqlalchemy.text("ALTER TABLE conversations ADD COLUMN summary_through_message_id INTEGER"))
+            conn.commit()
+
+        # Per-message compression cache (long user pastes + image descriptions)
+        try:
+            conn.execute(sqlalchemy.text("SELECT text_summary FROM messages LIMIT 0"))
+        except Exception:
+            logger.info("Adding text_summary column to messages table")
+            conn.execute(sqlalchemy.text("ALTER TABLE messages ADD COLUMN text_summary TEXT"))
+            conn.commit()
+        try:
+            conn.execute(sqlalchemy.text("SELECT image_summary FROM messages LIMIT 0"))
+        except Exception:
+            logger.info("Adding image_summary column to messages table")
+            conn.execute(sqlalchemy.text("ALTER TABLE messages ADD COLUMN image_summary TEXT"))
+            conn.commit()
+
+        # KB hybrid retrieval virtual tables + triggers (Phase 2). The
+        # regular `kb_chunks` table is created by SQLModel.metadata.create_all
+        # via the model declaration; only the virtual tables and triggers
+        # need raw DDL here.
+        _ensure_kb_virtual_tables(conn)
+
+
+def _ensure_kb_virtual_tables(conn) -> None:
+    """Create kb_chunks_fts (FTS5), kb_chunks_vec (vec0), and the FTS sync
+    triggers if they don't already exist. Idempotent — safe to call on every
+    startup. Logs and continues on failure (e.g., if sqlite-vec extension
+    didn't load on this Python build)."""
+    import sqlalchemy
+
+    statements = [
+        # FTS5 over kb_chunks.text + kb_chunks.heading. `unicode61` tokenizer
+        # WITHOUT porter stemming so technical jargon ("kubernetes", "azure"
+        # vs "kubernet"/"azur") stays intact.
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
+          text, heading,
+          content='kb_chunks', content_rowid='id',
+          tokenize='unicode61 remove_diacritics 2'
+        )
+        """,
+        # Trigger: keep FTS in sync on INSERT
+        """
+        CREATE TRIGGER IF NOT EXISTS kb_chunks_ai AFTER INSERT ON kb_chunks BEGIN
+          INSERT INTO kb_chunks_fts(rowid, text, heading)
+          VALUES (new.id, new.text, new.heading);
+        END
+        """,
+        # Trigger: keep FTS in sync on DELETE
+        """
+        CREATE TRIGGER IF NOT EXISTS kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
+          INSERT INTO kb_chunks_fts(kb_chunks_fts, rowid, text, heading)
+          VALUES('delete', old.id, old.text, old.heading);
+        END
+        """,
+        # Trigger: keep FTS in sync on UPDATE (delete-then-insert pattern per FTS5 docs)
+        """
+        CREATE TRIGGER IF NOT EXISTS kb_chunks_au AFTER UPDATE ON kb_chunks BEGIN
+          INSERT INTO kb_chunks_fts(kb_chunks_fts, rowid, text, heading)
+          VALUES('delete', old.id, old.text, old.heading);
+          INSERT INTO kb_chunks_fts(rowid, text, heading)
+          VALUES (new.id, new.text, new.heading);
+        END
+        """,
+        # vec0 dense vectors (384-dim float32, matches bge-small-en-v1.5).
+        # rowid joins kb_chunks.id explicitly from the reindexer.
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_vec USING vec0(
+          embedding float[384]
+        )
+        """,
+    ]
+    for ddl in statements:
+        try:
+            conn.execute(sqlalchemy.text(ddl))
+        except Exception as e:
+            # If sqlite-vec didn't load we'll fail on the vec0 create; that's
+            # fine — search_kb_hybrid is marked unavailable in that case.
+            logger.warning("KB schema DDL skipped: %s", str(e).split("\n")[0])
+            continue
+    conn.commit()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

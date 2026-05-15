@@ -273,21 +273,36 @@ def resolve_tools(tool_names: list[str]) -> list[Tool]:
 
 
 def init_tools() -> None:
-    """Initialize and register all tools via auto-discovery. Called on startup."""
+    """Initialize and register all tools via auto-discovery. Called on startup.
+
+    Generic tools (app/tools/generic/) are always loaded.
+    Bundle tools (app/tools/azure/, etc.) are loaded only when their
+    TOOL_BUNDLE_*_ENABLED flag is true in config. Teams that fork Nexus
+    add their own bundle directory here and a matching config flag.
+    """
     import pkgutil
     import importlib
-    import app.tools
-    
+    import app.tools.generic
+
     settings = get_settings()
 
-    # 1. Discover and load all modules in app.tools
-    # The Tool.__init_subclass__ hook will automatically register them into TOOL_REGISTRY
-    for _, module_name, _ in pkgutil.iter_modules(app.tools.__path__):
-        if module_name != "base":
+    # 1a. Always load generic tools
+    for _, module_name, _ in pkgutil.iter_modules(app.tools.generic.__path__):
+        if not module_name.startswith("_"):
             try:
-                importlib.import_module(f"app.tools.{module_name}")
+                importlib.import_module(f"app.tools.generic.{module_name}")
             except Exception as e:
-                logger.error("Failed to auto-register tool module %s: %s", module_name, e)
+                logger.error("Failed to load generic tool %s: %s", module_name, e)
+
+    # 1b. Load Azure bundle if enabled
+    if settings.TOOL_BUNDLE_AZURE_ENABLED:
+        import app.tools.azure
+        for _, module_name, _ in pkgutil.iter_modules(app.tools.azure.__path__):
+            if not module_name.startswith("_"):
+                try:
+                    importlib.import_module(f"app.tools.azure.{module_name}")
+                except Exception as e:
+                    logger.error("Failed to load azure tool %s: %s", module_name, e)
 
     # 2. Apply config flags to enable/disable tools
     config_mapping = {

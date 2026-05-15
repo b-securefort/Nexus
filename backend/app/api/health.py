@@ -1,5 +1,7 @@
 """Health check endpoints."""
 
+import asyncio
+
 from fastapi import APIRouter
 
 from app.kb.git_sync import get_last_sync
@@ -45,3 +47,18 @@ async def readyz():
         return {"status": "not_ready", "db_ok": db_ok, "kb_synced": kb_synced}
 
     return {"status": "ready", "db_ok": db_ok, "kb_synced": kb_synced}
+
+
+@router.get("/api/kb/index/status")
+async def kb_index_status():
+    """Return the current KB hybrid-retrieval index status."""
+    from app.kb.reindex import status
+    return status()
+
+
+@router.post("/api/kb/index/rebuild", status_code=202)
+async def kb_index_rebuild():
+    """Trigger a full KB re-index (force=True). Returns immediately; poll /status."""
+    from app.kb.reindex import force_rebuild
+    asyncio.create_task(asyncio.to_thread(force_rebuild))
+    return {"status": "rebuild_started"}

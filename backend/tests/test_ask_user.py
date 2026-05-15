@@ -15,7 +15,7 @@ from app.agent.questions import (
     resolve_question,
     wait_for_answer,
 )
-from app.tools.ask_user import AskUserTool, validate_questions
+from app.tools.generic.ask_user import AskUserTool, validate_questions
 
 
 # ── validate_questions ─────────────────────────────────────────────────────

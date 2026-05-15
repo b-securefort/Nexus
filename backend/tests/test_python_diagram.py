@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from app.auth.models import User
-from app.tools.python_diagram import (
+from app.tools.generic.python_diagram import (
     GeneratePythonDiagramTool,
     _DiagramKwargInjector,
     _subprocess_env,

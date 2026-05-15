@@ -161,7 +161,7 @@ class GenerateFileTool(Tool):
                 f"Full path: {target}"
             )
             if ext == ".drawio":
-                from app.tools.validate_drawio import validate_drawio_file
+                from app.tools.generic.validate_drawio import validate_drawio_file
                 report = validate_drawio_file(target)
                 result += f"\n\nAuto-validation:\n{report}"
 
@@ -173,7 +173,7 @@ class GenerateFileTool(Tool):
                 # unreachable) doesn't fail the write.
                 if "Validation FAILED: XML parse error" not in report:
                     try:
-                        from app.tools.render_drawio import render_drawio_to_disk
+                        from app.tools.generic.render_drawio import render_drawio_to_disk
                         out_path, mode, render_err = render_drawio_to_disk(filename, "png")
                     except Exception as e:  # noqa: BLE001
                         out_path, mode, render_err = None, None, str(e)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.validate_drawio import validate_drawio_file
+from app.tools.generic.validate_drawio import validate_drawio_file
 
 
 def _wrap(cells_xml: str) -> str:
@@ -432,7 +432,7 @@ def test_generate_file_auto_validates_drawio(tmp_path, monkeypatch):
     """generate_file must run validate_drawio automatically on .drawio writes
     so the model can't bypass validation."""
     from app.auth.models import User
-    from app.tools import generate_file as gen_mod
+    from app.tools.generic import generate_file as gen_mod
 
     monkeypatch.setattr(gen_mod, "_OUTPUT_DIR", tmp_path)
     tool = gen_mod.GenerateFileTool()
@@ -462,8 +462,8 @@ def test_generate_file_auto_renders_drawio(tmp_path, monkeypatch):
     PNG render, then assert generate_file's result advertises the render.
     """
     from app.auth.models import User
-    from app.tools import generate_file as gen_mod
-    from app.tools import render_drawio as render_mod
+    from app.tools.generic import generate_file as gen_mod
+    from app.tools.generic import render_drawio as render_mod
 
     monkeypatch.setattr(gen_mod, "_OUTPUT_DIR", tmp_path)
 
@@ -496,8 +496,8 @@ def test_generate_file_skips_render_on_xml_parse_failure(tmp_path, monkeypatch):
     """If validation reports an XML parse error, auto-render is skipped — the
     renderer would fail too and we want a clean result, not a noisy one."""
     from app.auth.models import User
-    from app.tools import generate_file as gen_mod
-    from app.tools import render_drawio as render_mod
+    from app.tools.generic import generate_file as gen_mod
+    from app.tools.generic import render_drawio as render_mod
 
     monkeypatch.setattr(gen_mod, "_OUTPUT_DIR", tmp_path)
     called = {"count": 0}

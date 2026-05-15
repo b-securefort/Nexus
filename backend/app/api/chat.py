@@ -39,7 +39,7 @@ from app.db.models import (
     PendingQuestion,
     UserRecord,
 )
-from app.tools.ask_user import validate_questions
+from app.tools.generic.ask_user import validate_questions
 from app.deps import current_user
 from app.config import get_settings
 from app.skills.loader import load_skill

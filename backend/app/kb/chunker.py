@@ -134,37 +134,49 @@ def chunk_markdown(kb_path: str, content: str) -> list[Chunk]:
     h1_m = _H1_RE.search(body)
     doc_title = h1_m.group(1).strip() if h1_m else Path(kb_path).stem.replace("-", " ").title()
 
-    # Split on H2 boundaries — these are the primary chunk boundaries.
-    # We keep the heading line at the top of each section's text.
-    h2_splits: list[tuple[str, str, str]] = []  # (h2_title, h3_title, text_block)
+    # Split on H2 boundaries (primary), then H3 within each H2 block (secondary).
+    # Tracking H3 at flush time (old approach) recorded the *last* H3 in a block
+    # for *all* content in that block — wrong when a block has multiple subsections.
+    # Two-pass: first collect (h2, raw_block) pairs; then within each block collect
+    # (h2, h3, sub_block) pairs by splitting at H3 lines.
+
+    # Pass 1 — split at H2 boundaries
+    h2_raw: list[tuple[str, str]] = []   # (h2_title, text_block)
     current_h2 = ""
-    current_h3 = ""
     current_lines: list[str] = []
 
     for line in body.splitlines(keepends=True):
         h2_m = _H2_RE.match(line)
-        h3_m = _H3_RE.match(line)
-
         if h2_m:
-            # Flush previous section
             if current_lines:
-                h2_splits.append((current_h2, current_h3, "".join(current_lines)))
+                h2_raw.append((current_h2, "".join(current_lines)))
             current_h2 = h2_m.group(1).strip()
-            current_h3 = ""
             current_lines = [line]
-        elif h3_m:
-            current_h3 = h3_m.group(1).strip()
-            current_lines.append(line)
         else:
             current_lines.append(line)
-
-    # Flush last section
     if current_lines:
-        h2_splits.append((current_h2, current_h3, "".join(current_lines)))
+        h2_raw.append((current_h2, "".join(current_lines)))
 
-    # If there were no H2 headings, the whole document is one block.
-    if not h2_splits:
-        h2_splits = [("", "", body)]
+    if not h2_raw:
+        h2_raw = [("", body)]
+
+    # Pass 2 — split each H2 block at H3 boundaries so each sub-block
+    # carries the H3 that was *active when its content was written*.
+    h2_splits: list[tuple[str, str, str]] = []   # (h2_title, h3_title, text_block)
+    for h2_title, h2_block in h2_raw:
+        current_h3 = ""
+        h3_lines: list[str] = []
+        for line in h2_block.splitlines(keepends=True):
+            h3_m = _H3_RE.match(line)
+            if h3_m:
+                if h3_lines:
+                    h2_splits.append((h2_title, current_h3, "".join(h3_lines)))
+                current_h3 = h3_m.group(1).strip()
+                h3_lines = [line]
+            else:
+                h3_lines.append(line)
+        if h3_lines:
+            h2_splits.append((h2_title, current_h3, "".join(h3_lines)))
 
     chunks: list[Chunk] = []
     chunk_idx = 0

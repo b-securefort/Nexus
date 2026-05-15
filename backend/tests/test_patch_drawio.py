@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from app.auth.models import User
-from app.tools import patch_drawio as patch_mod
-from app.tools.patch_drawio import _patch_geometry, PatchDrawioCellTool
+from app.tools.generic import patch_drawio as patch_mod
+from app.tools.generic.patch_drawio import _patch_geometry, PatchDrawioCellTool
 
 
 _USER = User(oid="t", email="t@t.com", display_name="t")

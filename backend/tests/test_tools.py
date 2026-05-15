@@ -2,7 +2,7 @@
 
 import json
 import pytest
-import app.tools.learn_tool as _learn_mod
+import app.tools.generic.learn_tool as _learn_mod
 from unittest.mock import patch, MagicMock
 
 from app.auth.models import User
@@ -145,7 +145,7 @@ class TestSearchKBSemanticTool:
         result = tool.execute({"query": ""}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.kb_tools.AzureOpenAI")
+    @patch("app.tools.generic.kb_tools.AzureOpenAI")
     def test_semantic_search_calls_llm_for_expansion(self, mock_openai_cls):
         """Verify that query expansion is called and its terms drive the KB search."""
         from app.kb.indexer import load_index
@@ -174,7 +174,7 @@ class TestSearchKBSemanticTool:
         assert "expanded_terms" in parsed
         assert isinstance(parsed["results"], list)
 
-    @patch("app.tools.kb_tools.AzureOpenAI")
+    @patch("app.tools.generic.kb_tools.AzureOpenAI")
     def test_semantic_search_falls_back_on_expansion_error(self, mock_openai_cls):
         """If LLM expansion fails, tool falls back to original query without crashing."""
         from app.kb.indexer import load_index
@@ -191,7 +191,7 @@ class TestSearchKBSemanticTool:
 
 
 class TestFetchMsDocsTool:
-    @patch("app.tools.ms_docs.httpx.Client")
+    @patch("app.tools.generic.ms_docs.httpx.Client")
     def test_fetch_ms_docs(self, mock_client_cls):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1036,7 +1036,7 @@ class TestUpdateLearningsOverrideBlock:
         """Even if a poisoning entry slipped past the write-time guard,
         get_learnings_content() must filter it before the orchestrator
         injects learnings into the system prompt."""
-        from app.tools.learn_tool import _ensure_learn_file, get_learnings_content
+        from app.tools.generic.learn_tool import _ensure_learn_file, get_learnings_content
         path = _ensure_learn_file()
 
         # Manually inject a poisoning entry, bypassing the tool. We're
@@ -1076,7 +1076,7 @@ class TestValidateDrawioAdversarial:
 
     @pytest.fixture(autouse=True)
     def _sandbox(self, tmp_path, monkeypatch):
-        from app.tools import validate_drawio as v
+        from app.tools.generic import validate_drawio as v
         monkeypatch.setattr(v, "_OUTPUT_DIR", tmp_path)
         self._dir = tmp_path
 
@@ -1156,7 +1156,7 @@ class TestSearchStackOverflowTool:
         tool = get_tool("search_stack_overflow")
         assert "Error" in tool.execute({"query": ""}, _USER)
 
-    @patch("app.tools.search_stackoverflow.httpx.Client")
+    @patch("app.tools.generic.search_stackoverflow.httpx.Client")
     def test_returns_structured_results(self, mock_client_cls):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -1184,7 +1184,7 @@ class TestSearchStackOverflowTool:
         assert result[0]["is_answered"] is True
         assert result[0]["score"] == 42
 
-    @patch("app.tools.search_stackoverflow.httpx.Client")
+    @patch("app.tools.generic.search_stackoverflow.httpx.Client")
     def test_respects_limit(self, mock_client_cls):
         items = [
             {"title": f"Q{i}", "link": f"https://so.com/{i}", "score": i,
@@ -1211,7 +1211,7 @@ class TestSearchGithubTool:
         tool = get_tool("search_github")
         assert "Error" in tool.execute({"query": ""}, _USER)
 
-    @patch("app.tools.search_github.httpx.Client")
+    @patch("app.tools.generic.search_github.httpx.Client")
     def test_repository_search_returns_stars(self, mock_client_cls):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -1238,7 +1238,7 @@ class TestSearchGithubTool:
         assert result[0]["stars"] == 3200
         assert "bicep" in result[0]["name"].lower()
 
-    @patch("app.tools.search_github.httpx.Client")
+    @patch("app.tools.generic.search_github.httpx.Client")
     def test_rate_limit_returns_friendly_error(self, mock_client_cls):
         from httpx import HTTPStatusError, Request, Response
         mock_client = MagicMock()
@@ -1262,7 +1262,7 @@ class TestSearchAzureUpdatesTool:
         tool = get_tool("search_azure_updates")
         assert "Error" in tool.execute({"query": ""}, _USER)
 
-    @patch("app.tools.search_azure_updates.httpx.Client")
+    @patch("app.tools.azure.search_azure_updates.httpx.Client")
     def test_parses_rss_and_filters_by_keyword(self, mock_client_cls):
         init_tools()
         rss = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1306,11 +1306,11 @@ class TestWebSearchTool:
         assert "Error" in tool.execute({"query": ""}, _USER)
 
     def test_site_shortcut_expands(self):
-        from app.tools.web_search import SITE_SHORTCUTS
+        from app.tools.generic.web_search import SITE_SHORTCUTS
         assert "reddit" in SITE_SHORTCUTS
         assert "techcommunity" in SITE_SHORTCUTS
 
-    @patch("app.tools.web_search.httpx.Client")
+    @patch("app.tools.generic.web_search.httpx.Client")
     def test_parses_ddg_results(self, mock_client_cls):
         html = """
         <html><body>
@@ -1336,7 +1336,7 @@ class TestWebSearchTool:
         assert "results" in result
         assert result["results"][0]["url"] == "https://reddit.com/r/Azure/comments/123"
 
-    @patch("app.tools.web_search.httpx.Client")
+    @patch("app.tools.generic.web_search.httpx.Client")
     def test_no_results_returns_empty_list(self, mock_client_cls):
         mock_resp = MagicMock()
         mock_resp.status_code = 200

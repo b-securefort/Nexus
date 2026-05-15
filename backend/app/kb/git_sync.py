@@ -87,5 +87,8 @@ async def start_periodic_sync():
         await asyncio.sleep(interval)
         try:
             sync_repo()
+            # Re-index after sync so new/changed KB files are searchable
+            from app.kb.reindex import reindex_all
+            await asyncio.to_thread(reindex_all)
         except Exception as e:
             logger.error("Periodic KB sync failed: %s", str(e))

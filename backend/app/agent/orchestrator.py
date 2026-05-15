@@ -147,12 +147,15 @@ def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") ->
     pinned at the end of the prompt so it survives history compaction and
     keeps the model focused across long tool-heavy turns.
     """
-    from app.tools.learn_tool import get_learnings_content
-    from app.tools.az_login_check import get_az_context_prompt
+    from app.tools.generic.learn_tool import get_learnings_content
 
     kb_summary = get_index_summary()
     learnings = get_learnings_content()
-    az_context = get_az_context_prompt()
+    try:
+        from app.tools.azure.az_login_check import get_az_context_prompt
+        az_context = get_az_context_prompt()
+    except ImportError:
+        az_context = ""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # --- Static content FIRST (maximizes Azure OpenAI prompt cache prefix) ---
@@ -843,7 +846,7 @@ async def handle_chat(
                     # persist a PendingQuestion, emit the SSE event, await
                     # the answer, and feed the structured answers back to
                     # the model as the tool result.
-                    from app.tools.ask_user import validate_questions
+                    from app.tools.generic.ask_user import validate_questions
                     validated, validation_err = validate_questions(
                         func_args.get("questions")
                     )
@@ -1008,8 +1011,11 @@ async def handle_chat(
                 if func_name in _COMMAND_TOOLS and is_error:
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
-                        from app.tools.az_login_check import clear_login_cache
-                        clear_login_cache()
+                        try:
+                            from app.tools.azure.az_login_check import clear_login_cache
+                            clear_login_cache()
+                        except ImportError:
+                            pass
 
                     # Track this failure
                     failure_tracker[func_name] = failure_tracker.get(func_name, 0) + 1

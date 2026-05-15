@@ -12,7 +12,7 @@ import os
 
 from app.auth.models import User
 from app.tools.base import SUBPROCESS_FLAGS, Tool, check_shell_injection, _find_az, get_arm_token
-from app.tools.az_login_check import require_az_login, clear_login_cache
+from app.tools.azure.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
 

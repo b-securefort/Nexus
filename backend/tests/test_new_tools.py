@@ -35,7 +35,7 @@ def _ensure_logged_in_cache(request):
         # These tests exercise the cache directly — leave them alone.
         yield
         return
-    from app.tools import az_login_check
+    from app.tools.azure import az_login_check
     az_login_check._cached_state = az_login_check.AzLoginState(
         logged_in=True,
         user="test@test.com",
@@ -76,15 +76,15 @@ def _patch_az_logged_in():
     from contextlib import ExitStack
     modules = [
         # Each tool module imports require_az_login at module load — patch each.
-        "app.tools.az_cost",
-        "app.tools.az_monitor",
-        "app.tools.az_rest",
-        "app.tools.az_policy",
-        "app.tools.az_advisor",
-        "app.tools.network_test",
-        "app.tools.az_cli",
-        "app.tools.az_resource_graph",
-        "app.tools.az_devops",
+        "app.tools.azure.az_cost",
+        "app.tools.azure.az_monitor",
+        "app.tools.azure.az_rest",
+        "app.tools.azure.az_policy",
+        "app.tools.azure.az_advisor",
+        "app.tools.azure.network_test",
+        "app.tools.azure.az_cli",
+        "app.tools.azure.az_resource_graph",
+        "app.tools.azure.az_devops",
     ]
     stack = ExitStack()
     for mod in modules:
@@ -98,15 +98,15 @@ def _patch_az_not_logged_in():
     from contextlib import ExitStack
     modules = [
         # Each tool module imports require_az_login at module load — patch each.
-        "app.tools.az_cost",
-        "app.tools.az_monitor",
-        "app.tools.az_rest",
-        "app.tools.az_policy",
-        "app.tools.az_advisor",
-        "app.tools.network_test",
-        "app.tools.az_cli",
-        "app.tools.az_resource_graph",
-        "app.tools.az_devops",
+        "app.tools.azure.az_cost",
+        "app.tools.azure.az_monitor",
+        "app.tools.azure.az_rest",
+        "app.tools.azure.az_policy",
+        "app.tools.azure.az_advisor",
+        "app.tools.azure.network_test",
+        "app.tools.azure.az_cli",
+        "app.tools.azure.az_resource_graph",
+        "app.tools.azure.az_devops",
     ]
     stack = ExitStack()
     for mod in modules:
@@ -122,12 +122,12 @@ class TestAzLoginCheck:
     """Tests for the az_login_check module."""
 
     def setup_method(self):
-        from app.tools.az_login_check import clear_login_cache
+        from app.tools.azure.az_login_check import clear_login_cache
         clear_login_cache()
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_logged_in(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -144,9 +144,9 @@ class TestAzLoginCheck:
         assert state.subscription_id == "sub-123"
         assert state.tenant_id == "tenant-456"
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_not_logged_in(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_failure("Please run 'az login' to setup account.")
@@ -154,9 +154,9 @@ class TestAzLoginCheck:
         assert state.logged_in is False
         assert "az login" in state.error
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_cache_hit(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -172,9 +172,9 @@ class TestAzLoginCheck:
         assert mock_run.call_count == 1  # NOT called again
         assert state2.logged_in is True
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_clear_cache(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -187,9 +187,9 @@ class TestAzLoginCheck:
         check_az_login()
         assert mock_run.call_count == 2
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_require_az_login_ok(self, mock_run):
-        from app.tools.az_login_check import require_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import require_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -200,9 +200,9 @@ class TestAzLoginCheck:
         result = require_az_login()
         assert result is None
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_require_az_login_not_logged_in(self, mock_run):
-        from app.tools.az_login_check import require_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import require_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_failure("Please run az login")
@@ -210,27 +210,27 @@ class TestAzLoginCheck:
         assert result is not None
         assert "az login --use-device-code" in result
 
-    @patch("app.tools.az_login_check.subprocess.run", side_effect=FileNotFoundError)
+    @patch("app.tools.azure.az_login_check.subprocess.run", side_effect=FileNotFoundError)
     def test_require_az_login_not_installed(self, mock_run):
-        from app.tools.az_login_check import require_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import require_az_login, clear_login_cache
         clear_login_cache()
 
         result = require_az_login()
         assert result is not None
         assert "not installed" in result
 
-    @patch("app.tools.az_login_check.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=15))
+    @patch("app.tools.azure.az_login_check.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="az", timeout=15))
     def test_timeout(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         state = check_az_login(force_refresh=True)
         assert state.logged_in is False
         assert "timed out" in state.error
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_invalid_json(self, mock_run):
-        from app.tools.az_login_check import check_az_login, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success("not json {{{")
@@ -239,15 +239,15 @@ class TestAzLoginCheck:
         assert "parse" in state.error.lower()
 
     def test_context_prompt_unknown(self):
-        from app.tools.az_login_check import get_az_context_prompt, clear_login_cache
+        from app.tools.azure.az_login_check import get_az_context_prompt, clear_login_cache
         clear_login_cache()
 
         prompt = get_az_context_prompt()
         assert "Unknown" in prompt
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_context_prompt_logged_in(self, mock_run):
-        from app.tools.az_login_check import check_az_login, get_az_context_prompt, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, get_az_context_prompt, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_success(json.dumps({
@@ -260,9 +260,9 @@ class TestAzLoginCheck:
         assert "user@test.com" in prompt
         assert "MySub" in prompt
 
-    @patch("app.tools.az_login_check.subprocess.run")
+    @patch("app.tools.azure.az_login_check.subprocess.run")
     def test_context_prompt_not_logged_in(self, mock_run):
-        from app.tools.az_login_check import check_az_login, get_az_context_prompt, clear_login_cache
+        from app.tools.azure.az_login_check import check_az_login, get_az_context_prompt, clear_login_cache
         clear_login_cache()
 
         mock_run.return_value = _mock_subprocess_failure("Not logged in")
@@ -1073,7 +1073,7 @@ class TestNetworkTestTool:
         }, _USER)
         assert "failed" in result.lower() or "error" in result.lower()
 
-    @patch("app.tools.network_test.socket.create_connection")
+    @patch("app.tools.azure.network_test.socket.create_connection")
     def test_port_check_success(self, mock_conn):
         tool = get_tool("network_test")
         mock_sock = MagicMock()
@@ -1086,7 +1086,7 @@ class TestNetworkTestTool:
         assert "SUCCESS" in result
         mock_sock.close.assert_called_once()
 
-    @patch("app.tools.network_test.socket.create_connection", side_effect=ConnectionRefusedError)
+    @patch("app.tools.azure.network_test.socket.create_connection", side_effect=ConnectionRefusedError)
     def test_port_check_refused(self, mock_conn):
         tool = get_tool("network_test")
         result = tool.execute({
@@ -1096,7 +1096,7 @@ class TestNetworkTestTool:
         }, _USER)
         assert "REFUSED" in result
 
-    @patch("app.tools.network_test.socket.create_connection", side_effect=socket.timeout)
+    @patch("app.tools.azure.network_test.socket.create_connection", side_effect=socket.timeout)
     def test_port_check_timeout(self, mock_conn):
         import socket
         tool = get_tool("network_test")
@@ -1181,7 +1181,7 @@ class TestWebFetchTool:
     def test_http_localhost_allowed(self):
         """HTTP to localhost should be allowed."""
         tool = get_tool("web_fetch")
-        with patch("app.tools.web_fetch._shared_client") as mock_client:
+        with patch("app.tools.generic.web_fetch._shared_client") as mock_client:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.text = "OK"
@@ -1201,7 +1201,7 @@ class TestWebFetchTool:
         result = tool.execute({"url": "not a url at all"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_fetch_success_text_mode(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
@@ -1214,7 +1214,7 @@ class TestWebFetchTool:
         assert "Hello World" in result
         assert "<html>" not in result  # HTML should be stripped
 
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_fetch_raw_mode(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
@@ -1229,7 +1229,7 @@ class TestWebFetchTool:
         }, _USER)
         assert "<html>" in result  # HTML should NOT be stripped in raw mode
 
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_fetch_headers_only(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
@@ -1244,7 +1244,7 @@ class TestWebFetchTool:
         assert "Status: 200" in result
         assert "content-type" in result
 
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_http_error_status(self, mock_client):
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
@@ -1256,7 +1256,7 @@ class TestWebFetchTool:
         assert "Error" in result
         assert "404" in result
 
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_connection_error(self, mock_client):
         import httpx
         mock_client.get.side_effect = httpx.ConnectError("Connection refused")
@@ -1265,8 +1265,8 @@ class TestWebFetchTool:
         result = tool.execute({"url": "https://nonexistent.example.com"}, _USER)
         assert "Error" in result
 
-    @patch("app.tools.web_fetch._is_private_or_internal_host", return_value=False)
-    @patch("app.tools.web_fetch._shared_client")
+    @patch("app.tools.generic.web_fetch._is_private_or_internal_host", return_value=False)
+    @patch("app.tools.generic.web_fetch._shared_client")
     def test_timeout_error(self, mock_client, _mock_ssrf):
         import httpx
         mock_client.get.side_effect = httpx.TimeoutException("Timed out")

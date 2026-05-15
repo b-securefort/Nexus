@@ -26,8 +26,8 @@ from pathlib import Path
 
 from app.auth.models import User
 from app.tools.base import SUBPROCESS_FLAGS, Tool
-from app.tools._drawio_emitter import pipeline as _pipeline
-from app.tools.python_diagram import _subprocess_env  # reuse the Windows-PATH fixup
+from app.tools.generic._drawio_emitter import pipeline as _pipeline
+from app.tools.generic.python_diagram import _subprocess_env  # reuse the Windows-PATH fixup
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ class GenerateDrawioFromPythonTool(Tool):
 
         # Auto-validate the resulting .drawio (same as generate_file does).
         try:
-            from app.tools.validate_drawio import validate_drawio_file
+            from app.tools.generic.validate_drawio import validate_drawio_file
             report = validate_drawio_file(drawio_path)
         except Exception as e:  # noqa: BLE001
             report = f"Validation skipped due to error: {e}"
@@ -250,7 +250,7 @@ class GenerateDrawioFromPythonTool(Tool):
         render_note = ""
         if "Validation FAILED: XML parse error" not in report:
             try:
-                from app.tools.render_drawio import render_drawio_to_disk
+                from app.tools.generic.render_drawio import render_drawio_to_disk
                 out_path, mode, render_err = render_drawio_to_disk(f"{stem}.drawio", "png")
             except Exception as e:  # noqa: BLE001
                 out_path, mode, render_err = None, None, str(e)

@@ -265,3 +265,26 @@ class TestHeadingBreadcrumb:
         doc = "## Section\n\nContent.\n"
         chunks = chunk_markdown("kb/my-document.md", doc)
         assert any("My Document" in c.heading for c in chunks)
+
+    def test_h3_heading_reflects_active_subsection_not_last(self):
+        # Regression: old code recorded the *last* H3 in a block for all content.
+        # Windows content must not get tagged with "Linux" as its H3.
+        doc = (
+            "# Guide\n\n"
+            "## Installation\n\n"
+            "Preamble.\n\n"
+            "### Windows\n\n"
+            "Windows steps.\n\n"
+            "### Linux\n\n"
+            "Linux steps.\n"
+        )
+        chunks = chunk_markdown("kb/guide.md", doc)
+        windows_chunks = [c for c in chunks if "Windows steps" in c.text]
+        linux_chunks   = [c for c in chunks if "Linux steps" in c.text]
+        assert windows_chunks, "Expected a chunk containing Windows content"
+        assert all("Windows" in c.heading for c in windows_chunks), (
+            f"Windows content has wrong heading: {[c.heading for c in windows_chunks]}"
+        )
+        assert all("Linux" not in c.heading for c in windows_chunks), (
+            "Windows content was incorrectly tagged with Linux H3"
+        )

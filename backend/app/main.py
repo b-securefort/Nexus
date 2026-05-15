@@ -33,11 +33,11 @@ KB_SYNC = Counter("kb_sync_total", "KB sync attempts", ["result"])
 
 def _setup_logging():
     """Configure structured JSON logging."""
-    from pythonjsonlogger import jsonlogger
+    from pythonjsonlogger.json import JsonFormatter
 
     settings = get_settings()
     handler = logging.StreamHandler()
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         "%(asctime)s %(levelname)s %(name)s %(message)s",
         rename_fields={"asctime": "timestamp", "levelname": "level", "name": "logger"},
     )
@@ -141,11 +141,11 @@ def _ensure_kb_virtual_tables(conn) -> None:
           VALUES (new.id, new.text, new.heading);
         END
         """,
-        # vec0 dense vectors (384-dim float32, matches bge-small-en-v1.5).
+        # vec0 dense vectors (1536-dim float32, matches Azure OpenAI text-embedding-3-small).
         # rowid joins kb_chunks.id explicitly from the reindexer.
         """
         CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_vec USING vec0(
-          embedding float[384]
+          embedding float[1536]
         )
         """,
     ]
@@ -181,6 +181,10 @@ async def lifespan(app: FastAPI):
     sync_repo()
     load_index()
     load_shared_skills()
+
+    # Kick KB hybrid-retrieval reindex in background (non-blocking)
+    from app.kb.reindex import reindex_all
+    asyncio.create_task(asyncio.to_thread(reindex_all))
 
     # Start background tasks
     sync_task = asyncio.create_task(start_periodic_sync())

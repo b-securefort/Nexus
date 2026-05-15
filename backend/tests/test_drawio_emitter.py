@@ -8,7 +8,7 @@ extraction, container styling, coordinate translation, and XML emission.
 
 import pytest
 
-from app.tools._drawio_emitter import (
+from app.tools.generic._drawio_emitter import (
     _Cluster,
     _Edge,
     _Node,

@@ -22,22 +22,24 @@ from sqlalchemy import event
 
 logger = logging.getLogger(__name__)
 
-_hybrid_disabled: bool = False
-_disabled_reason: str = ""
+# Set once at engine-init time when sqlite-vec cannot be loaded.
+# Not re-evaluated per request — mid-run .so deletion requires a process restart.
+_vec_load_failed: bool = False
+_vec_load_failed_reason: str = ""
 
 
 def hybrid_disabled() -> bool:
-    return _hybrid_disabled
+    return _vec_load_failed
 
 
 def disabled_reason() -> str:
-    return _disabled_reason
+    return _vec_load_failed_reason
 
 
 def _mark_disabled(reason: str) -> None:
-    global _hybrid_disabled, _disabled_reason
-    _hybrid_disabled = True
-    _disabled_reason = reason
+    global _vec_load_failed, _vec_load_failed_reason
+    _vec_load_failed = True
+    _vec_load_failed_reason = reason
 
 
 def attach_sqlite_vec(engine) -> None:

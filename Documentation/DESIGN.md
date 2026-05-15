@@ -29,7 +29,7 @@ add a new §5 entry referencing it. The history is the value.
 
 ## 1. What Nexus is
 
-Nexus is a self-hosted AI assistant for Azure cloud teams. It combines an LLM
+Nexus is a self-hosted AI assistant for any IT team. It combines an LLM
 (Azure OpenAI) with a team knowledge base (KB) synced from Git, a switchable
 "skills" system (named personas with scoped toolsets), and approval-gated
 execution of real tools (`az` CLI, PowerShell, Azure Resource Graph queries,
@@ -192,15 +192,12 @@ retrieval, etc.).
 | `prometheus-client` | Metrics | Standard scrape target; aligns with the rest of the Azure shop |
 | `pypdf` *(Phase 2a)* | PDF text extraction | Pure-Python, no Java/Tesseract, sufficient for born-digital PDFs which is what we have |
 | `sqlite-vec` *(Phase 2)* | Local vector search | Runs as a SQLite extension *in the existing app.db* — no separate vector DB, no Node runtime. Ships Win/Linux wheels. |
-| `onnxruntime` *(Phase 2)* | Local embeddings + reranker | ~50 MB CPU runtime; ~5× lighter than sentence-transformers (which transitively pulls torch ~750 MB). Faster cold start, no GPU needed. |
-| `tokenizers` *(Phase 2)* | bge tokenization | HF's Rust tokenizer — matches the upstream bge tokenizer exactly |
-| `huggingface-hub` *(Phase 2)* | First-run model fetch | Authoritative source of the bge ONNX exports; supports `KB_EMBED_MODEL_DIR` override for air-gapped installs |
-| `numpy` *(Phase 2)* | Vector math | Required transitively by onnxruntime; we use it directly for embedding pooling + normalization |
+| `numpy` *(Phase 2)* | Vector math | L2-normalise the 1536-dim embeddings returned by Azure OpenAI before storing in vec0 (cosine similarity requires unit vectors) |
 | `diagrams` | python_diagram tool | Renders Azure architecture diagrams as code; only used by the diagram-authoring tools |
 
 **Rejected (and why)** — short list of options we considered and didn't take:
-- `qmd` — Node.js + 2 GB GGUF models. Too much infra for what `sqlite-vec` + `onnxruntime` give us in Python.
-- `sentence-transformers` — pulls torch (~750 MB). Pure inference doesn't need a training framework.
+- `qmd` — Node.js + 2 GB GGUF models. Too much infra for what `sqlite-vec` + Azure OpenAI embeddings give us in Python.
+- `onnxruntime` / `sentence-transformers` / local ONNX models — considered for bge-small-en-v1.5 embeddings, rejected: bge-small (384 dim) is lower quality than `text-embedding-3-small` (1536 dim); local models add ~412 MB of download and an air-gapped install procedure; Azure OpenAI is already our trusted endpoint for every chat turn. See §5 "Azure OpenAI text-embedding-3-small" decision.
 - `Mem0` — paid cross-session memory service. Violates the local-only constraint and we already have `learn.md` for system-wide mistake memory.
 - `Faiss` — better at billions of vectors, but separate-file index and harder ops. We're at thousands of chunks.
 
@@ -226,7 +223,7 @@ migration path (see §5 decision log).
 | `personal_skills` | user_oid, name, system_prompt, tools_json | api/skills | skills loader | until user deletes |
 | **`kb_chunks`** *(Phase 2)* | kb_path, chunk_idx, heading, text, content_hash, file_mtime, source_url, embed_model | KB reindexer | search_kb_hybrid | until source file removed/changed |
 | **`kb_chunks_fts`** *(virtual)* | FTS5 over `kb_chunks.text + heading`, `tokenize=unicode61` | triggers on `kb_chunks` | search_kb_hybrid (BM25 stage) | n/a |
-| **`kb_chunks_vec`** *(virtual)* | vec0(float[384]), joined by rowid==kb_chunks.id | reindexer (explicit) | search_kb_hybrid (vector stage) | n/a |
+| **`kb_chunks_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==kb_chunks.id — 1536 dims matches Azure OpenAI `text-embedding-3-small` | reindexer (explicit) | search_kb_hybrid (vector stage) | n/a |
 
 WAL mode is enabled on every new SQLite connection by
 [sqlite_vec_loader.py](../backend/app/db/sqlite_vec_loader.py) so periodic
@@ -410,6 +407,99 @@ accepted because Nexus is a self-hosted internal tool with a single DB file
 and infrequent schema changes. If multi-instance deployment or complex
 data-transform migrations arise, Alembic can be reinstated as the active path.
 
+### 2026-05-15 — Tool bundles within one repo for internal team separation
+
+Azure-specific tools are grouped under `app/tools/azure/` and loaded only
+when `TOOL_BUNDLE_AZURE_ENABLED=true` in `.env`. Generic tools
+(`app/tools/generic/`) are always loaded. Future team bundles (`aws/`,
+`ad/`, `dns/`) follow the same pattern: add a directory, add an enable
+flag, PR into core. All teams in this organisation have access to the core
+repo, so separate tool repositories were considered and rejected: they would
+require core to be a versioned pip package, a compatibility matrix between
+core and tool-repo versions, and separate CI pipelines — significant overhead
+for a problem solvable with a directory and one env flag.
+**Trade-off**: adding a new team's tools requires a PR to the core repo;
+acceptable because tool implementations change infrequently compared to
+skills and KB content, which teams already own via their KB Git repo.
+
+### 2026-05-15 — Inner-source fork model for multi-team adoption
+
+Internal teams adopt Nexus by forking the repo and adding their tools
+exclusively under `app/tools/<teamname>/`. Core files (`app/tools/generic/`,
+`app/agent/`, `app/api/`, `app/db/`, `app/kb/`) are never modified in forks.
+This keeps the upstream merge surface clean — a team's bundle directory
+does not exist in the upstream repo, so `git pull` never touches it.
+Teams pull upstream when they want core improvements; their private tools
+and KB repo remain unaffected. A central plugin registry was considered
+and rejected: it requires core to be a versioned package and adds a
+compatibility matrix not justified for internal teams.
+**Trade-off**: teams own their fork's operational burden; core improvements
+are opt-in (pull), not automatic. Acceptable for an internal tool where
+teams control their own deployment cadence.
+
+### 2026-05-15 — bge-small asymmetric query prefix for hybrid retrieval
+
+When searching the KB, the embedder adds a special instruction prefix to the
+**query** text before computing its vector, but **not** to the document (chunk)
+text that was stored at index time. The prefix is:
+`"Represent this sentence for searching relevant passages: "`.
+
+**Why this matters for beginners**: an embedding model turns text into a list of
+~384 numbers (a "vector") that encodes its meaning. The closer two vectors are
+(cosine distance), the more semantically similar the texts. The bge-small model
+was trained on pairs of (query, relevant-document) where the query always had
+this prefix and the document never did — this is called *asymmetric* prompting
+because query and document are treated differently. If you use the same prefix
+for both (or no prefix for either), the model still produces plausible-looking
+numbers but retrieval quality drops measurably (~3 MTEB benchmark points). This
+is not obvious from the model name or the ONNX file — it is documented in the
+model's README on HuggingFace.
+
+**Trade-off**: the embedder must know *at call time* whether it is embedding a
+query or a document and branch accordingly. A future model swap must verify
+whether the replacement model also uses asymmetric prompting, uses a different
+prefix, or expects the same text for both sides — this check belongs in the
+PR that changes `KB_EMBED_MODEL_NAME`.
+
+### 2026-05-15 — Azure OpenAI text-embedding-3-small for KB hybrid retrieval, no local ONNX models
+
+**Partially replaces the 2026-05-14 "Local hybrid KB retrieval over qmd" decision** for
+the embedding component. The overall architecture (sqlite-vec FTS5 + vec0 + RRF) is
+unchanged; only the embedding source and the reranker decision change.
+
+**What changed and why** (explained for a reader unfamiliar with ML):
+
+*Embeddings* are lists of numbers that encode the *meaning* of a piece of text —
+similar texts produce similar numbers, which lets us find relevant KB chunks even
+when they share no keywords with the search query. The original plan used a local
+ONNX model (`bge-small-en-v1.5`, 384 numbers per text, downloaded from HuggingFace)
+to produce these numbers entirely on-device. We switched to Azure OpenAI's
+`text-embedding-3-small` API, which produces 1536 numbers per text and is measurably
+higher quality. Since Azure OpenAI is already our trusted endpoint for every chat
+turn, sending KB chunks to it for indexing introduces no new third-party service
+and no new data-residency concern.
+
+*Cost*: indexing the full corpus (~1000 docs) costs ~$0.15 one time; incremental
+re-indexing (only changed files) costs ~$0.01–$0.05/month. Per-query embedding
+(one API call, ~30 tokens) costs ~$0.000001. Total is negligible compared to
+chat-completion spend.
+
+*Reranker dropped*: the original plan included a cross-encoder reranker
+(`bge-reranker-base`, 279 MB ONNX) to correct ranking mistakes made by the smaller
+bge-small embeddings. With `text-embedding-3-small` at 1536 dims, the base ranking
+from BM25 + vector + RRF is already high enough quality at pilot corpus scale
+(hundreds to low-thousands of chunks) that the reranker pass is unnecessary.
+It can be added later if retrieval quality proves insufficient.
+
+**Trade-offs accepted**:
+- KB indexing requires an active Azure OpenAI connection (no offline re-indexing).
+- Each `search_kb_hybrid` call adds one Azure OpenAI embedding API call (~50 ms).
+- `onnxruntime`, `tokenizers`, `huggingface-hub` are removed from requirements
+  (saves ~412 MB of model files and the air-gapped install procedure).
+- `kb_chunks_vec` is now `float[1536]`; changing to a different dimension later
+  requires dropping and recreating the virtual table (all embeddings lost, full
+  re-index required).
+
 ### 2026-05-15 — User-identity ARM token passthrough via X-ARM-Token header
 Azure tool calls previously ran as the server's managed identity / service
 principal. Changed to user-identity: frontend acquires
@@ -472,6 +562,28 @@ cd frontend && npm test                       # 109 tests
 | `GET /metrics` | Prometheus scrape — request counts, durations, token usage, tool calls |
 | `GET /api/kb/index/status` *(Phase 2)* | Hybrid-retrieval index progress (state, indexed/total files, errors) |
 | `POST /api/kb/index/rebuild` *(Phase 2)* | Force a full re-embed (use after model swap or chunker change) |
+
+### KB reindex — when to force a full rebuild
+
+The reindexer skips a file when its content hash (`sha256` of the raw file
+bytes) has not changed since the last run. It also detects an embedding-model
+swap via the `embed_model` column and forces a full re-embed automatically.
+
+**It does NOT auto-detect chunker config changes.** If you change either of
+these settings in `.env`, you must trigger a manual rebuild:
+
+- `KB_CHUNK_MAX_CHARS` — maximum characters per chunk
+- `KB_CHUNK_OVERLAP_FRACTION` — how much of the previous chunk to carry forward
+
+Without a rebuild the DB silently retains chunks cut at the old boundaries and
+`search_kb_hybrid` keeps returning them. Run:
+
+```bash
+curl -X POST http://localhost:8002/api/kb/index/rebuild
+```
+
+or call `GET /api/kb/index/status` to confirm `state == "complete"` after
+the rebuild finishes.
 
 ### Concurrency assumption
 Currently single-process (one uvicorn worker). The KB re-indexer uses an

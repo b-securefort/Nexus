@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_KEY: str = ""
     AZURE_OPENAI_DEPLOYMENT: str = "gpt-5.4-mini"
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    AZURE_OPENAI_EMBED_DEPLOYMENT: str = "text-embedding-3-small"
+    AZURE_OPENAI_EMBED_API_VERSION: str = "2023-05-15"
 
     # Entra ID
     ENTRA_TENANT_ID: str = ""
@@ -32,19 +34,15 @@ class Settings(BaseSettings):
     KB_REPO_LOCAL_ONLY: bool = False
 
     # KB local hybrid retrieval (Phase 2)
-    KB_EMBED_MODEL_NAME: str = "bge-small-en-v1.5"
-    KB_EMBED_MODEL_DIR: str = "./models"  # parent dir; per-model subdirs created underneath
+    # Embeddings: Azure OpenAI text-embedding-3-small (1536 dims).
+    # Uses the same AZURE_OPENAI_* credentials as the chat path — no extra config needed.
+    KB_EMBED_DIMENSIONS: int = 1536      # must match vec0 schema; changing requires force_rebuild
     KB_CHUNK_MAX_CHARS: int = 6000
     KB_CHUNK_OVERLAP_FRACTION: float = 0.15
     KB_BM25_TOP_K: int = 50
     KB_VEC_TOP_K: int = 50
     KB_RRF_K: int = 60
-    KB_RERANK_TOP_N: int = 30
     KB_RESULT_LIMIT: int = 5
-    # Skip reranker when RRF top-1 fused score is at least this multiple
-    # of the next candidate's score — saves the ~1.5-3 sec rerank pass on
-    # queries with a clear winner.
-    KB_RERANK_CONFIDENCE_GAP: float = 2.0
 
     # KB ingestion (Phase 2a, pilot)
     INGEST_ADO_WIKI_ENABLED: bool = False
@@ -64,6 +62,9 @@ class Settings(BaseSettings):
 
     # Auth bypass (dev only)
     DEV_AUTH_BYPASS: bool = False
+
+    # Tool bundles — set to false to disable an entire team-specific bundle
+    TOOL_BUNDLE_AZURE_ENABLED: bool = True   # set false for non-Azure team deployments
 
     # Tool config
     TOOL_SEARCH_SEMANTIC_ENABLED: bool = True

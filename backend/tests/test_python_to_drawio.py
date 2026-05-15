@@ -11,7 +11,7 @@ import ast
 import pytest
 
 from app.auth.models import User
-from app.tools.python_to_drawio import (
+from app.tools.generic.python_to_drawio import (
     GenerateDrawioFromPythonTool,
     _DiagramKwargInjector,
     _validate_ast,

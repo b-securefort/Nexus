@@ -88,11 +88,11 @@ class SearchKBTool(Tool):
 class SearchKBSemanticTool(Tool):
     name = "search_kb_semantic"
     description = (
-        "LLM-powered semantic search of the knowledge base. "
-        "Expands acronyms and synonyms before searching "
-        "(e.g. 'AKS' → 'kubernetes', 'NSG' → 'network security group', 'KV' → 'key vault'), "
-        "then re-ranks candidates by relevance to the original question. "
-        "Use this when search_kb returns no results or clearly off-topic results."
+        "Cloud path: LLM-powered semantic search of the knowledge base (older approach). "
+        "Expands acronyms and synonyms via Azure OpenAI, then re-ranks file-level results. "
+        "Prefer search_kb_hybrid for content questions — it is faster, chunk-level, and "
+        "makes only one embedding call instead of two LLM calls. "
+        "Use this only when search_kb_hybrid is unavailable or returns no relevant results."
     )
     parameters_schema = {
         "type": "object",

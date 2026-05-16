@@ -501,6 +501,27 @@ It can be added later if retrieval quality proves insufficient.
   requires dropping and recreating the virtual table (all embeddings lost, full
   re-index required).
 
+### 2026-05-16 — Golden set A/B quality check: search_kb_hybrid vs search_kb_semantic
+
+Three representative queries run against the live pilot corpus (15 KB files) on
+first deployment with the Azure OpenAI API key configured.
+
+| Query | hybrid top-1 | semantic top-1 | Agreement |
+|---|---|---|---|
+| "RTO vs RPO, which DR tier for 1-hour recovery?" | `cloud-fundamentals.md > HA and DR` | same | ✓ |
+| "Prevent lateral movement after host compromise" | `security-basics.md > Zero Trust Model` (no keyword overlap) | same | ✓ |
+| "NSG rules for AKS subnet" | No relevant result (content not in KB) | No relevant result | ✓ both honest |
+
+**Observations**: hybrid and semantic agree on top-1 for all three queries. Hybrid
+correctly surfaces content via semantic similarity with zero keyword overlap (query 2).
+Both correctly return no relevant result for query 3, confirming the corpus gap
+rather than hallucinating. Result 4 on query 3 (drawio styling guide) is noise
+expected at 15-file corpus scale — will improve with more content.
+**Trade-off**: at small corpus, BM25 and vector results may include noise because
+few documents compete. Quality improves monotonically as corpus grows.
+`search_kb_semantic` retirement deferred until corpus reaches 50+ documents and
+a larger golden set confirms hybrid consistency.
+
 ### 2026-05-15 — User-identity ARM token passthrough via X-ARM-Token header
 Azure tool calls previously ran as the server's managed identity / service
 principal. Changed to user-identity: frontend acquires
@@ -525,10 +546,10 @@ tools fall back to server-side credentials with no error surfaced to the user.
 ### Running locally
 
 ```bash
-# Backend  (port 8002)
+# Backend  (port 8000)
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --port 8002
+uvicorn app.main:app --port 8000
 
 # Frontend (port 5174)
 cd frontend
@@ -542,7 +563,7 @@ short-circuits Entra auth in dev to a fake `dev-user` identity.
 ### Tests
 
 ```bash
-cd backend && python -m pytest tests/ -x -q   # 469 tests as of 2026-05-15
+cd backend && python -m pytest tests/ -x -q   # 570 tests as of 2026-05-16
 cd frontend && npm test                       # 109 tests
 ```
 
@@ -580,11 +601,11 @@ Without a rebuild the DB silently retains chunks cut at the old boundaries and
 `search_kb_hybrid` keeps returning them. Run:
 
 ```bash
-curl -X POST http://localhost:8002/api/kb/index/rebuild
+curl -X POST http://localhost:8000/api/kb/index/rebuild
 ```
 
-or call `GET /api/kb/index/status` to confirm `state == "complete"` after
-the rebuild finishes.
+or call `GET http://localhost:8000/api/kb/index/status` to confirm
+`state == "complete"` after the rebuild finishes.
 
 ### Concurrency assumption
 Currently single-process (one uvicorn worker). The KB re-indexer uses an

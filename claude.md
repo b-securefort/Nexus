@@ -21,7 +21,7 @@ Nexus is a self-hosted AI assistant for Azure cloud teams. It combines Azure Ope
 # Backend (from backend/ directory)
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --port 8002
+uvicorn app.main:app --port 8000
 
 # Frontend (from frontend/ directory)
 cd frontend
@@ -239,7 +239,7 @@ The `POST /api/chat` endpoint streams these events:
 ## Important Patterns
 
 - **Windows az CLI fix**: `az` is `az.CMD` on Windows. Tools use `shutil.which("az")` + `shell=True` on win32
-- **Port management**: Port 8000 often has zombie sockets. Backend currently runs on **8002**, frontend on **5174**
+- **Port management**: Backend runs on **8000**, frontend on **5174**. If a port is busy: `netstat -ano | findstr :8000`
 - **Auth bypass**: Set `DEV_AUTH_BYPASS=true` in both `.env` files for local dev
 - **KB path**: Backend must run from `backend/` directory so `KB_REPO_LOCAL_PATH=./kb_data` resolves correctly
 - **Conversation skill snapshot**: When a conversation starts, the skill's full config is snapshot into the conversation record so changing the skill later doesn't affect existing conversations

@@ -104,9 +104,39 @@ def _ensure_kb_virtual_tables(conn) -> None:
     """Create kb_chunks_fts (FTS5), kb_chunks_vec (vec0), and the FTS sync
     triggers if they don't already exist. Idempotent — safe to call on every
     startup. Logs and continues on failure (e.g., if sqlite-vec extension
-    didn't load on this Python build)."""
+    didn't load on this Python build).
+
+    Also handles a vec0 dimension mismatch (e.g. upgrading from a 384-dim
+    bge-small build to 1536-dim Azure OpenAI): drops and recreates the table
+    and clears kb_chunks so the reindexer starts clean.
+    """
+    import re
     import sqlalchemy
 
+    settings = get_settings()
+    expected_dims = settings.KB_EMBED_DIMENSIONS
+
+    # ── Detect and fix vec0 dimension mismatch ────────────────────────────────
+    # Virtual tables appear in sqlite_master; the DDL contains the dimension.
+    try:
+        row = conn.execute(sqlalchemy.text(
+            "SELECT sql FROM sqlite_master WHERE name='kb_chunks_vec' AND type='table'"
+        )).fetchone()
+        if row and row[0]:
+            m = re.search(r"float\[(\d+)\]", row[0])
+            if m and int(m.group(1)) != expected_dims:
+                logger.warning(
+                    "kb_chunks_vec has dimension %s but KB_EMBED_DIMENSIONS=%s — "
+                    "dropping and recreating (all chunks will be re-embedded)",
+                    m.group(1), expected_dims,
+                )
+                conn.execute(sqlalchemy.text("DROP TABLE IF EXISTS kb_chunks_vec"))
+                conn.execute(sqlalchemy.text("DELETE FROM kb_chunks"))
+                conn.commit()
+    except Exception as e:
+        logger.warning("vec0 dimension check skipped: %s", str(e).split("\n")[0])
+
+    # ── Create tables and triggers if missing ────────────────────────────────
     statements = [
         # FTS5 over kb_chunks.text + kb_chunks.heading. `unicode61` tokenizer
         # WITHOUT porter stemming so technical jargon ("kubernetes", "azure"
@@ -141,11 +171,11 @@ def _ensure_kb_virtual_tables(conn) -> None:
           VALUES (new.id, new.text, new.heading);
         END
         """,
-        # vec0 dense vectors (1536-dim float32, matches Azure OpenAI text-embedding-3-small).
-        # rowid joins kb_chunks.id explicitly from the reindexer.
-        """
+        # vec0 dense vectors — dimension matches KB_EMBED_DIMENSIONS (default 1536,
+        # matches Azure OpenAI text-embedding-3-small). rowid joins kb_chunks.id.
+        f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_vec USING vec0(
-          embedding float[1536]
+          embedding float[{expected_dims}]
         )
         """,
     ]

@@ -1,5 +1,5 @@
 """
-KB tools — read_kb_file, search_kb, search_kb_semantic.
+KB tools — read_kb_file, search_kb, search_kb_semantic, search_kb_hybrid.
 """
 
 import json
@@ -244,3 +244,120 @@ class SearchKBSemanticTool(Tool):
                 result.append(c.to_dict())
 
         return result[:limit]
+
+
+def _keyword_hit(entry) -> dict:
+    """Normalise a KBEntry (keyword fallback) to the search_kb_hybrid result schema.
+
+    Keeps the field names consistent regardless of whether the hybrid index is
+    warm or the tool fell back to keyword search — the agent should not need to
+    branch on result shape.
+    """
+    return {
+        "kb_path": entry.path,
+        "heading": "",
+        "snippet": (entry.summary or "")[:400],
+        "source_url": None,
+        "score": 0.0,
+    }
+
+
+class SearchKBHybridTool(Tool):
+    name = "search_kb_hybrid"
+    description = (
+        "Local hybrid semantic + keyword search over chunked KB content. "
+        "Returns the most relevant chunks (not full files) with kb_path, heading, "
+        "snippet, and source_url. Prefer this over search_kb and search_kb_semantic "
+        "for content questions — it is faster, runs entirely on-device (no extra cloud "
+        "calls), and returns precise chunk-level results with citation URLs. "
+        "Use read_kb_file only when you need the full file beyond the snippet."
+    )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural-language search query",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default 5, max 20)",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    }
+    requires_approval = False
+
+    def execute(self, args: dict, user: User) -> str:
+        from app.db.sqlite_vec_loader import hybrid_disabled, disabled_reason
+
+        if hybrid_disabled():
+            return json.dumps({
+                "error": "search_kb_hybrid is unavailable on this deployment",
+                "reason": disabled_reason(),
+                "fallback": "Use search_kb or search_kb_semantic instead.",
+            })
+
+        query = args.get("query", "").strip()
+        if not query:
+            return "Error: query is required"
+
+        limit = min(int(args.get("limit", 5)), 20)
+
+        # Import here so startup is unaffected if embedder config is missing
+        from app.kb.embedder import embed_query
+        from app.kb.vector_store import chunk_count, hybrid_search
+        from app.kb.reindex import status as reindex_status
+        from app.db.engine import get_engine
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            total_chunks = chunk_count(conn)
+
+            if total_chunks == 0:
+                # Index is empty — fall back to keyword search and note it
+                kb = get_kb_service()
+                fallback = kb.search(query, limit=limit)
+                return json.dumps({
+                    "results": [_keyword_hit(r) for r in fallback],
+                    "note": "Hybrid index is empty or still building. Showing keyword fallback results.",
+                    "index_state": reindex_status().get("state", "unknown"),
+                })
+
+            try:
+                query_vec = embed_query(query)
+            except Exception as e:
+                logger.warning("Embedding failed for hybrid search (%s), falling back to keyword", e)
+                kb = get_kb_service()
+                fallback = kb.search(query, limit=limit)
+                return json.dumps({
+                    "results": [_keyword_hit(r) for r in fallback],
+                    "note": f"Embedding unavailable ({e}). Showing keyword fallback results.",
+                })
+
+            hits = hybrid_search(conn, query, query_vec, limit=limit)
+
+        rs = reindex_status()
+        results = [
+            {
+                "kb_path": h.kb_path,
+                "heading": h.heading,
+                "snippet": h.snippet,
+                "source_url": h.source_url,
+                "score": round(h.score, 4),
+            }
+            for h in hits
+        ]
+
+        envelope: dict = {"results": results}
+
+        # Surface a warming note only while indexing is in progress
+        if rs.get("state") == "running":
+            indexed = rs.get("indexed_files", 0)
+            total = rs.get("total_files", 0)
+            envelope["note"] = (
+                f"Index warming ({indexed}/{total} files). Results may be incomplete."
+            )
+
+        return json.dumps(envelope, indent=2)

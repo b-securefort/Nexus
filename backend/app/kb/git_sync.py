@@ -87,7 +87,10 @@ async def start_periodic_sync():
         await asyncio.sleep(interval)
         try:
             sync_repo()
-            # Re-index after sync so new/changed KB files are searchable
+            # Run pilot ingestion so new remote content lands in kb_data/kb/
+            from app.kb.ingest.runner import run_all_sources
+            await asyncio.to_thread(run_all_sources)
+            # Re-index after sync + ingest so all new/changed KB files are searchable
             from app.kb.reindex import reindex_all
             await asyncio.to_thread(reindex_all)
         except Exception as e:

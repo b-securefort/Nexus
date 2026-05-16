@@ -34,7 +34,8 @@ class TestToolRegistry:
     def test_init_tools_registers_all(self):
         init_tools()
         expected = {
-            "read_kb_file", "search_kb", "search_kb_semantic", "fetch_ms_docs", "run_shell",
+            "read_kb_file", "search_kb", "search_kb_semantic", "search_kb_hybrid",
+            "fetch_ms_docs", "run_shell",
             "az_cli", "az_resource_graph", "az_cost_query", "az_monitor_logs",
             "az_rest_api", "generate_file", "az_devops", "az_policy_check",
             "az_advisor", "network_test", "web_fetch", "render_drawio",

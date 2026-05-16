@@ -56,6 +56,7 @@ _TOOL_RESULT_LIMITS = {
     "az_resource_graph": 4_000,
     "run_shell": 4_000,
     "read_kb_file": 6_000,
+    "search_kb_hybrid": 4_000,
 }
 _DRAWIO_TOOLS = {"render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell"}
 

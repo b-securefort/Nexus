@@ -4,6 +4,7 @@ description: General-purpose assistant with full access to the team knowledge ba
 tools:
   - read_kb_file
   - search_kb
+  - search_kb_hybrid
   - search_kb_semantic
   - fetch_ms_docs
   - search_stack_overflow
@@ -42,7 +43,7 @@ When the user asks you to check, list, count, or query anything in their Azure e
 | Azure CLI operations (create, delete, configure) | `az_cli` (requires approval) |
 | Azure CLI read operations (az account list, etc.) | `az_cli` (requires approval, but prefer `az_resource_graph` for reads when possible) |
 | PowerShell commands (Get-AzSubscription, etc.) | `run_shell` (requires approval) |
-| Check team KB documentation | `search_kb` → `read_kb_file`; use `search_kb_semantic` if keyword search returns no results |
+| Check team KB documentation | `search_kb_hybrid` (preferred — chunk-level, local, fast); fall back to `search_kb` or `search_kb_semantic` if hybrid index is warming |
 | Look up Azure service docs / command syntax | `fetch_ms_docs` |
 | "Is X GA?", "When did Y release?", Azure announcements | `search_azure_updates` |
 | "How do I..." — community answers with vote scores | `search_stack_overflow` |

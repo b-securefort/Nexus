@@ -91,20 +91,22 @@ N messages stay verbatim. Cumulative outcome cache lives on
 `Conversation.summary_text` so re-summarization is paid only once per
 compression event.
 
-### KB retrieval — two parallel paths (Phase 2 in flight)
-**Files**: [backend/app/kb/](../backend/app/kb), [backend/app/tools/kb_tools.py](../backend/app/tools/kb_tools.py)
+### KB retrieval — two parallel paths (Phase 2 shipped)
+**Files**: [backend/app/kb/](../backend/app/kb), [backend/app/tools/generic/kb_tools.py](../backend/app/tools/generic/kb_tools.py)
 
 Path A (existing, cloud): `search_kb_semantic` — keyword index + Azure OpenAI
 query expansion + Azure OpenAI rerank. File-level results. Stays as-is until
-Path B is validated.
+Path B is validated against real content.
 
-Path B (Phase 2, local hybrid): `search_kb_hybrid` — chunked markdown,
-SQLite FTS5 (BM25) + sqlite-vec (cosine over 384-dim bge-small-en-v1.5
-embeddings), Reciprocal Rank Fusion, optional cross-encoder rerank
-(`bge-reranker-base`). Runs entirely on-device. Returns chunk-level results
-with `source_url` cite.
+Path B (local hybrid, shipped): `search_kb_hybrid` — markdown chunked at H2/H3
+boundaries, SQLite FTS5 (BM25) + sqlite-vec (cosine over **1536-dim** Azure OpenAI
+`text-embedding-3-small` embeddings), Reciprocal Rank Fusion. No local ONNX
+models, no cross-encoder reranker. Runs on-device except for the single
+Azure OpenAI embed call per query (~50 ms). Returns chunk-level results with
+`source_url` cite. Falls back to keyword search (same result schema) while the
+index is warming on first start.
 
-### KB ingestion (Phase 2a, planned)
+### KB ingestion (Phase 2a, shipped)
 Pulls content from ADO wikis, ADO repos (already handled by `git_sync.py`),
 and PDF link lists (SharePoint / open web). Normalizes everything to
 markdown with front-matter (`source_url`, `last_synced`, `source`,
@@ -307,14 +309,13 @@ natively. **Trade-off**: the reindexer must explicitly write to both
 tables (FTS triggers handle their own sync, but vec0 doesn't because
 embeddings are computed in Python).
 
-### 2026-05-15 — Conditional cross-encoder reranking
-The cross-encoder rerank pass (`bge-reranker-base` on 30 candidates) adds
-~1.5-3 sec/query. Skip it when RRF already has a confident top-1 (top score
-≥ `KB_RERANK_CONFIDENCE_GAP=2.0` × the next candidate's score). On
-ambiguous queries, run rerank.
-**Trade-off**: a small loss of top-3 precision on queries that *would* have
-benefited from rerank but had a confident-but-wrong RRF top-1. Acceptable;
-we observed RRF agreement-on-correctness is high for clear queries.
+### ~~2026-05-15 — Conditional cross-encoder reranking~~
+**Superseded by the 2026-05-15 "Azure OpenAI text-embedding-3-small" decision.**
+The planned `bge-reranker-base` cross-encoder was dropped: with 1536-dim
+`text-embedding-3-small` embeddings, BM25 + vector + RRF ranking quality at
+pilot corpus scale is sufficient without an extra reranker pass. The
+`KB_RERANK_CONFIDENCE_GAP` config setting was removed. If retrieval quality
+proves insufficient at larger corpus scale, a reranker can be added then.
 
 ### 2026-05-15 — Living `Documentation/DESIGN.md` is the source of truth for architecture
 This document. Update lives in the same PR as the code change. PR template
@@ -459,7 +460,7 @@ model's README on HuggingFace.
 query or a document and branch accordingly. A future model swap must verify
 whether the replacement model also uses asymmetric prompting, uses a different
 prefix, or expects the same text for both sides — this check belongs in the
-PR that changes `KB_EMBED_MODEL_NAME`.
+PR that changes `AZURE_OPENAI_EMBED_DEPLOYMENT`.
 
 ### 2026-05-15 — Azure OpenAI text-embedding-3-small for KB hybrid retrieval, no local ONNX models
 

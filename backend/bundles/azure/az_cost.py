@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.auth.models import User
 from app.tools.base import AzureToolBase, _find_az
-from app.tools.azure.az_login_check import require_az_login
+from bundles.azure.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
 

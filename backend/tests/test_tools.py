@@ -1263,7 +1263,7 @@ class TestSearchAzureUpdatesTool:
         tool = get_tool("search_azure_updates")
         assert "Error" in tool.execute({"query": ""}, _USER)
 
-    @patch("app.tools.azure.search_azure_updates.httpx.Client")
+    @patch("bundles.azure.search_azure_updates.httpx.Client")
     def test_parses_rss_and_filters_by_keyword(self, mock_client_cls):
         init_tools()
         rss = """<?xml version="1.0" encoding="UTF-8"?>

@@ -296,11 +296,11 @@ def init_tools() -> None:
 
     # 1b. Load Azure bundle if enabled
     if settings.TOOL_BUNDLE_AZURE_ENABLED:
-        import app.tools.azure
-        for _, module_name, _ in pkgutil.iter_modules(app.tools.azure.__path__):
+        import bundles.azure
+        for _, module_name, _ in pkgutil.iter_modules(bundles.azure.__path__):
             if not module_name.startswith("_"):
                 try:
-                    importlib.import_module(f"app.tools.azure.{module_name}")
+                    importlib.import_module(f"bundles.azure.{module_name}")
                 except Exception as e:
                     logger.error("Failed to load azure tool %s: %s", module_name, e)
 

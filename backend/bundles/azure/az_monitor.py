@@ -8,7 +8,7 @@ import logging
 
 from app.auth.models import User
 from app.tools.base import AzureToolBase, check_shell_injection, _find_az
-from app.tools.azure.az_login_check import require_az_login
+from bundles.azure.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
 

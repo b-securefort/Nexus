@@ -51,8 +51,8 @@ text answers.
    │ ADO   │        │ learn.md  │ │   │  read_kb_file,         ││      │  CLI /   │
    │ wiki  │        └───────────┘ │   │  search_kb_*,          ││      │  ARM     │
    │ + git │ ──────►               │   │  generate_file,        ││      └──────────┘
-   │ + pdf │       (planned        │   │  ms_docs, learnings    ││
-   └───────┘        ingestion)     │   └────────────────────────┘│
+   │ + pdf │       (ingest/        │   │  ms_docs, learnings    ││
+   └───────┘        runner.py)     │   └────────────────────────┘│
                                   │   ┌─ SQLite app.db ────────┐ │
                                   │   │  users, conversations, │ │
                                   │   │  messages, approvals,  │ │
@@ -127,7 +127,7 @@ swaps the agent's persona and scoped toolset. Personal skills live in the
 | `read_kb_file` | No | Read a KB file by relative path |
 | `search_kb` | No | Token-scored search over titles/summaries/tags |
 | `search_kb_semantic` | No | **Cloud** path: Azure-OpenAI query expansion + rerank over file-level index. Kept side-by-side with `search_kb_hybrid`. |
-| `search_kb_hybrid` *(Phase 2)* | No | **Local** path: chunked hybrid retrieval, no cloud calls |
+| `search_kb_hybrid` | No | **Local** path: chunked hybrid retrieval, one embed call per query — preferred over `search_kb_semantic` |
 | `fetch_ms_docs` | No | Microsoft Learn doc search |
 | `read_learnings` | No | Read the agent's persistent `learn.md` |
 | `update_learnings` | No | Append a categorized learning entry |
@@ -521,6 +521,11 @@ expected at 15-file corpus scale — will improve with more content.
 few documents compete. Quality improves monotonically as corpus grows.
 `search_kb_semantic` retirement deferred until corpus reaches 50+ documents and
 a larger golden set confirms hybrid consistency.
+
+### 2026-05-17 — Move azure bundle from app/tools/azure/ to top-level bundles/azure/
+
+**Refines the 2026-05-15 "Tool bundles within one repo" decision.** Teams forking Nexus saw `app/tools/azure/` sitting inside `app/` and felt responsible for code that was irrelevant to them — even with `TOOL_BUNDLE_AZURE_ENABLED=false`. Moving it to `bundles/azure/` makes `app/` unambiguously core (never touch it) and `bundles/` visually optional (ignore what doesn't apply to your team). The `init_tools()` loader was updated to scan `bundles.<name>` instead of `app.tools.<name>`; all import paths in the azure tools, orchestrator, and tests were updated to `bundles.azure.*`.
+**Trade-off**: any future bundle a team adds lives in `bundles/<teamname>/` rather than `app/tools/<teamname>/` — a minor convention change from the original decision, but the same single-repo, env-flag model otherwise.
 
 ### 2026-05-15 — User-identity ARM token passthrough via X-ARM-Token header
 Azure tool calls previously ran as the server's managed identity / service

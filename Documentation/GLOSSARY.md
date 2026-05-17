@@ -18,6 +18,7 @@
 | **Conversation** | A named chat session between one user and the agent. Has one active skill snapshot. Persists across browser sessions. | "chat", "thread", "session" |
 | **Message** | A single turn within a conversation. Role is `user`, `assistant`, or `tool`. Tool messages carry `tool_call_id` linking them to the assistant call that triggered them. | "turn", "reply", "chat message" |
 | **Tool** | A Python class registered in `TOOL_REGISTRY` that exposes a typed JSON schema and an `execute()` method. The LLM calls tools by emitting tool-call JSON; the orchestrator executes them and feeds results back. | "function", "action", "plugin" |
+| **Bundle** | A directory under `bundles/<teamname>/` containing Tool subclasses for a specific team or domain, loaded at startup only when `TOOL_BUNDLE_<NAME>_ENABLED=true` — lives outside `app/` so adopting teams can ignore bundles that don't apply to them. | "plugin", "extension", "module" |
 | **Approval** | A gate on a `requires_approval=True` tool. When triggered, the orchestrator creates a `pending_approvals` row, emits an `approval_required` SSE event, and blocks until the user approves or denies. | "confirmation", "permission gate" |
 | **Question** (`ask_user`) | A structured multi-choice prompt the agent emits when it needs clarification before acting. The orchestrator creates a `pending_questions` row, emits `question_required` SSE, and resumes with the user's answers. Distinct from Approval — it's about gathering intent, not gating a destructive action. | "clarification", "prompt" |
 | **KB (Knowledge Base)** | The corpus of markdown files synced from Git (`kb_data/kb/`). Searched via keyword index or hybrid retrieval. Injected as an index summary into every system prompt. | "docs", "wiki", "knowledge repo" |
@@ -53,6 +54,7 @@
 - One **User** → many **Conversations**
 - One **Conversation** → one **Skill snapshot** (frozen at creation), many **Messages**
 - One **Message** → zero or one set of **Tool calls** (on `assistant` messages), zero or one **Approval**, zero or one **Question**
+- One **Bundle** → many **Tools** (every Tool subclass defined in files under `bundles/<teamname>/`)
 - One **Skill** → one or more **Tools** (listed in `tools:` frontmatter)
 - One **KB** → many **KB files** → many **KB chunks**
 - One **KB chunk** → one **Embedding** (stored in `kb_chunks_vec` by the **Reindexer**)

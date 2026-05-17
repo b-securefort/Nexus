@@ -153,7 +153,7 @@ def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") ->
     kb_summary = get_index_summary()
     learnings = get_learnings_content()
     try:
-        from app.tools.azure.az_login_check import get_az_context_prompt
+        from bundles.azure.az_login_check import get_az_context_prompt
         az_context = get_az_context_prompt()
     except ImportError:
         az_context = ""
@@ -1013,7 +1013,7 @@ async def handle_chat(
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
                         try:
-                            from app.tools.azure.az_login_check import clear_login_cache
+                            from bundles.azure.az_login_check import clear_login_cache
                             clear_login_cache()
                         except ImportError:
                             pass

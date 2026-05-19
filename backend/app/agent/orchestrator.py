@@ -305,6 +305,42 @@ def _build_render_review_message(args: dict) -> dict | None:
     }
 
 
+def _attachment_for_rendered_png(args: dict) -> dict | None:
+    """If a diagram tool call produced a PNG next to its .drawio file, build
+    an attachment dict for the eventual assistant message's `attachments_json`.
+
+    Mirrors the path resolution in `_build_render_review_message` but produces
+    a frontend-friendly attachment record (served via `GET /api/output/<file>`)
+    instead of an OpenAI vision message. Returns None when no PNG exists on
+    disk yet, so iterations that fail validation don't attach stale images.
+    """
+    from pathlib import Path
+
+    filename = (args.get("filename") or args.get("file_name") or "").strip()
+    fmt = (args.get("format") or "png").strip().lower()
+    if not filename:
+        return None
+    if not filename.endswith(".drawio"):
+        filename = f"{filename}.drawio"
+    if fmt not in ("png", "jpg", "jpeg"):
+        return None
+
+    image_path = (Path("output") / filename).with_suffix(f".{fmt}")
+    try:
+        if not image_path.is_file() or image_path.stat().st_size == 0:
+            return None
+    except OSError:
+        return None
+
+    png_name = image_path.name
+    return {
+        "url": f"/api/output/{png_name}",
+        "filename": png_name,
+        "original_name": png_name,
+        "mime": "image/png" if fmt == "png" else "image/jpeg",
+    }
+
+
 def _build_content_with_images(text: str, attachments_json: str) -> list[dict]:
     """Build OpenAI multi-part content array from text + image attachments.
 
@@ -663,6 +699,13 @@ async def handle_chat(
     # give up after 3-4 failed validate cycles even when iterations remain.
     drawio_attempt_count: dict[str, int] = {}
 
+    # PNGs produced by diagram tools during this turn. Attached to the
+    # terminating assistant message (the one with no tool_calls) so the user
+    # sees the rendered diagram inline alongside the agent's description.
+    # De-duplicated by filename so multiple iterations of the same diagram
+    # only show the latest render once.
+    pending_render_attachments: dict[str, dict] = {}
+
     while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
 
@@ -757,7 +800,9 @@ async def handle_chat(
             finally:
                 await stream_thread
 
-            # Log token usage and cache stats
+            # Capture token usage and cache stats for both logging and the
+            # `done` SSE payload (frontend context-window indicator).
+            usage_payload: dict | None = None
             if stream_usage:
                 prompt_tokens = stream_usage.prompt_tokens or 0
                 completion_tokens = stream_usage.completion_tokens or 0
@@ -770,18 +815,35 @@ async def handle_chat(
                     prompt_tokens, cached, cache_pct, completion_tokens,
                     prompt_tokens + completion_tokens,
                 )
+                usage_payload = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cached_tokens": cached,
+                    "context_window": settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
+                    "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                }
 
             # Build tool_calls list
             tool_calls = [tool_calls_accumulator[i] for i in sorted(tool_calls_accumulator.keys())]
 
-            # Save assistant message
+            # Save assistant message. When the model has finished iterating
+            # this turn (no further tool calls), attach any PNGs produced by
+            # diagram tools so the user sees the rendered diagram inline
+            # alongside the description. Mid-loop assistant messages don't
+            # get attachments — they'd appear on intermediate bubbles that
+            # then trigger more tools, which reads as visual noise.
             tc_json = json.dumps(tool_calls) if tool_calls else None
+            attachments_json: str | None = None
+            if not tool_calls and pending_render_attachments:
+                attachments_json = json.dumps(list(pending_render_attachments.values()))
+                pending_render_attachments.clear()
             assistant_msg = _save_message(
                 session,
                 conversation.id,
                 role="assistant",
                 content=assistant_content,
                 tool_calls_json=tc_json,
+                attachments_json=attachments_json,
             )
             yield sse_message_saved(assistant_msg.id, "assistant")
 
@@ -792,7 +854,7 @@ async def handle_chat(
             messages.append(assistant_hist)
 
             if not tool_calls:
-                yield sse_done(conversation.id)
+                yield sse_done(conversation.id, usage=usage_payload)
                 return
 
             # 4. Execute tool calls
@@ -970,6 +1032,13 @@ async def handle_chat(
                             func_args.get("filename", "<unknown>"),
                             func_name,
                         )
+                    # Capture the PNG for inline display on the assistant's
+                    # final response of this turn. Indexed by filename so that
+                    # later iterations of the same diagram overwrite earlier
+                    # captures — the user sees the most recent render only.
+                    attachment = _attachment_for_rendered_png(func_args)
+                    if attachment is not None:
+                        pending_render_attachments[attachment["filename"]] = attachment
 
                 # Encourage the model to keep iterating on diagram fixes
                 # instead of giving up after a few failed validations. Smaller

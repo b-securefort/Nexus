@@ -159,12 +159,10 @@ Nexus/
     │   └── learn.md               # Agent's persistent mistake memory (auto-updated)
     └── skills/
         └── shared/                # Shared skill definitions
-            ├── chat-with-kb/SKILL.md      # Default skill — full tool access, proactive execution
-            ├── architect/SKILL.md         # Senior architect persona
-            ├── azure-principal-architect/SKILL.md  # Deep architectural review with live Azure queries
-            ├── kb-searcher/SKILL.md       # KB-only search skill
-            ├── drawio-diagrammer/SKILL.md # Azure architecture diagrams as .drawio files
-            └── drawio-from-python/SKILL.md # Draw.io from mingrammer Python DSL
+            ├── kb-searcher/SKILL.md       # "Default" tier — read-only KB + Azure read queries
+            ├── chat-with-kb/SKILL.md      # "Azure Engineer" tier — full execute, no inline diagrams
+            ├── architect/SKILL.md         # "Azure Architect" tier — ADR + WAF framing, inline drawio-from-python flow
+            └── drawio-diagrammer/SKILL.md # Hand-written .drawio XML + per-cell patch specialist
 ```
 
 ## Architecture & Key Concepts

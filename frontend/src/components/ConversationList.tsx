@@ -186,7 +186,7 @@ export function ConversationList() {
                     handleSelectConversation(conv);
                   }
                 }}
-                className={`relative w-full text-left rounded-lg px-3 py-2 mb-0.5 group transition-[background-color,transform] duration-150 cursor-pointer ${
+                className={`relative w-full text-left rounded-lg px-3 py-2 mb-0.5 group transition-[background-color,transform] duration-100 ease-[var(--ease-out)] cursor-pointer ${
                   conversationId === conv.id
                     ? "bg-base-800 ring-1 ring-base-700/80"
                     : "hover:bg-base-800/60"

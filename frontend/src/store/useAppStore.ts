@@ -3,6 +3,7 @@ import type {
   Message,
   ApprovalInfo,
   ConversationSummary,
+  ContextUsage,
   QuestionInfo,
   QuestionAnswerEntry,
 } from "../types";
@@ -42,6 +43,10 @@ interface AppState {
   // Ordered streaming segments (text interleaved with tool calls)
   streamingSegments: StreamingSegment[];
 
+  // Most recent LLM-reported token usage for the active conversation.
+  // Reflects the last turn's prompt — drops when compaction fires.
+  contextUsage: ContextUsage | null;
+
   // Conversations list
   conversations: ConversationSummary[];
 
@@ -74,6 +79,7 @@ interface AppState {
   addPendingAttachment: (file: File) => void;
   removePendingAttachment: (index: number) => void;
   clearPendingAttachments: () => void;
+  setContextUsage: (usage: ContextUsage | null) => void;
   resetChat: () => void;
 }
 
@@ -90,6 +96,7 @@ export const useAppStore = create<AppState>((set) => ({
   pendingAttachments: [],
   toolCalls: [],
   streamingSegments: [],
+  contextUsage: null,
   conversations: [],
   sidebarOpen: true,
   searchQuery: "",
@@ -165,6 +172,7 @@ export const useAppStore = create<AppState>((set) => ({
       pendingAttachments: state.pendingAttachments.filter((_, i) => i !== index),
     })),
   clearPendingAttachments: () => set({ pendingAttachments: [] }),
+  setContextUsage: (usage) => set({ contextUsage: usage }),
   resetChat: () =>
     set({
       conversationId: null,
@@ -178,5 +186,6 @@ export const useAppStore = create<AppState>((set) => ({
       pendingAttachments: [],
       toolCalls: [],
       streamingSegments: [],
+      contextUsage: null,
     }),
 }));

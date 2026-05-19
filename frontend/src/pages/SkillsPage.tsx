@@ -68,7 +68,7 @@ export function SkillsPage() {
           <h1 className="text-xl font-semibold tracking-tight">Skills</h1>
           <button
             onClick={() => setEditing("")}
-            className="ml-auto flex items-center gap-2 bg-accent hover:bg-accent-hover text-white rounded-xl px-4 py-2 text-sm font-medium transition-[background-color,transform] duration-150"
+            className="ml-auto flex items-center gap-2 bg-accent hover:bg-accent-hover text-white rounded-xl px-4 py-2 text-sm font-medium transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
           >
             <Plus className="w-4 h-4" />
             New Skill

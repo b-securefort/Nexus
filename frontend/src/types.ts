@@ -81,6 +81,14 @@ export interface QuestionAnswerEntry {
   notes?: string;
 }
 
+export interface ContextUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  context_window: number;
+  model: string;
+}
+
 // SSE event types
 export type SSEEvent =
   | { type: "token"; data: { text: string } }
@@ -92,7 +100,7 @@ export type SSEEvent =
   | { type: "question_answered"; data: { question_id: string; call_id: string; answers: QuestionAnswerEntry[] } }
   | { type: "tool_result"; data: { call_id: string; name: string; content: string } }
   | { type: "message_saved"; data: { message_id: number; role: string } }
-  | { type: "done"; data: { conversation_id: number } }
+  | { type: "done"; data: { conversation_id: number; usage?: ContextUsage } }
   | { type: "error"; data: { message: string } };
 
 export interface ChatRequest {

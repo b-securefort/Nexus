@@ -68,8 +68,24 @@ def sse_message_saved(message_id: int, role: str) -> str:
     return sse_event("message_saved", {"message_id": message_id, "role": role})
 
 
-def sse_done(conversation_id: int) -> str:
-    return sse_event("done", {"conversation_id": conversation_id})
+def sse_done(conversation_id: int, usage: dict | None = None) -> str:
+    """End-of-turn event.
+
+    `usage` (optional) carries the last LLM call's token accounting so the
+    frontend can render a context-window indicator. Shape:
+        {
+          "prompt_tokens": int,
+          "completion_tokens": int,
+          "cached_tokens": int,        # subset of prompt_tokens
+          "context_window": int,       # model's total window
+          "model": str,                # deployment name
+        }
+    Omitted by the resume endpoint (no fresh LLM call happened).
+    """
+    payload: dict = {"conversation_id": conversation_id}
+    if usage is not None:
+        payload["usage"] = usage
+    return sse_event("done", payload)
 
 
 def sse_error(message: str) -> str:

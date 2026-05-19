@@ -144,6 +144,10 @@ async def get_current_user(request: Request) -> User:
     oid = payload.get("oid")
     email = payload.get("preferred_username") or payload.get("upn", "")
     display_name = payload.get("name", email)
+    # Entra App Roles — empty list when the user has no role assignment.
+    # app/auth/rbac.py uses this to filter visible skills and tools.
+    roles_claim = payload.get("roles", [])
+    roles = [str(r) for r in roles_claim] if isinstance(roles_claim, list) else []
 
     if not oid:
         raise HTTPException(status_code=401, detail="Token missing oid claim")
@@ -151,4 +155,10 @@ async def get_current_user(request: Request) -> User:
     # Attach ARM token if the frontend provided one
     arm_token = _extract_arm_token(request, settings.ENTRA_TENANT_ID)
 
-    return User(oid=oid, email=email, display_name=display_name, arm_token=arm_token)
+    return User(
+        oid=oid,
+        email=email,
+        display_name=display_name,
+        arm_token=arm_token,
+        roles=roles,
+    )

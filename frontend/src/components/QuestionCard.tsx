@@ -165,37 +165,46 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
                 );
               })}
 
-              {/* Always offer an "Other" escape hatch so the user isn't trapped */}
-              <button
-                type="button"
-                disabled={isLocked}
-                onClick={() => toggleOption(qIdx, OTHER_LABEL, q.multi_select)}
-                className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg border transition-colors duration-100 ${
+              {/* Always offer an "Other" escape hatch so the user isn't trapped.
+                  The toggle row and the free-text input are siblings, NOT
+                  nested — a <button> ancestor treats spacebar as activation,
+                  so any space typed inside the textarea would bubble up and
+                  uncheck the option. */}
+              <div
+                className={`w-full rounded-lg border transition-colors duration-100 ${
                   otherSelected
                     ? "bg-blue-800/30 border-blue-500/50"
                     : "bg-base-900/40 border-base-700/40 hover:border-base-600/60"
-                } ${isLocked ? "cursor-default opacity-90" : "cursor-pointer"}`}
+                }`}
               >
-                {q.multi_select ? (
-                  <CheckboxIcon checked={otherSelected} className="mt-0.5 flex-shrink-0" />
-                ) : (
-                  <RadioIcon checked={otherSelected} className="mt-0.5 flex-shrink-0" />
-                )}
-                <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  disabled={isLocked}
+                  onClick={() => toggleOption(qIdx, OTHER_LABEL, q.multi_select)}
+                  className={`w-full text-left flex items-start gap-3 px-3 py-2 ${
+                    isLocked ? "cursor-default opacity-90" : "cursor-pointer"
+                  }`}
+                >
+                  {q.multi_select ? (
+                    <CheckboxIcon checked={otherSelected} className="mt-0.5 flex-shrink-0" />
+                  ) : (
+                    <RadioIcon checked={otherSelected} className="mt-0.5 flex-shrink-0" />
+                  )}
                   <div className="text-sm text-base-100">Other</div>
-                  {otherSelected && (
+                </button>
+                {otherSelected && (
+                  <div className="px-3 pb-2.5 pl-10">
                     <textarea
                       value={isLocked ? lockedNotes : s.otherText}
                       readOnly={isLocked}
-                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => setOtherText(qIdx, e.target.value)}
                       placeholder="Type your answer..."
                       rows={2}
-                      className="mt-1.5 w-full bg-base-900 border border-base-700 rounded-md px-2 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-blue-500/60 focus:outline-none resize-y"
+                      className="w-full bg-base-900 border border-base-700 rounded-md px-2 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-blue-500/60 focus:outline-none resize-y"
                     />
-                  )}
-                </div>
-              </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -207,7 +216,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
             type="button"
             onClick={handleSubmit}
             disabled={!ready || submitting}
-            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
+            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
           >
             <Send className="w-4 h-4" />
             {submitting ? "Sending…" : "Submit answers"}

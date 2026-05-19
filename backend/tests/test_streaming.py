@@ -66,6 +66,26 @@ class TestSSEFormatting:
         result = sse_done(7)
         data = json.loads(result.split("data: ")[1].strip())
         assert data["conversation_id"] == 7
+        assert "usage" not in data
+
+    def test_sse_done_with_usage(self):
+        result = sse_done(
+            7,
+            usage={
+                "prompt_tokens": 1234,
+                "completion_tokens": 56,
+                "cached_tokens": 800,
+                "context_window": 128000,
+                "model": "gpt-5.4-mini",
+            },
+        )
+        data = json.loads(result.split("data: ")[1].strip())
+        assert data["conversation_id"] == 7
+        assert data["usage"]["prompt_tokens"] == 1234
+        assert data["usage"]["completion_tokens"] == 56
+        assert data["usage"]["cached_tokens"] == 800
+        assert data["usage"]["context_window"] == 128000
+        assert data["usage"]["model"] == "gpt-5.4-mini"
 
     def test_sse_error(self):
         result = sse_error("Something went wrong")

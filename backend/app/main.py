@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
+from app.auth.rbac import init_rbac
 from app.config import get_settings
 from app.db.engine import get_engine
 from app.db.models import SQLModel
@@ -206,6 +207,10 @@ async def lifespan(app: FastAPI):
 
     # Init tools
     init_tools()
+
+    # Load role access map (Entra App Roles → skills/tools). No-op if
+    # AZURE_APPCONFIG_ENDPOINT is empty; falls back to defaults on failure.
+    await init_rbac()
 
     # KB sync
     sync_repo()

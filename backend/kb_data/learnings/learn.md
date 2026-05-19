@@ -4,36 +4,6 @@ This file records known issues, mistakes, and solutions discovered during tool e
 The agent consults this before running commands to avoid repeating errors.
 
 ---
-## [known-issue] Azure DevOps CLI requires proper authorization — TF400813
-- **Date**: 2026-04-22 00:34 UTC
-- **Tool**: az_devops
-- **Details**: az_devops operations can fail with TF400813 if the current Azure identity lacks project access. Verify the Azure DevOps org/project and permissions before retrying. The tool requires the azure-devops CLI extension and a properly authorized identity or PAT.
-
-## [best-practice] Use ResourceContainers (not Resources) for subscriptions and resource groups
-- **Date**: 2026-04-21 22:59 UTC
-- **Tool**: az_resource_graph
-- **Details**: For listing subscriptions use `ResourceContainers | where type == 'microsoft.resources/subscriptions'`. For listing resource groups use `ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups'`. Querying `Resources` for these returns zero records.
-
-## [syntax-fix] PowerShell script calling az must avoid pipeline execution of the az executable
-- **Date**: 2026-04-22 02:00 UTC
-- **Tool**: run_shell
-- **Details**: A PowerShell script that used `az graph query -q $query -o json | ConvertFrom-Json` failed with `Cannot run a document in the middle of a pipeline: ...\az`. The fix is to assign the az output to a variable first (for example `$json = az graph query ... -o json`) and then pipe `$json | ConvertFrom-Json`, instead of piping the az executable directly.
-
-## [syntax-fix] PowerShell cannot pipe az directly; capture output first
-- **Date**: 2026-04-22 02:13 UTC
-- **Tool**: run_shell
-- **Details**: A PowerShell command that piped `az graph query ... | Out-String` failed with `Cannot run a document in the middle of a pipeline`. The correct approach is to assign the az output to a variable first (for example `$json = az graph query ... -o json`) and then process `$json`, rather than piping the az executable directly.
-
-## [syntax-fix] Resource Graph subscription query should not project nonexistent state field
-- **Date**: 2026-04-22 20:54 UTC
-- **Tool**: az_resource_graph
-- **Details**: A query against ResourceContainers for microsoft.resources/subscriptions failed when projecting `state` because that field is not present for subscription records in this environment. The corrected query was `ResourceContainers | where type == 'microsoft.resources/subscriptions' | project subscriptionId, name, tenantId | order by name asc`. Resource Graph was the fastest/simplest approach and should be preferred over Az CLI for listing subscriptions.
-
-## [best-practice] For AI model counts, query deployment child resources first
-- **Date**: 2026-04-22 21:40 UTC
-- **Tool**: az_rest_api
-- **Details**: When asked how many AI models are deployed across subscriptions, do not stop at listing AI hosting resources (Cognitive Services accounts or ML workspaces). The correct first pass is to enumerate Microsoft.CognitiveServices/accounts/{account}/deployments for each OpenAI/AIServices account and count the deployment child resources, separating Succeeded/Enabled from Disabled. Resource Graph is useful for finding the parent accounts, but it does not reliably expose the deployment layer.
-
 ## [best-practice] Return the actual AI deployment inventory directly when asked for deployed models
 - **Date**: 2026-04-24 01:02 UTC
 - **Tool**: az_rest_api
@@ -258,4 +228,14 @@ The agent consults this before running commands to avoid repeating errors.
 - **Date**: 2026-05-14 01:15 UTC
 - **Tool**: generate_drawio_from_python, generate_file, ask_user
 - **Details**: When the user requests a diagram, do NOT jump to generating output. The expected flow is: (1) research — read the relevant KB files and learnings, name them explicitly; (2) reflect — briefly tell the user what you understood, which KB sources you're drawing from, and which architectural choices are still open; (3) confirm — call `ask_user` with concrete multi-select options for every open decision (backend service, access pattern, hub presence, DNS strategy, monitoring/identity inclusion); (4) generate only after the user has answered; (5) review — describe what the rendered PNG actually shows and INVITE the user to confirm or redirect. Never say "the diagram is ready" — only the user decides acceptance. Never assume a default (backend, access pattern, topology) just because it's "common"; if the KB doesn't justify it, ask. **The loop repeats for EVERY user-requested change.** "Add a Key Vault", "add another VM with SQL in its own subnet", "move the SQL DB to another subnet", "make it hub-and-spoke" — each triggers another reflect → confirm → generate → review round. The only changes that skip ask_user are ones fully specified by the user's exact words: pure renames, coordinate-free cosmetic changes, or changes where the user has already named every decision in their message. This applies to all diagram skills, not just python_to_drawio.
+
+## [gotcha] Check App Gateway WAF v2 rate-limiting docs before saying it cannot rate limit
+- **Date**: 2026-05-18 22:13 UTC
+- **Tool**: fetch_ms_docs
+- **Details**: I previously generalized from Application Gateway WAF capabilities and answered that it did not support rate limiting, which caused unnecessary round trips. The correct approach is to verify the specific Microsoft Learn documentation for Application Gateway WAF v2 rate limiting up front, since it does support rate-limit custom rules such as 100 requests per minute. For nuanced Azure feature questions, fetch the exact service doc before making a recommendation.
+
+## [gotcha] Verify the exact requested Azure feature, not only the broader service capability
+- **Date**: 2026-05-18 22:14 UTC
+- **Tool**: fetch_ms_docs
+- **Details**: The mistake was not specific to App Gateway rate limiting; it was a broader reasoning error. When a user asks about a specific capability, I should validate that exact feature in Microsoft Learn before answering rather than relying on general knowledge of the Azure service. For example, with Application Gateway I should have checked the WAF v2 rate-limiting docs up front instead of assuming the service lacked throttling capabilities. This reduces wrong assumptions and unnecessary back-and-forth.
 

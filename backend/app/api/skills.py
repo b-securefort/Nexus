@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
 from app.auth.models import User
+from app.auth.rbac import allowed_skills_for, allowed_tools_for
 from app.db.engine import get_session
 from app.deps import current_user
 from app.skills.personal import (
@@ -129,11 +130,19 @@ class ToolResponse(BaseModel):
 
 @router.get("/skills", response_model=list[SkillResponse])
 async def list_skills(user: User = Depends(current_user)):
-    """List shared + current user's personal skills."""
+    """List shared + current user's personal skills.
+
+    Shared skills are filtered by the user's Entra App Roles. Personal skills
+    are always visible to their owner — the role gate is enforced at create
+    time so a personal skill that exists in the DB has already been authorised.
+    """
     results = []
+    visible_shared = allowed_skills_for(user)  # None = unrestricted (dev bypass)
 
     # Shared skills
     for skill in get_shared_skills().values():
+        if visible_shared is not None and skill.name not in visible_shared:
+            continue
         results.append(
             SkillResponse(
                 id=skill.id,
@@ -164,10 +173,16 @@ async def list_skills(user: User = Depends(current_user)):
 
 @router.get("/tools", response_model=list[ToolResponse])
 async def list_available_tools(user: User = Depends(current_user)):
-    """List all available tool names and descriptions."""
+    """List tool names and descriptions visible to the current user.
+
+    Filtered by the user's Entra App Roles. The frontend personal-skill
+    creator uses this list to populate its tool picker.
+    """
+    allowed = allowed_tools_for(user)  # None = unrestricted (dev bypass)
     return [
         ToolResponse(name=t.name, description=t.description, requires_approval=t.requires_approval)
         for t in list_tools()
+        if allowed is None or t.name in allowed
     ]
 
 
@@ -189,9 +204,28 @@ async def get_personal_skill_detail(name: str, user: User = Depends(current_user
         )
 
 
+def _enforce_tool_access(user: User, tools: list[str] | None) -> None:
+    """Reject the request if `tools` contains anything outside the user's
+    role-allowed tool set. UI filtering of GET /api/tools is not a security
+    boundary — the personal-skill save endpoints are.
+    """
+    if not tools:
+        return
+    allowed = allowed_tools_for(user)
+    if allowed is None:
+        return  # dev bypass
+    disallowed = [t for t in tools if t not in allowed]
+    if disallowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tools not permitted for your role: {sorted(disallowed)}",
+        )
+
+
 @router.post("/skills/personal", response_model=SkillResponse, status_code=201)
 async def create_skill(body: CreateSkillRequest, user: User = Depends(current_user)):
     """Create a new personal skill."""
+    _enforce_tool_access(user, body.tools)
     with get_session() as session:
         # Check for duplicate
         existing = get_personal_skill(session, user.oid, body.name)
@@ -220,6 +254,7 @@ async def create_skill(body: CreateSkillRequest, user: User = Depends(current_us
 @router.put("/skills/personal/{name}", response_model=SkillResponse)
 async def update_skill(name: str, body: UpdateSkillRequest, user: User = Depends(current_user)):
     """Update an existing personal skill."""
+    _enforce_tool_access(user, body.tools)
     with get_session() as session:
         skill = update_personal_skill(
             session=session,

@@ -13,9 +13,11 @@ import { MessageBubble } from "./MessageBubble";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolCallCard } from "./ToolCallCard";
+import { ContextUsageIndicator } from "./ContextUsageIndicator";
 import type {
   Message,
   ApprovalInfo,
+  ContextUsage,
   QuestionInfo,
   QuestionAnswerEntry,
 } from "../types";
@@ -62,6 +64,7 @@ export function ChatWindow() {
     toolCalls,
     streamingSegments,
     pendingAttachments,
+    contextUsage,
     setConversationId,
     setMessages,
     addMessage,
@@ -81,6 +84,7 @@ export function ChatWindow() {
     addPendingAttachment,
     removePendingAttachment,
     clearPendingAttachments,
+    setContextUsage,
   } = useAppStore();
 
   // Pre-build a map from tool_call_id → result content
@@ -105,14 +109,26 @@ export function ChatWindow() {
     scrollToBottom();
   }, [messages, streamingContent, streamingSegments, toolCalls, pendingApproval, scrollToBottom]);
 
-  // Load conversation messages when conversationId changes
+  // Load conversation messages when conversationId changes. Track the
+  // previous id so we can distinguish "new conversation just got an id
+  // assigned by the server" (null → X — keep usage) from "user navigated
+  // between two persisted conversations" (X → Y — clear stale usage,
+  // since token counts aren't persisted per-message).
+  const prevConversationIdRef = useRef<number | null>(null);
   useEffect(() => {
     if (conversationId) {
+      const prev = prevConversationIdRef.current;
+      if (prev !== null && prev !== conversationId) {
+        setContextUsage(null);
+      }
+      prevConversationIdRef.current = conversationId;
       fetchConversation(conversationId)
         .then((conv) => setMessages(conv.messages))
         .catch(() => setError("Failed to load conversation"));
+    } else {
+      prevConversationIdRef.current = null;
     }
-  }, [conversationId, setMessages, setError]);
+  }, [conversationId, setMessages, setError, setContextUsage]);
 
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown) => {
@@ -173,6 +189,9 @@ export function ChatWindow() {
         case "done":
           setIsStreaming(false);
           setStreamingContent("");
+          if (d.usage) {
+            setContextUsage(d.usage as ContextUsage);
+          }
           // Refresh messages from server to get final state
           if (d.conversation_id) {
             setConversationId(d.conversation_id as number);
@@ -206,6 +225,7 @@ export function ChatWindow() {
       setMessages,
       setError,
       clearToolCalls,
+      setContextUsage,
       streamingContent,
     ]
   );
@@ -394,7 +414,7 @@ export function ChatWindow() {
                   : "Select a skill from the dropdown above to get started."}
               </p>
               {selectedSkillId && (
-                <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto">
+                <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto stagger-children">
                   {[
                     "Search the knowledge base",
                     "Check Azure resource status",
@@ -406,7 +426,7 @@ export function ChatWindow() {
                       onClick={() => {
                         setInput(suggestion);
                       }}
-                      className="text-left px-3.5 py-2.5 bg-base-800/50 hover:bg-base-800 border border-base-700/40 rounded-xl text-sm text-base-300 hover:text-base-100 transition-colors duration-150"
+                      className="text-left px-3.5 py-2.5 bg-base-800/50 hover:bg-base-800 border border-base-700/40 rounded-xl text-sm text-base-300 hover:text-base-100 transition-colors duration-150 ease-[var(--ease-out)]"
                     >
                       {suggestion}
                     </button>
@@ -532,7 +552,7 @@ export function ChatWindow() {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
-              className="self-end bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-3 text-base-400 hover:text-base-200 hover:bg-base-800 disabled:opacity-40 transition-colors duration-150"
+              className="self-end bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-3 text-base-400 hover:text-base-200 hover:bg-base-800 disabled:opacity-40 transition-colors duration-150 ease-[var(--ease-out)]"
               title="Attach image (or paste from clipboard)"
             >
               <Paperclip className="w-5 h-5" />
@@ -556,14 +576,14 @@ export function ChatWindow() {
               }
               disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
               rows={1}
-              className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 text-sm leading-relaxed"
+              className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)] text-sm leading-relaxed"
               style={{ minHeight: "44px", maxHeight: "200px" }}
             />
             <button
               onClick={handleSend}
               disabled={!canSend}
               aria-label="Send message"
-              className="self-end bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150"
+              className="self-end bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
             >
               {isStreaming ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -571,6 +591,9 @@ export function ChatWindow() {
                 <Send className="w-5 h-5" />
               )}
             </button>
+          </div>
+          <div className="mt-2 flex justify-start">
+            <ContextUsageIndicator usage={contextUsage} />
           </div>
         </div>
       </div>

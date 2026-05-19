@@ -1,5 +1,5 @@
-import { useState, memo, useMemo } from "react";
-import { User, Bot } from "lucide-react";
+import { useState, memo, useMemo, useEffect } from "react";
+import { User, Bot, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -129,8 +129,18 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
     }
   };
 
+  // Only animate freshly-arrived messages. When a user switches conversations
+  // we rehydrate full history; without this gate every historical bubble would
+  // re-run fade-up simultaneously, which reads as a janky re-render.
+  const isFresh = (() => {
+    if (!message.created_at) return true;
+    const t = new Date(message.created_at).getTime();
+    if (!Number.isFinite(t)) return true;
+    return Date.now() - t < 5000;
+  })();
+
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} gap-3 animate-fade-in-up`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} gap-3 ${isFresh ? "animate-fade-in-up" : ""}`}>
       {!isUser && (
         <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
           <Bot className="w-3.5 h-3.5 text-accent-light" />
@@ -199,18 +209,47 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
 
       {/* Lightbox */}
       {lightboxUrl && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
-          onClick={() => setLightboxUrl(null)}
-        >
-          <img
-            src={lightboxUrl}
-            alt="Preview"
-            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+        <Lightbox url={lightboxUrl} onClose={() => setLightboxUrl(null)} />
       )}
     </div>
   );
 });
+
+function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image preview"
+      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        aria-label="Close preview"
+        title="Close (Esc)"
+        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-base-900/80 hover:bg-base-800 border border-base-700/60 hover:border-base-600 text-base-100 flex items-center justify-center transition-colors duration-150"
+      >
+        <X className="w-5 h-5" />
+      </button>
+      <img
+        src={url}
+        alt="Preview"
+        className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}

@@ -184,6 +184,37 @@ describe('useAppStore', () => {
     });
   });
 
+  describe('context usage', () => {
+    const usage = {
+      prompt_tokens: 1234,
+      completion_tokens: 56,
+      cached_tokens: 800,
+      context_window: 128000,
+      model: 'gpt-5.4-mini',
+    };
+
+    it('starts null', () => {
+      expect(useAppStore.getState().contextUsage).toBeNull();
+    });
+
+    it('stores usage', () => {
+      useAppStore.getState().setContextUsage(usage);
+      expect(useAppStore.getState().contextUsage).toEqual(usage);
+    });
+
+    it('clears usage', () => {
+      useAppStore.getState().setContextUsage(usage);
+      useAppStore.getState().setContextUsage(null);
+      expect(useAppStore.getState().contextUsage).toBeNull();
+    });
+
+    it('is cleared by resetChat', () => {
+      useAppStore.getState().setContextUsage(usage);
+      useAppStore.getState().resetChat();
+      expect(useAppStore.getState().contextUsage).toBeNull();
+    });
+  });
+
   describe('resetChat', () => {
     it('resets chat state but preserves selectedSkillId', () => {
       useAppStore.getState().setSelectedSkillId('shared:architect');

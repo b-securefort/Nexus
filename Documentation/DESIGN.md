@@ -142,7 +142,7 @@ swaps the agent's persona and scoped toolset. Personal skills live in the
 | `network_test` | No | DNS / TCP / ping diagnostics |
 | `generate_file` | No | Write artifacts (bicep, csv, etc.) to `output/` sandbox |
 | `validate_drawio` / `render_drawio` / `patch_drawio_cell` | No | Diagram authoring + validation |
-| `python_diagram` / `drawio_from_python` | No | Diagram-as-code → drawio |
+| `generate_python_diagram` / `generate_drawio_from_python` | No | Diagram-as-code → drawio |
 | `web_fetch` | No | HTTP GET for documentation URLs |
 | `ask_user` | No (pauses for UI) | Surface options to the user via the UI; resumes on answer |
 
@@ -198,6 +198,7 @@ retrieval, etc.).
 | `diagrams` | python_diagram tool | Renders Azure architecture diagrams as code; only used by the diagram-authoring tools |
 
 **Rejected (and why)** — short list of options we considered and didn't take:
+- `langchain` / `langgraph` — would have abstracted the agent loop but most of what makes Nexus distinctive (approvals, ask_user, SSE protocol, multi-strategy retry, compaction) would live in custom callbacks or subclasses anyway. See §5 2026-04-22 "Hand-rolled orchestrator" entry.
 - `qmd` — Node.js + 2 GB GGUF models. Too much infra for what `sqlite-vec` + Azure OpenAI embeddings give us in Python.
 - `onnxruntime` / `sentence-transformers` / local ONNX models — considered for bge-small-en-v1.5 embeddings, rejected: bge-small (384 dim) is lower quality than `text-embedding-3-small` (1536 dim); local models add ~412 MB of download and an air-gapped install procedure; Azure OpenAI is already our trusted endpoint for every chat turn. See §5 "Azure OpenAI text-embedding-3-small" decision.
 - `Mem0` — paid cross-session memory service. Violates the local-only constraint and we already have `learn.md` for system-wide mistake memory.
@@ -237,6 +238,21 @@ KB re-indexing doesn't block in-flight chat reads.
 
 A chronological record. Newest decisions at the **bottom**. Each entry: date,
 decision, why, trade-offs accepted.
+
+### 2026-04-22 — Hand-rolled orchestrator over LangChain / LangGraph
+
+Built the agent loop directly on the OpenAI SDK + FastAPI streaming when the
+orchestrator was first scaffolded, rather than wrapping LangChain `AgentExecutor`
+or LangGraph. The loop *is* the product surface — approval gating, `ask_user`
+DB-persisted pauses, the typed SSE event protocol, multi-strategy retry with
+docs lookup, prompt-cache-aware system-prompt layout, orphan-safe history
+reconstruction, and ARM-token `ContextVar` propagation are all behaviours we
+tune turn-by-turn; a framework would either re-implement them in callbacks or
+accept defaults that erase those differentiators.
+**Trade-off**: no free LangSmith tracing, no LangGraph checkpointing, hand-rolled
+compaction and retries. Accepted because Nexus is single-process internal tooling
+at ~1200 orchestrator lines; if multi-agent graph workflows become a requirement,
+LangGraph is the place to revisit, not LangChain itself.
 
 ### 2026-05-13 — Pin the original user task in the system prompt
 Long tool-heavy turns push the original user message past the 50-message
@@ -386,14 +402,15 @@ the fast path that catches obvious attacks without touching the filesystem;
 the `relative_to` check is the definitive guard. Belt and suspenders is
 intentional here — a path-traversal in a file-write tool is high severity.
 
-### 2026-05-15 — SSE event protocol: nine typed events over a single stream
-The `POST /api/chat` endpoint emits nine distinct event types rather than a
+### 2026-05-15 — SSE event protocol: typed events over a single stream
+The `POST /api/chat` endpoint emits multiple distinct event types rather than a
 single `data` stream, so the frontend can render approval gates, question
 cards, tool status, and streaming text from one connection without polling.
 Each event carries a `type` discriminator and a `data` payload; the frontend
 switches on `type` to decide whether to append a token, show an approval
-card, or mark a tool as running.
-**Trade-off**: nine event types are more surface area than a simple
+card, or mark a tool as running. The current set is defined in
+`app/agent/streaming.py` and listed in GLOSSARY.md.
+**Trade-off**: multiple event types are more surface area than a simple
 `token`/`done` pair, but the alternative — polling separate endpoints for
 approval and question state — introduces race conditions and extra round-trips.
 
@@ -544,6 +561,22 @@ server-side. **Graceful degradation**: if the user hasn't consented to the ARM
 scope (or the permission hasn't been granted yet), `arm_token` is `None` and
 tools fall back to server-side credentials with no error surfaced to the user.
 
+### 2026-05-17 — Consolidate shared skills into a 3-tier model
+
+**Replaces `chat-with-kb`, `architect`, `azure-principal-architect`, and `kb-searcher` with three tiers using the same slugs.** `kb-searcher` becomes "Default" (read-only tools + KB only); `chat-with-kb` becomes "Azure Engineer" (full execute access, all 25 tools, "execute don't suggest" framing); `architect` becomes "Azure Architect" (same 25 tools, ADR + trade-off framing, Well-Architected Framework section available on request). The four original skills had near-identical 24-tool lists differing only in system-prompt framing, which the agent could not consistently distinguish; the new tiers separate "what tools are available" from "what response style to apply" and align with the planned role-based access model. Slugs were intentionally NOT renamed to avoid cascading changes in `SkillPicker.tsx`, `test_loader.py`, `test_compaction.py`, and `SkillPicker.test.tsx`; what users see is the `display_name` in frontmatter. The two drawio skills (`drawio-diagrammer`, `drawio-from-python`) remain as specialized skills with their own tool sets. **Trade-off**: existing conversations keep their original frozen `skill_snapshot_json` (the invariant holds), but the slug-to-display-name mismatch is now a maintenance smell to be cleaned up in a follow-up PR.
+
+### 2026-05-17 — Role-based skill/tool access via Azure App Configuration (planned)
+
+Gate which shared skills users see in `GET /api/skills`, and which tools they can include in personal skills via `GET /api/tools` and `POST /api/skills/personal`, based on Entra App Roles extracted from the JWT — with the role→tool mapping stored in Azure App Configuration, not in `kb_data/` or env vars. The KB Git repo is writable by the same engineers whose tool access needs restricting, so a `kb_data/roles.yaml` would be a privilege-escalation path; App Configuration provides an RBAC-gated, auditable store separate from the KB and the container image. The backend reads App Config once at startup; if unreachable, it falls back to hardcoded conservative defaults in `config.py` (engineer role = read-only tools only) and logs a WARNING — so a config outage cannot escalate privileges, only restrict them. Blocking is at the **skill level**, not the tool level — this preserves the `Conversation.skill_snapshot_json` invariant, since each user only snapshots a skill they were entitled to pick. **Trade-off**: adds a new operational dependency (App Configuration endpoint + Managed Identity binding per environment) and the role→tool mapping lives in two places (code defaults + App Config) that must be kept in sync; server-side validation in the personal-skill save endpoint is non-negotiable because UI filtering of `GET /api/tools` is not a security boundary.
+
+### 2026-05-18 — Token usage piggy-backs on the `done` SSE event
+
+The frontend context-usage indicator needs the last LLM call's prompt/completion/cached token counts plus the model's context-window denominator (new `AZURE_OPENAI_CONTEXT_WINDOW_TOKENS` config). We extended the existing `done` event payload with an optional `usage` object instead of introducing a new SSE event type or adding per-message token columns to the DB. No new event type — the 2026-05-15 "SSE event protocol: typed events over a single stream" decision still holds — only one optional field is added to the existing `done` payload. **Trade-off**: usage is not persisted, so switching to a historical conversation clears the indicator until the next reply fires; per-message DB columns were rejected as a schema change disproportionate to a UI accessory, and a separate `usage` event was rejected as additional surface area for the same information that `done` already marks as "this turn is complete".
+
+### 2026-05-19 — Architect absorbs drawio-from-python; retire that skill
+
+**Refines the 2026-05-17 "Consolidate shared skills into a 3-tier model" decision.** Architect gains `generate_drawio_from_python`, `render_drawio`, and `ask_user`, plus the Phase 1–6 architect-to-architect ceremony in its system prompt, so diagram work happens inline without a skill switch — `Conversation.skill_snapshot_json` is frozen at conversation creation, so a true hand-off forced losing context. The `drawio-from-python` shared skill is retired as a duplicate (SKILL.md deleted; removed from `rbac.py` and `test_rbac.py`); `drawio-diagrammer` stays, because its hand-written-XML + `patch_drawio_cell` identity is genuinely different. Engineer loses inline diagrams entirely and hands off to Architect for any diagram request — `validate_drawio` and the phantom `diagram_gen` are dropped from its allowlist. **Trade-off**: Architect's prompt grows by the Phase 1–6 ceremony (more system-prompt tokens per turn even on non-diagram work); accepted because the alternative — three near-identical drawio prompts to keep in sync (Architect + drawio-from-python skill + KB docs) — bit-rots faster, and the 2026-05-17 entry's specific failure ("Architect and Engineer indistinguishable on diagram tools") is what prompted this.
+
 ---
 
 ## 6. Operations
@@ -611,6 +644,15 @@ curl -X POST http://localhost:8000/api/kb/index/rebuild
 
 or call `GET http://localhost:8000/api/kb/index/status` to confirm
 `state == "complete"` after the rebuild finishes.
+
+### Chat deployment swap — update the context-window setting
+
+`AZURE_OPENAI_CONTEXT_WINDOW_TOKENS` (default `128000`) is the denominator the
+frontend context-usage indicator divides into. It is **not** auto-detected from
+the deployment — when you change `AZURE_OPENAI_DEPLOYMENT` in `.env`, update
+this setting in the same edit. Wrong value just mis-scales the indicator (the
+backend never enforces it as a hard cap), so a deploy that forgets the update
+will look like it's using less context than it actually is.
 
 ### Concurrency assumption
 Currently single-process (one uvicorn worker). The KB re-indexer uses an

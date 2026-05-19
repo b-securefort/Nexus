@@ -13,7 +13,7 @@ class TestSkillLoader:
 
     def test_load_shared_chat_with_kb(self, db_session):
         skill = load_skill("shared:chat-with-kb", "user-1", db_session)
-        assert skill.display_name == "Chat with KB"
+        assert skill.display_name == "Azure Engineer"
         assert "read_kb_file" in skill.tools
 
     def test_load_nonexistent_shared(self, db_session):

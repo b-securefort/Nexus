@@ -73,7 +73,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
       {/* Command */}
       <div>
         <span className="text-base-400 text-sm">Command:</span>
-        <pre className="mt-1.5 bg-base-900/80 rounded-lg p-3 text-sm text-base-200 font-mono overflow-x-auto whitespace-pre-wrap">
+        <pre className="mt-1.5 bg-base-900/80 rounded-lg p-3 text-sm text-base-200 font-mono overflow-x-auto overflow-y-auto max-h-40 whitespace-pre-wrap">
           {formatCommand(approval.tool_name, approval.args)}
         </pre>
       </div>
@@ -83,7 +83,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         <button
           onClick={() => onAction("approve")}
           disabled={remaining === 0}
-          className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
+          className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
         >
           <Check className="w-4 h-4" />
           Approve
@@ -91,7 +91,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         <button
           onClick={() => onAction("deny")}
           disabled={remaining === 0}
-          className="flex items-center gap-2 bg-red-800 hover:bg-red-700 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 text-sm font-medium"
+          className="flex items-center gap-2 bg-red-800 hover:bg-red-700 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
         >
           <X className="w-4 h-4" />
           Deny

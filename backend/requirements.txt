@@ -21,3 +21,9 @@ diagrams>=0.24.0
 sqlite-vec>=0.1.9
 numpy>=1.26.0
 pypdf>=5.0.0
+
+# Role-based access via Azure App Configuration (Entra App Roles → tools mapping).
+# Read once at startup; falls back to hardcoded defaults in app/auth/rbac.py if
+# unreachable. Managed Identity (DefaultAzureCredential) is used to authenticate.
+azure-appconfiguration>=1.5.0
+azure-identity>=1.19.0

@@ -37,7 +37,7 @@ export function SkillPicker() {
       <button
         onClick={() => !locked && setOpen(!open)}
         disabled={locked}
-        className="flex items-center gap-2 bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2 text-sm text-base-200 hover:bg-base-800 disabled:opacity-50 disabled:cursor-not-allowed transition-[background-color,transform] duration-150 min-w-[200px]"
+        className="flex items-center gap-2 bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2 text-sm text-base-200 hover:bg-base-800 disabled:opacity-50 disabled:cursor-not-allowed transition-[background-color,transform] duration-150 ease-[var(--ease-out)] min-w-[200px]"
       >
         <Sparkles className="w-4 h-4 text-accent-light" />
         <span className="flex-1 text-left truncate">

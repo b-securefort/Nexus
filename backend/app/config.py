@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
     AZURE_OPENAI_EMBED_DEPLOYMENT: str = "text-embedding-3-small"
     AZURE_OPENAI_EMBED_API_VERSION: str = "2023-05-15"
+    # Context window of the chat deployment in tokens. Surfaced to the frontend
+    # via the `done` SSE event so the chat UI can show "X / Y tokens (Z%)".
+    # Update alongside AZURE_OPENAI_DEPLOYMENT when the underlying model changes.
+    AZURE_OPENAI_CONTEXT_WINDOW_TOKENS: int = 128000
 
     # Entra ID
     ENTRA_TENANT_ID: str = ""
@@ -62,6 +66,15 @@ class Settings(BaseSettings):
 
     # Auth bypass (dev only)
     DEV_AUTH_BYPASS: bool = False
+
+    # Role-based access (see app/auth/rbac.py).
+    # When AZURE_APPCONFIG_ENDPOINT is empty the hardcoded DEFAULT_ACCESS_MAP
+    # in rbac.py is used — that is the safe production path until App Config
+    # is provisioned. The endpoint is the App Config resource URL, e.g.
+    # https://my-appconfig.azconfig.io. Auth is via Managed Identity
+    # (DefaultAzureCredential).
+    AZURE_APPCONFIG_ENDPOINT: str = ""
+    AZURE_APPCONFIG_ROLE_KEY: str = "Nexus:RoleAccessMap"
 
     # Tool bundles — set to false to disable an entire team-specific bundle
     TOOL_BUNDLE_AZURE_ENABLED: bool = True   # set false for non-Azure team deployments

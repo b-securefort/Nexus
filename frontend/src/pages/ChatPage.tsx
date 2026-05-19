@@ -28,14 +28,14 @@ export function ChatPage() {
           fixed md:relative z-40 md:z-auto
           h-full bg-base-950 border-r border-base-800/80
           flex flex-col
-          transition-[width,transform] duration-300 ease-[var(--ease-out)]
+          transition-[width,transform] duration-[250ms] ease-[var(--ease-out)]
           ${sidebarOpen
             ? "w-72 translate-x-0"
             : "w-0 -translate-x-full md:translate-x-0 md:w-0"
           }
         `}
       >
-        <div className={`flex flex-col h-full ${sidebarOpen ? "opacity-100" : "opacity-0"} transition-opacity duration-200 min-w-[288px]`}>
+        <div className={`flex flex-col h-full ${sidebarOpen ? "opacity-100" : "opacity-0"} transition-opacity duration-200 ease-[var(--ease-out)] min-w-[288px]`}>
           {/* Sidebar header: logo + new chat + collapse */}
           <div className="px-3 py-3 border-b border-base-800/80">
             <div className="flex items-center justify-between">

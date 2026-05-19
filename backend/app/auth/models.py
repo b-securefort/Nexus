@@ -16,3 +16,7 @@ class User:
     # Azure tools inject this as AZURE_ACCESS_TOKEN so commands run as the user,
     # not as the server's managed identity / service principal.
     arm_token: str | None = field(default=None)
+    # Entra App Roles from the JWT `roles` claim. Empty list when no roles
+    # are assigned to the user in the enterprise app's "Users and groups" page.
+    # Consumed by app/auth/rbac.py to filter visible skills and tools.
+    roles: list[str] = field(default_factory=list)

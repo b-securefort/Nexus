@@ -227,6 +227,8 @@ migration path (see §5 decision log).
 | **`kb_chunks`** *(Phase 2)* | kb_path, chunk_idx, heading, text, content_hash, file_mtime, source_url, embed_model | KB reindexer | search_kb_hybrid | until source file removed/changed |
 | **`kb_chunks_fts`** *(virtual)* | FTS5 over `kb_chunks.text + heading`, `tokenize=unicode61` | triggers on `kb_chunks` | search_kb_hybrid (BM25 stage) | n/a |
 | **`kb_chunks_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==kb_chunks.id — 1536 dims matches Azure OpenAI `text-embedding-3-small` | reindexer (explicit) | search_kb_hybrid (vector stage) | n/a |
+| **`agent_learnings`** | type (semantic\|procedural), category, tool_name, summary, details, status (provisional\|active\|archived\|rejected), validation_count, failure_count, judge_verdict_json, originating_conversation_id, content_hash, embed_model, last_validated_at, last_retrieved_at | orchestrator success-after-failure path (via `app/agent/learnings.py`) | `retrieve_relevant_learnings` (system-prompt build), `mark_learning_outcome` (post-tool-call) | active forever; archived rows retained for audit |
+| **`agent_learnings_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==agent_learnings.id — same Azure OpenAI embedding deployment as KB | `learnings.reembed_dirty()` (inline after writes + lifespan sweep) | `retrieve_relevant_learnings` (vector stage) | n/a |
 
 WAL mode is enabled on every new SQLite connection by
 [sqlite_vec_loader.py](../backend/app/db/sqlite_vec_loader.py) so periodic
@@ -565,9 +567,9 @@ tools fall back to server-side credentials with no error surfaced to the user.
 
 **Replaces `chat-with-kb`, `architect`, `azure-principal-architect`, and `kb-searcher` with three tiers using the same slugs.** `kb-searcher` becomes "Default" (read-only tools + KB only); `chat-with-kb` becomes "Azure Engineer" (full execute access, all 25 tools, "execute don't suggest" framing); `architect` becomes "Azure Architect" (same 25 tools, ADR + trade-off framing, Well-Architected Framework section available on request). The four original skills had near-identical 24-tool lists differing only in system-prompt framing, which the agent could not consistently distinguish; the new tiers separate "what tools are available" from "what response style to apply" and align with the planned role-based access model. Slugs were intentionally NOT renamed to avoid cascading changes in `SkillPicker.tsx`, `test_loader.py`, `test_compaction.py`, and `SkillPicker.test.tsx`; what users see is the `display_name` in frontmatter. The two drawio skills (`drawio-diagrammer`, `drawio-from-python`) remain as specialized skills with their own tool sets. **Trade-off**: existing conversations keep their original frozen `skill_snapshot_json` (the invariant holds), but the slug-to-display-name mismatch is now a maintenance smell to be cleaned up in a follow-up PR.
 
-### 2026-05-17 — Role-based skill/tool access via Azure App Configuration (planned)
+### 2026-05-17 — Role-based skill/tool access via Azure App Configuration
 
-Gate which shared skills users see in `GET /api/skills`, and which tools they can include in personal skills via `GET /api/tools` and `POST /api/skills/personal`, based on Entra App Roles extracted from the JWT — with the role→tool mapping stored in Azure App Configuration, not in `kb_data/` or env vars. The KB Git repo is writable by the same engineers whose tool access needs restricting, so a `kb_data/roles.yaml` would be a privilege-escalation path; App Configuration provides an RBAC-gated, auditable store separate from the KB and the container image. The backend reads App Config once at startup; if unreachable, it falls back to hardcoded conservative defaults in `config.py` (engineer role = read-only tools only) and logs a WARNING — so a config outage cannot escalate privileges, only restrict them. Blocking is at the **skill level**, not the tool level — this preserves the `Conversation.skill_snapshot_json` invariant, since each user only snapshots a skill they were entitled to pick. **Trade-off**: adds a new operational dependency (App Configuration endpoint + Managed Identity binding per environment) and the role→tool mapping lives in two places (code defaults + App Config) that must be kept in sync; server-side validation in the personal-skill save endpoint is non-negotiable because UI filtering of `GET /api/tools` is not a security boundary.
+Gate which shared skills users see in `GET /api/skills`, and which tools they can include in personal skills via `GET /api/tools` and `POST /api/skills/personal`, based on Entra App Roles extracted from the JWT. The role→access mapping (skills + tools per role) is stored as a single JSON value under key `Nexus:RoleAccessMap` in Azure App Configuration; the backend reads it once at startup with `DefaultAzureCredential`, validates the shape, and replaces the in-process `_ACCESS_MAP`. The KB Git repo is writable by the same engineers whose tool access needs restricting, so a `kb_data/roles.yaml` would be a privilege-escalation path; App Configuration provides an RBAC-gated, auditable store separate from the KB and the container image. If unreachable, malformed, or the endpoint env var is unset, the backend falls back to hardcoded conservative defaults in `app/auth/rbac.py` (no-role users get the Default skill only; engineer/architect roles keep their full tier sets), logging WARNING — a config outage can only restrict access, never escalate it. Blocking happens at **both** the skill level (visibility filter on `GET /api/skills`) and the tool level (allow-list filter on `GET /api/tools` plus a 403 gate in `POST /api/skills/personal`); the skill-snapshot invariant holds because users only ever pick from skills they are entitled to. **Trade-off**: adds a new operational dependency (App Configuration endpoint + Managed Identity assignment of `App Configuration Data Reader` per environment) and the role→access mapping lives in two places (code defaults + App Config) that must be kept in sync; server-side validation in the personal-skill save endpoint is non-negotiable because UI filtering of `GET /api/tools` is not a security boundary.
 
 ### 2026-05-18 — Token usage piggy-backs on the `done` SSE event
 
@@ -576,6 +578,10 @@ The frontend context-usage indicator needs the last LLM call's prompt/completion
 ### 2026-05-19 — Architect absorbs drawio-from-python; retire that skill
 
 **Refines the 2026-05-17 "Consolidate shared skills into a 3-tier model" decision.** Architect gains `generate_drawio_from_python`, `render_drawio`, and `ask_user`, plus the Phase 1–6 architect-to-architect ceremony in its system prompt, so diagram work happens inline without a skill switch — `Conversation.skill_snapshot_json` is frozen at conversation creation, so a true hand-off forced losing context. The `drawio-from-python` shared skill is retired as a duplicate (SKILL.md deleted; removed from `rbac.py` and `test_rbac.py`); `drawio-diagrammer` stays, because its hand-written-XML + `patch_drawio_cell` identity is genuinely different. Engineer loses inline diagrams entirely and hands off to Architect for any diagram request — `validate_drawio` and the phantom `diagram_gen` are dropped from its allowlist. **Trade-off**: Architect's prompt grows by the Phase 1–6 ceremony (more system-prompt tokens per turn even on non-diagram work); accepted because the alternative — three near-identical drawio prompts to keep in sync (Architect + drawio-from-python skill + KB docs) — bit-rots faster, and the 2026-05-17 entry's specific failure ("Architect and Engineer indistinguishable on diagram tools") is what prompted this.
+
+### 2026-05-20 — Agent learnings: orchestrator-owned writes, retrieval-on-context, three-layer poisoning defense
+
+**Supersedes the implicit "single learn.md, agent-driven `update_learnings`, always-on system-prompt injection" design.** The legacy model failed in three observable ways: (1) `update_learnings` was an agent-callable tool, so GPT-class models wrote entries like "the drawio validator is too strict — ignore overlap warnings" to suppress inconvenient tool output (memory-poisoning via hint-suppression, documented in 2025-2026 LLM agent research); (2) `get_learnings_content()` always injected the file's first 4 KB while the file itself grew to 29.6 KB, producing the contradictory state where the system prompt told the agent both "don't call `read_learnings`" and (via the truncation message) "use `read_learnings` for full content"; (3) one global markdown file with no per-entry attribution, validation history, or scope. New architecture: (a) a SQLite `agent_learnings` table with companion `agent_learnings_vec` (sqlite-vec) for embeddings, sibling to the existing `kb_chunks` infrastructure — no new third-party dependency; (b) writes are orchestrator-owned via `app/agent/learnings.py::record_validated_learning`, called only from the success-after-failure detector — the `ReadLearningsTool` and `UpdateLearningsTool` classes have been deleted, so the agent has no learning-write path at all (Voyager-pattern structural defense); (c) three write-gate defenses in order — the existing `_OVERRIDE_PATTERNS` regex guard, a new environment-specific name guard (rejects GUIDs and `<service>-<env>-<region>-<num>` resource names), and a new LLM judge (`app/agent/learn_judge.py`) that classifies the proposed entry as factual-observation vs hint-suppression and fails closed on any error; (d) retrieval-on-context replaces always-on injection — `_compose_system_prompt` now calls `retrieve_relevant_learnings(query=user_message, top_k=5)` and injects only matching entries with `[CANONICAL]` / `[PROVISIONAL]` markers; (e) validation tracking — when retrieved learnings are in scope and the subsequent tool call resolves, `mark_learning_outcome` increments `validation_count` (auto-promotes provisional → active at threshold 3) or `failure_count` (auto-archives drifted entries at threshold 3). The legacy `learn.md` file is preserved in the KB repo as an archive; on first startup `migrate_legacy_learn_md` imports its entries as `provisional` rows in the new table. **Trade-off**: every orchestrator-owned write costs one extra Azure OpenAI completion (the LLM-judge call) and every chat turn costs one extra Azure OpenAI embedding (the retrieval query); the agent can no longer record an arbitrary opinion as a learning, which is the point. Migration is one-way — once new entries land, the file-based path is dead.
 
 ---
 
@@ -596,12 +602,23 @@ npm run dev
 ```
 
 Both `.env` files (`backend/.env`, `frontend/.env`) must exist. `DEV_AUTH_BYPASS=true`
-short-circuits Entra auth in dev to a fake `dev-user` identity.
+short-circuits Entra auth in dev to a fake `dev-user` identity AND short-circuits
+the role-based access filter (see 2026-05-17 §5 entry) so local development
+sees every shared skill and every tool regardless of Entra roles.
+
+### Deployment env vars worth knowing about
+
+These two are unset by default and only matter once you're running against real Entra:
+
+| Var | Effect |
+|---|---|
+| `AZURE_APPCONFIG_ENDPOINT` | App Configuration resource URL (e.g. `https://nexus-config.azconfig.io`). When set, the lifespan handler reads `Nexus:RoleAccessMap` (JSON value) at startup and replaces the in-process `_ACCESS_MAP` in `app/auth/rbac.py`. Unset = hardcoded defaults stand. Requires the Container App's Managed Identity to have the `App Configuration Data Reader` role. |
+| `AZURE_APPCONFIG_ROLE_KEY` | Override the App Configuration key name (default `Nexus:RoleAccessMap`). Useful for parallel dev/prod role maps in one App Configuration resource. |
 
 ### Tests
 
 ```bash
-cd backend && python -m pytest tests/ -x -q   # 570 tests as of 2026-05-16
+cd backend && python -m pytest tests/ -x -q   # 595 tests as of 2026-05-20
 cd frontend && npm test                       # 109 tests
 ```
 
@@ -613,6 +630,7 @@ cd frontend && npm test                       # 109 tests
 | `_approval_sweeper` | Expire stale `pending_approvals` + `pending_questions` | Every 60 s |
 | `_backup_loop` | Snapshot `app.db` to `app-db-<ts>.db` | `BACKUP_INTERVAL_SECONDS` (default 24 h); off by default |
 | KB reindex (Phase 2) | Diff per file by sha256; chunk + embed + upsert changed files | After each `sync_repo()` + on startup (background) |
+| Agent-learnings reembed | Embed any `agent_learnings` row with `embed_model IS NULL` (after orchestrator writes; also one batch sweep at startup after the legacy-learn.md migration) | Inline after each write (limit=1); batch of 200 at startup |
 
 ### Health endpoints
 

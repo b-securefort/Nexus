@@ -118,6 +118,48 @@ class KBChunk(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 
 
+class AgentLearning(SQLModel, table=True):
+    """Validated learning the agent has acquired from a verified success-after-failure event.
+
+    Distinct from team-authored KB documents (which live in `kb_chunks`).
+    This table is the agent's procedural + semantic memory layer:
+      - `type='semantic'`  — toolchain facts ("Resource Graph KQL uses `=~` for case-insensitive")
+      - `type='procedural'` — how to do things ("for AKS upgrades, prefer `az aks nodepool upgrade` over `az aks upgrade --node-image-only`")
+
+    Writes are gated to the orchestrator's success-after-failure detector
+    (see `app/agent/learnings.py::record_validated_learning`). The agent
+    itself cannot write via a tool call — that path is removed.
+
+    Companion virtual table `agent_learnings_vec` (vec0) stores embeddings
+    for retrieval; populated by `app/agent/learnings.py::reembed_dirty()`.
+    """
+    __tablename__ = "agent_learnings"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    type: str = Field(nullable=False, index=True)  # "semantic" | "procedural"
+    category: str = Field(nullable=False)  # "syntax-fix" | "known-issue" | "workaround" | "best-practice" | "gotcha"
+    tool_name: str = Field(nullable=False, index=True)
+    summary: str = Field(nullable=False)
+    details: str = Field(nullable=False)
+    status: str = Field(nullable=False, default="active", index=True)
+    # status values:
+    #   "active"      — retrievable, validated
+    #   "provisional" — retrievable, awaiting more validations or migrated from legacy learn.md
+    #   "archived"    — not retrievable, kept for audit (stale or superseded)
+    #   "rejected"    — not retrievable, the LLM judge classified the write as hint-suppression
+    originating_conversation_id: Optional[int] = Field(default=None, index=True)
+    judge_verdict_json: Optional[str] = Field(default=None)  # full judge response for audit
+    embed_model: Optional[str] = Field(default=None)
+    content_hash: Optional[str] = Field(default=None)  # sha256 of summary+details — for reembed detection
+    validation_count: int = Field(default=0, nullable=False)
+    failure_count: int = Field(default=0, nullable=False)
+    recorded_at: datetime = Field(default_factory=_utcnow, nullable=False)
+    last_validated_at: Optional[datetime] = Field(default=None)
+    last_retrieved_at: Optional[datetime] = Field(default=None)
+    archived_at: Optional[datetime] = Field(default=None)
+
+
 class PendingQuestion(SQLModel, table=True):
     """Persistent record of an `ask_user` tool call awaiting the user's answer.
 

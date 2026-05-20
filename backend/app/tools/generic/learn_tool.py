@@ -1,15 +1,26 @@
 """
-Learnings tool — persistent memory of mistakes, known issues, and solutions.
-The agent reads this before executing commands and updates it after discovering issues.
+Legacy learnings file helpers. The `ReadLearningsTool` and
+`UpdateLearningsTool` classes that lived here have been removed as part of
+the 2026-05-18 redesign — the agent no longer writes learnings via a tool
+call. See `app/agent/learnings.py` for the orchestrator-owned write path,
+`app/agent/learn_judge.py` for the LLM-judge filter, and DESIGN.md §5 for
+the rationale.
+
+This module is kept only for:
+  - `_LEARN_FILE` path constant (used by the migration import)
+  - `_split_entries` markdown parser (used by the migration import)
+  - `_looks_like_override_attempt` regex guard (used by `learnings.py` as
+    a cheap deterministic backstop before the LLM judge runs)
+  - `_OVERRIDE_PATTERNS` / `_TOOL_NOUN` / `_DISCREDIT_ADJ` constants
+    (exported for tests that exercise the regex behaviour)
+
+Once the migration has run on every environment and the legacy `learn.md`
+file is no longer referenced anywhere, this module can be deleted.
 """
 
 import logging
 import os
 import re
-from datetime import datetime, timezone
-
-from app.auth.models import User
-from app.tools.base import Tool
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +96,18 @@ _OVERRIDE_REJECTION = (
 
 
 def _ensure_learn_file() -> str:
-    """Ensure the learn.md file and directory exist. Return absolute path."""
+    """Ensure the learn.md file and directory exist. Return absolute path.
+
+    Kept for the one-time migration import; new writes do not go here.
+    """
     path = os.path.abspath(_LEARN_FILE)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
-            f.write("# Agent Learnings\n\n"
-                    "This file records known issues, mistakes, and solutions "
-                    "discovered during tool execution.\n"
-                    "The agent consults this before running commands to avoid repeating errors.\n\n"
+            f.write("# Agent Learnings (legacy)\n\n"
+                    "This file is preserved as an archive of the pre-2026-05-18 "
+                    "agent learnings model. New learnings live in the SQLite "
+                    "`agent_learnings` table — see app/agent/learnings.py.\n\n"
                     "---\n\n")
     return path
 
@@ -133,155 +147,5 @@ def _filter_override_entries(content: str) -> str:
     return head + ("\n" + "".join(kept) if kept else "")
 
 
-def get_learnings_content() -> str:
-    """Read learn.md content. Used by orchestrator to inject into system prompt."""
-    path = _ensure_learn_file()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        content = _filter_override_entries(content)
-        # Cap at 4KB to avoid bloating the system prompt
-        if len(content) > 4096:
-            content = content[:4096] + "\n... (truncated, use read_learnings for full content)"
-        return content
-    except Exception:
-        return ""
-
-
-class ReadLearningsTool(Tool):
-    name = "read_learnings"
-    description = (
-        "Read the agent's learnings file (learn.md) which contains known issues, "
-        "past mistakes, and verified solutions. Always check this before executing "
-        "commands to avoid repeating known errors."
-    )
-    parameters_schema = {
-        "type": "object",
-        "properties": {},
-    }
-    requires_approval = False
-
-    def execute(self, args: dict, user: User) -> str:
-        path = _ensure_learn_file()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception as e:
-            return f"Error reading learnings: {e}"
-
-
-class UpdateLearningsTool(Tool):
-    name = "update_learnings"
-    description = (
-        "Append a new learning entry to learn.md. Use this when you discover a mistake, "
-        "a known issue, a corrected command syntax, or a solution that should be remembered. "
-        "Each entry should include: what went wrong, why, and the correct approach."
-    )
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "category": {
-                "type": "string",
-                "description": "Category: 'known-issue', 'syntax-fix', 'workaround', 'best-practice', or 'gotcha'",
-                "enum": ["known-issue", "syntax-fix", "workaround", "best-practice", "gotcha"],
-            },
-            "tool_name": {
-                "type": "string",
-                "description": "Which tool this relates to (e.g., 'az_cli', 'run_shell', 'az_resource_graph')",
-            },
-            "summary": {
-                "type": "string",
-                "description": "One-line summary of the learning",
-            },
-            "details": {
-                "type": "string",
-                "description": "What went wrong, why, and the correct approach or command",
-            },
-        },
-        "required": ["category", "summary", "details"],
-    }
-    requires_approval = False
-
-    def execute(self, args: dict, user: User) -> str:
-        category = args.get("category", "known-issue")
-        tool_name = args.get("tool_name", "general") or "general"
-        summary = args.get("summary", "")
-        details = args.get("details", "")
-
-        if not summary or not details:
-            return "Error: summary and details are required"
-
-        # A2: cap details at 4KB to prevent bloated entries
-        _DETAILS_MAX = 4096
-        if len(details) > _DETAILS_MAX:
-            details = details[:_DETAILS_MAX] + " ... (truncated to 4 KB)"
-
-        # A5: validate tool_name against the registry (lazy import avoids circular)
-        from app.tools.base import TOOL_REGISTRY  # noqa: PLC0415
-        _valid_tool_names = set(TOOL_REGISTRY.keys()) | {"general"}
-        if tool_name not in _valid_tool_names:
-            logger.warning(
-                "update_learnings: unknown tool_name '%s', falling back to 'general'",
-                tool_name,
-            )
-            tool_name = "general"
-
-        # Block self-poisoning attempts: don't let the agent write a learning
-        # whose effect is to tell future runs to ignore tool guidance.
-        if _looks_like_override_attempt(summary, details):
-            logger.warning(
-                "Blocked override-attempt learning by %s: [%s] %s",
-                user.email, category, summary[:120],
-            )
-            return _OVERRIDE_REJECTION
-
-        path = _ensure_learn_file()
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-        new_entry = (
-            f"## [{category}] {summary}\n"
-            f"- **Date**: {timestamp}\n"
-            f"- **Tool**: {tool_name}\n"
-            f"- **Details**: {details}\n\n"
-        )
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            # Robust rotation using shared helper (A1: normalises separators;
-            # A6: handles entries that lack a preceding newline).
-            header, entries = _split_entries(content)
-
-            # A4: Deduplication — replace an existing entry if it has the
-            # same tool_name and a near-identical summary (first 60 chars,
-            # case-insensitive) rather than appending a duplicate.
-            summary_key = summary.lower()[:60]
-            replaced = False
-            for idx, existing in enumerate(entries):
-                # Extract tool_name from existing entry body
-                tool_match = re.search(r'\*\*Tool\*\*:\s*(.+?)(?:\n|$)', existing)
-                ex_tool = tool_match.group(1).strip() if tool_match else ""
-                # Extract summary from ## [category] summary header
-                hdr_match = re.match(r'^## \[[^\]]+\]\s+(.+?)(?:\n|$)', existing)
-                ex_summary = hdr_match.group(1).strip() if hdr_match else ""
-                if ex_tool == tool_name and ex_summary.lower()[:60] == summary_key:
-                    entries[idx] = new_entry.strip() + "\n\n"
-                    replaced = True
-                    break
-
-            if not replaced:
-                entries.append(new_entry.strip() + "\n\n")
-
-            MAX_ENTRIES = 50
-            if len(entries) > MAX_ENTRIES:
-                entries = entries[-MAX_ENTRIES:]
-
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(header + "\n" + "".join(entries))
-
-            action = "updated" if replaced else "recorded"
-            logger.info("Learning %s: [%s] %s", action, category, summary)
-            return f"Learning {action}: [{category}] {summary} (Total entries: {len(entries)})"
-        except Exception as e:
-            return f"Error writing learning: {e}"
+# Tool classes removed 2026-05-18. The agent-facing path is closed; see
+# app/agent/learnings.py for the orchestrator-owned write API.

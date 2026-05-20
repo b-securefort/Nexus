@@ -61,7 +61,6 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "az_advisor",
             "az_policy_check",
             "network_test",
-            "read_learnings",
         ],
     },
     "engineer": {
@@ -84,14 +83,12 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "az_advisor",
             "az_policy_check",
             "network_test",
-            "read_learnings",
             # Engineer additions (write / execute, approval-gated)
             "az_cli",
             "az_rest_api",
             "run_shell",
             "generate_file",
             "az_devops",
-            "update_learnings",
         ],
     },
     "architect": {
@@ -119,13 +116,11 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "az_advisor",
             "az_policy_check",
             "network_test",
-            "read_learnings",
             "az_cli",
             "az_rest_api",
             "run_shell",
             "generate_file",
             "az_devops",
-            "update_learnings",
             # Architect diagram tools (inline drawio-from-python flow)
             "validate_drawio",
             "ask_user",

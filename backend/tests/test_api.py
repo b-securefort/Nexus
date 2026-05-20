@@ -51,11 +51,13 @@ class TestSkillsAPI:
         assert resp.status_code == 200
         tools = resp.json()
         assert isinstance(tools, list)
-        assert len(tools) == 29
+        assert len(tools) == 27  # 29 minus the two retired learning tools
         tool_names = [t["name"] for t in tools]
         assert "generate_file" in tool_names
         assert "validate_drawio" in tool_names
         assert "read_kb_file" in tool_names
+        assert "read_learnings" not in tool_names
+        assert "update_learnings" not in tool_names
         assert "search_kb" in tool_names
         assert "fetch_ms_docs" in tool_names
         assert "run_shell" in tool_names
@@ -64,8 +66,6 @@ class TestSkillsAPI:
         assert "az_cost_query" in tool_names
         assert "az_monitor_logs" in tool_names
         assert "az_rest_api" in tool_names
-        assert "read_learnings" in tool_names
-        assert "update_learnings" in tool_names
         # Approval-required tools
         for t in tools:
             if t["name"] in ("run_shell", "az_cli"):

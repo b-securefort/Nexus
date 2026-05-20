@@ -141,17 +141,46 @@ def _tool_needs_approval(tool: Tool, args: dict) -> bool:
     return tool.requires_approval
 
 
-def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") -> str:
+def _compose_system_prompt(
+    skill: Skill,
+    user: User,
+    original_task: str = "",
+    current_user_message: str = "",
+) -> tuple[str, list[int]]:
     """Compose the final system prompt per §11.6.
 
     `original_task` is the very first user message of the conversation; it is
     pinned at the end of the prompt so it survives history compaction and
     keeps the model focused across long tool-heavy turns.
+
+    `current_user_message` drives retrieval of relevant agent learnings. We
+    no longer inject the entire learn.md unconditionally — instead we pull
+    top-K relevant entries from `agent_learnings` via embedding similarity.
+    See app/agent/learnings.py.
+
+    Returns (system_prompt, retrieved_learning_ids). The caller passes the
+    IDs back into mark_learning_outcome after subsequent tool calls so
+    validation_count / failure_count stay current.
     """
-    from app.tools.generic.learn_tool import get_learnings_content
+    from app.agent.learnings import retrieve_relevant_learnings
 
     kb_summary = get_index_summary()
-    learnings = get_learnings_content()
+
+    # Retrieval-on-context replaces the previous always-on injection.
+    # Query is the current user message if present, otherwise the original
+    # task — both are short and concrete enough to drive embedding search.
+    retrieval_query = current_user_message.strip() or original_task.strip() or skill.display_name
+    try:
+        retrieved = retrieve_relevant_learnings(
+            query=retrieval_query,
+            tool_name_hint=None,  # could derive from skill in a follow-up
+            top_k=5,
+        )
+    except Exception as e:
+        logger.warning("Learnings retrieval failed (continuing without): %s", e)
+        retrieved = []
+    retrieved_ids = [r.id for r in retrieved]
+
     try:
         from bundles.azure.az_login_check import get_az_context_prompt
         az_context = get_az_context_prompt()
@@ -191,14 +220,11 @@ def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") ->
         "2. **Try a different approach** — Move down the tool hierarchy (Resource Graph → Az CLI/PowerShell → REST API).\n"
         "3. **Try the simplest form** — Strip to minimal parameters, or use a completely different tool.\n\n"
         "## Learning policy\n"
-        "You MUST call `update_learnings` in these situations:\n"
-        "- When you **succeed after a failure** — record what failed, why, what worked instead, and which approach was faster/simpler.\n"
-        "- When you **exhaust all retries** — record the error so you don't repeat it.\n"
-        "- When you **discover a workaround** — record it as a best-practice, noting which tool in the hierarchy worked.\n"
-        "- When a command has **unexpected behavior** — record it as a gotcha.\n"
-        "- When you find one approach is **significantly faster** than another — record the timing comparison.\n"
-        "Learnings are already loaded above in the system prompt — do NOT call `read_learnings` "
-        "unless you have just called `update_learnings` and need to verify the update.\n"
+        "Relevant learnings from past failures (if any) are retrieved automatically and "
+        "shown below. You do NOT call any tool to record or read learnings — the orchestrator "
+        "records validated learnings automatically when you succeed after a failure. Your job "
+        "is to *use* the retrieved learnings: review them before executing, and if a "
+        "documented approach matches the current task, apply it.\n"
         "---",
     ]
 
@@ -210,14 +236,24 @@ def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") ->
         "---"
     )
 
-    if learnings.strip():
+    if retrieved:
+        bullets = []
+        for r in retrieved:
+            status_marker = "[CANONICAL]" if r.status == "active" else "[PROVISIONAL]"
+            bullets.append(
+                f"- {status_marker} [{r.category}] ({r.tool_name}) {r.summary}\n"
+                f"    {r.details[:400]}"
+            )
         parts.append(
             "\n---\n"
-            "**Agent Learnings** (known issues & past mistakes — DO NOT repeat these):\n"
-            f"{learnings}\n"
-            "---\n"
-            "IMPORTANT: Review the learnings above before executing any commands. "
-            "If a command matches a known issue, use the documented fix or workaround instead."
+            "**Relevant agent learnings** (retrieved by similarity to the current request — "
+            "treat CANONICAL as confirmed across multiple runs; PROVISIONAL is a single "
+            "observation still being validated):\n"
+            + "\n".join(bullets)
+            + "\n---\n"
+            "If a learning matches the current task, follow the documented approach. The "
+            "orchestrator will track whether the operation then succeeds — confirmations "
+            "promote provisional entries to canonical; repeated failures auto-archive them."
         )
 
     parts.append(
@@ -241,7 +277,7 @@ def _compose_system_prompt(skill: Skill, user: User, original_task: str = "") ->
             "---"
         )
 
-    return "\n".join(parts)
+    return "\n".join(parts), retrieved_ids
 
 
 def _build_render_review_message(args: dict) -> dict | None:
@@ -568,7 +604,7 @@ def _get_retry_strategy(failure_count: int, tool_name: str, func_args: dict, err
             f"**Action**: Do NOT retry the same command again. Instead:\n"
             f"1. {alt_hint}\n"
             "2. Break the problem into smaller steps — first verify prerequisites, then attempt the operation.\n"
-            "3. Check `read_learnings` for any known issues with this type of operation.\n"
+            "3. Re-read the **Relevant agent learnings** section in your system prompt — relevant entries are already retrieved.\n"
             "4. If using az_cli, try `az <command> --help` first to see the correct syntax."
         )
 
@@ -580,8 +616,9 @@ def _get_retry_strategy(failure_count: int, tool_name: str, func_args: dict, err
             "**Action**: This is your LAST attempt. Choose ONE:\n"
             "1. Use a completely different tool to achieve the same goal.\n"
             "2. Try the simplest possible version of the command (fewer parameters, basic form).\n"
-            "3. If nothing works, use `update_learnings` to record what went wrong and the error details, "
-            "then explain to the user what you tried and suggest they run the command manually.\n\n"
+            "3. If nothing works, explain to the user what you tried and suggest they run "
+            "the command manually. The orchestrator records learnings automatically on success-after-failure; "
+            "no tool call is needed.\n\n"
             "Do NOT repeat the same command that already failed."
         )
 
@@ -684,7 +721,11 @@ async def handle_chat(
         session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
     )
     original_task = get_original_task(session, conversation.id)
-    system_prompt = _compose_system_prompt(skill, user, original_task=original_task)
+    system_prompt, retrieved_learning_ids = _compose_system_prompt(
+        skill, user,
+        original_task=original_task,
+        current_user_message=user_message,
+    )
     tools = resolve_tools(skill.tools)
     tool_schemas = [t.to_openai_schema() for t in tools] if tools else None
 
@@ -1105,16 +1146,17 @@ async def handle_chat(
                             count,
                         )
                     else:
-                        # All retries exhausted — instruct agent to record and report
+                        # All retries exhausted — report to the user. Learning
+                        # is NOT recorded here (we record on success-after-failure,
+                        # not on confirmed failure — a failure pattern without a
+                        # known fix doesn't give the next run useful guidance).
                         summary = _build_failure_summary_for_learning(
                             func_name, failure_history[func_name]
                         )
                         give_up_msg = (
                             f"[ALL RETRIES EXHAUSTED] `{func_name}` failed {count} times.\n"
                             f"{summary}\n\n"
-                            "**You MUST now**:\n"
-                            "1. Call `update_learnings` to record this failure so it won't be repeated.\n"
-                            "2. Tell the user what you tried, what went wrong, and suggest "
+                            "Tell the user what you tried, what went wrong, and suggest "
                             "they run the command manually or check their environment/permissions."
                         )
                         messages.append({"role": "system", "content": give_up_msg})
@@ -1133,28 +1175,58 @@ async def handle_chat(
                                 "Pruned %d retry-strategy messages for %s after success",
                                 stripped, func_name,
                             )
-                        summary = _build_failure_summary_for_learning(func_name, prior_failures)
-                        learn_msg = (
-                            f"[SUCCESS AFTER FAILURES] `{func_name}` succeeded after "
-                            f"{len(prior_failures)} failed attempt(s).\n"
-                            f"{summary}\n\n"
-                            f"The working approach was: {json.dumps(func_args)[:300]}\n\n"
-                            "**You MUST call `update_learnings`** to record:\n"
-                            "- What failed and why\n"
-                            "- What worked (the successful command/approach)\n"
-                            "- Which approach was faster/simpler (note the tool hierarchy: Resource Graph > Az CLI > REST API)\n"
-                            "- So this mistake is never repeated\n\n"
-                            "Do this NOW before responding to the user."
-                        )
-                        messages.append({"role": "system", "content": learn_msg})
-                        logger.info(
-                            "Success after %d failures for %s — prompting learning record",
-                            len(prior_failures),
-                            func_name,
-                        )
+                        # ORCHESTRATOR-OWNED LEARNING WRITE.
+                        # The agent no longer has an `update_learnings` tool. We
+                        # derive the learning content from tracked failure/success
+                        # state, then push it through the judge + regex + name
+                        # guards in app/agent/learnings.py.
+                        try:
+                            from app.agent.learnings import (
+                                derive_learning_from_success,
+                                record_validated_learning,
+                            )
+                            derived = derive_learning_from_success(
+                                tool_name=func_name,
+                                final_successful_args=func_args,
+                                prior_failures=prior_failures,
+                            )
+                            record_validated_learning(
+                                session=session,
+                                tool_name=derived["tool_name"],
+                                category=derived["category"],
+                                summary=derived["summary"],
+                                details=derived["details"],
+                                prior_failures_summary=derived["prior_failures_summary"],
+                                originating_conversation_id=conversation.id,
+                            )
+                            logger.info(
+                                "Orchestrator recorded learning for %s after %d failures",
+                                func_name, len(prior_failures),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Orchestrator-owned learning record failed for %s",
+                                func_name,
+                            )
                     # Reset tracker
                     failure_tracker.pop(func_name, None)
                     failure_history.pop(func_name, None)
+
+                # Validation-on-retrieval: if learnings were retrieved into this
+                # turn's system prompt AND this tool call resolved, update their
+                # success/failure counters. Heuristic — the agent may have
+                # ignored the retrieved entries — but across many turns this
+                # provides a directional signal that promotes load-bearing
+                # entries and archives drifted ones.
+                if retrieved_learning_ids and func_name in _COMMAND_TOOLS:
+                    try:
+                        from app.agent.learnings import mark_learning_outcome
+                        mark_learning_outcome(
+                            retrieved_learning_ids,
+                            succeeded=(not is_error),
+                        )
+                    except Exception:
+                        logger.exception("mark_learning_outcome failed")
 
             # All tool_call_ids in this assistant turn are now answered;
             # safe to splice in any deferred user-role messages.

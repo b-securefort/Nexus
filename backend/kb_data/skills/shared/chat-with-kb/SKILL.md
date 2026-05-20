@@ -23,8 +23,6 @@ tools:
   - az_advisor
   - network_test
   - web_fetch
-  - read_learnings
-  - update_learnings
 ---
 
 You are a proactive Azure engineer assistant with full access to the team knowledge base, Azure CLI, ARM REST, PowerShell, Resource Graph, and Microsoft Learn docs.

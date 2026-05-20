@@ -100,6 +100,11 @@ def _apply_lightweight_migrations(engine):
         # need raw DDL here.
         _ensure_kb_virtual_tables(conn)
 
+        # Agent learnings vec0 companion (procedural + semantic memory).
+        # The regular `agent_learnings` table is created by SQLModel; the
+        # vec0 virtual table holds embeddings used for top-K retrieval.
+        _ensure_agent_learnings_vec(conn)
+
 
 def _ensure_kb_virtual_tables(conn) -> None:
     """Create kb_chunks_fts (FTS5), kb_chunks_vec (vec0), and the FTS sync
@@ -191,6 +196,52 @@ def _ensure_kb_virtual_tables(conn) -> None:
     conn.commit()
 
 
+def _ensure_agent_learnings_vec(conn) -> None:
+    """Create the `agent_learnings_vec` vec0 table if missing.
+
+    Dimensions match `KB_EMBED_DIMENSIONS` so the same Azure OpenAI embedding
+    model serves both KB and learnings retrieval. If sqlite-vec isn't loaded,
+    log and skip — learnings retrieval falls back to BM25-only over a future
+    FTS table (not yet built; current retrieval requires vec0).
+    """
+    import re
+    import sqlalchemy
+
+    settings = get_settings()
+    expected_dims = settings.KB_EMBED_DIMENSIONS
+
+    # Handle a dimension mismatch the same way KB does — drop & rebuild
+    try:
+        row = conn.execute(sqlalchemy.text(
+            "SELECT sql FROM sqlite_master WHERE name='agent_learnings_vec' AND type='table'"
+        )).fetchone()
+        if row and row[0]:
+            m = re.search(r"float\[(\d+)\]", row[0])
+            if m and int(m.group(1)) != expected_dims:
+                logger.warning(
+                    "agent_learnings_vec has dimension %s but KB_EMBED_DIMENSIONS=%s — "
+                    "dropping and recreating (all learnings will be re-embedded)",
+                    m.group(1), expected_dims,
+                )
+                conn.execute(sqlalchemy.text("DROP TABLE IF EXISTS agent_learnings_vec"))
+                # Clear embed_model marker so reembed picks them up
+                conn.execute(sqlalchemy.text("UPDATE agent_learnings SET embed_model=NULL"))
+                conn.commit()
+    except Exception as e:
+        logger.warning("agent_learnings_vec dimension check skipped: %s", str(e).split("\n")[0])
+
+    ddl = f"""
+    CREATE VIRTUAL TABLE IF NOT EXISTS agent_learnings_vec USING vec0(
+      embedding float[{expected_dims}]
+    )
+    """
+    try:
+        conn.execute(sqlalchemy.text(ddl))
+        conn.commit()
+    except Exception as e:
+        logger.warning("agent_learnings_vec creation skipped: %s", str(e).split("\n")[0])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown tasks."""
@@ -211,6 +262,20 @@ async def lifespan(app: FastAPI):
     # Load role access map (Entra App Roles → skills/tools). No-op if
     # AZURE_APPCONFIG_ENDPOINT is empty; falls back to defaults on failure.
     await init_rbac()
+
+    # One-time migration of legacy learn.md → agent_learnings (idempotent;
+    # bypasses the LLM judge because entries are marked 'provisional' and
+    # go through the standard validation-or-archive lifecycle on use).
+    try:
+        from app.agent.learnings import migrate_legacy_learn_md, reembed_dirty
+        from app.db.engine import get_session
+        with get_session() as s:
+            migrated = migrate_legacy_learn_md(s)
+        if migrated:
+            # Embed migrated rows in batches so they're immediately retrievable
+            asyncio.create_task(asyncio.to_thread(reembed_dirty, 200))
+    except Exception:
+        logger.exception("Legacy learn.md migration failed (continuing)")
 
     # KB sync
     sync_repo()

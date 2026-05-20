@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from app.auth.models import User
-from app.tools.base import Tool
+from app.tools.base import Tool, get_skill_name
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,20 @@ class GenerateFileTool(Tool):
             return (
                 f"Error: File extension '{ext}' is not allowed. "
                 f"Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}"
+            )
+
+        # Skill-scoped guard: Engineer (`chat-with-kb`) hands diagrams off to
+        # Architect — see §5 2026-05-19 decision. The skill prompt says so, but
+        # the LLM ignored it in sanity testing and still wrote .drawio files
+        # via generate_file. Enforce it here so the contract holds even when
+        # the model doesn't.
+        if ext == ".drawio" and get_skill_name() == "chat-with-kb":
+            return (
+                "Error: Engineer skill does not produce .drawio diagrams. "
+                "Tell the user to switch to the Azure Architect skill (which "
+                "owns the generate_drawio_from_python flow) or to the Draw.io "
+                "Diagrammer skill (for hand-written XML + per-cell patches). "
+                "Do NOT retry this call with the same filename."
             )
 
         # Size check (and reject content that isn't valid UTF-8 — lone

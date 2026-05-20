@@ -31,6 +31,23 @@ def get_arm_token() -> str | None:
     return _current_arm_token.get()
 
 
+# Per-request active skill slug. Set by the orchestrator at the start of each
+# chat turn; read by tools that need to enforce skill-scoped behaviour the LLM
+# keeps ignoring in the system prompt. Today the only use is generate_file
+# refusing .drawio writes when the conversation's skill is the Engineer
+# (`chat-with-kb`) — see §5 2026-05-19: Engineer hands diagrams off to Architect.
+_current_skill_name: ContextVar[str | None] = ContextVar("skill_name", default=None)
+
+
+def set_skill_name(name: str | None) -> None:
+    """Store the active skill slug for the current request context."""
+    _current_skill_name.set(name)
+
+
+def get_skill_name() -> str | None:
+    return _current_skill_name.get()
+
+
 _az_executable_path: str | None = None
 _az_circuit_breaker_tripped: bool = False
 

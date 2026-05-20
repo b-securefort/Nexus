@@ -112,6 +112,35 @@ and PDF link lists (SharePoint / open web). Normalizes everything to
 markdown with front-matter (`source_url`, `last_synced`, `source`,
 `original_path`). Pilot scope: 50-200 documents.
 
+### KB content layout and file-level index
+**Files**: [backend/app/kb/indexer.py](../backend/app/kb/indexer.py)
+
+KB content lives at `<KB_REPO_LOCAL_PATH>/kb/` — a fixed subdirectory under the
+synced KB repo root. The indexer recursively scans `kb/**/*.md` and produces
+the in-memory `_index` that drives `search_kb` (the keyword search tool) and
+the **KB summary block** the orchestrator injects into every system prompt.
+The summary lists `path — title — summary (tags)` for every file the agent
+can read, so the agent knows the inventory without having to query.
+
+`<KB_REPO_LOCAL_PATH>/kb_index.json` is **optional curator metadata**, not the
+source of truth. When present, its `summary` and `tags` fields are merged
+onto matching disk-scanned entries; files not curated in the json still
+appear in the index with a minimal entry (title from first H1, empty summary).
+Curated entries pointing at non-`.md` files (e.g. `.drawio` reference
+patterns) are kept if the file exists on disk. Curated entries pointing at
+files that no longer exist are logged as drift warnings at startup and
+skipped — so a team that deletes content but forgets to update the json
+notices, but the live index stays consistent with reality.
+
+Implication for the [§5 2026-05-15 inner-source fork model](#5-decision-log):
+a team that adopts Nexus and commits `.md` files into their forked KB repo
+gets a working `search_kb` and KB summary immediately — `kb_index.json`
+curation is enrichment, not a gate. The `kb_chunks` table (Phase 2 hybrid
+retrieval) is rebuilt from disk by `reindex_all()` on the same schedule, so
+both indexes stay consistent across periodic git syncs (`load_index()` is
+called after every `sync_repo()` + `reindex_all()` cycle, not just at
+startup).
+
 ### Skills system
 **Files**: [backend/app/skills/](../backend/app/skills/), `kb_data/skills/shared/<skill>/SKILL.md`
 
@@ -579,9 +608,49 @@ The frontend context-usage indicator needs the last LLM call's prompt/completion
 
 **Refines the 2026-05-17 "Consolidate shared skills into a 3-tier model" decision.** Architect gains `generate_drawio_from_python`, `render_drawio`, and `ask_user`, plus the Phase 1–6 architect-to-architect ceremony in its system prompt, so diagram work happens inline without a skill switch — `Conversation.skill_snapshot_json` is frozen at conversation creation, so a true hand-off forced losing context. The `drawio-from-python` shared skill is retired as a duplicate (SKILL.md deleted; removed from `rbac.py` and `test_rbac.py`); `drawio-diagrammer` stays, because its hand-written-XML + `patch_drawio_cell` identity is genuinely different. Engineer loses inline diagrams entirely and hands off to Architect for any diagram request — `validate_drawio` and the phantom `diagram_gen` are dropped from its allowlist. **Trade-off**: Architect's prompt grows by the Phase 1–6 ceremony (more system-prompt tokens per turn even on non-diagram work); accepted because the alternative — three near-identical drawio prompts to keep in sync (Architect + drawio-from-python skill + KB docs) — bit-rots faster, and the 2026-05-17 entry's specific failure ("Architect and Engineer indistinguishable on diagram tools") is what prompted this.
 
-### 2026-05-20 — Agent learnings: orchestrator-owned writes, retrieval-on-context, three-layer poisoning defense
+### 2026-05-20 — Agent learnings move to SQLite + vec0
 
-**Supersedes the implicit "single learn.md, agent-driven `update_learnings`, always-on system-prompt injection" design.** The legacy model failed in three observable ways: (1) `update_learnings` was an agent-callable tool, so GPT-class models wrote entries like "the drawio validator is too strict — ignore overlap warnings" to suppress inconvenient tool output (memory-poisoning via hint-suppression, documented in 2025-2026 LLM agent research); (2) `get_learnings_content()` always injected the file's first 4 KB while the file itself grew to 29.6 KB, producing the contradictory state where the system prompt told the agent both "don't call `read_learnings`" and (via the truncation message) "use `read_learnings` for full content"; (3) one global markdown file with no per-entry attribution, validation history, or scope. New architecture: (a) a SQLite `agent_learnings` table with companion `agent_learnings_vec` (sqlite-vec) for embeddings, sibling to the existing `kb_chunks` infrastructure — no new third-party dependency; (b) writes are orchestrator-owned via `app/agent/learnings.py::record_validated_learning`, called only from the success-after-failure detector — the `ReadLearningsTool` and `UpdateLearningsTool` classes have been deleted, so the agent has no learning-write path at all (Voyager-pattern structural defense); (c) three write-gate defenses in order — the existing `_OVERRIDE_PATTERNS` regex guard, a new environment-specific name guard (rejects GUIDs and `<service>-<env>-<region>-<num>` resource names), and a new LLM judge (`app/agent/learn_judge.py`) that classifies the proposed entry as factual-observation vs hint-suppression and fails closed on any error; (d) retrieval-on-context replaces always-on injection — `_compose_system_prompt` now calls `retrieve_relevant_learnings(query=user_message, top_k=5)` and injects only matching entries with `[CANONICAL]` / `[PROVISIONAL]` markers; (e) validation tracking — when retrieved learnings are in scope and the subsequent tool call resolves, `mark_learning_outcome` increments `validation_count` (auto-promotes provisional → active at threshold 3) or `failure_count` (auto-archives drifted entries at threshold 3). The legacy `learn.md` file is preserved in the KB repo as an archive; on first startup `migrate_legacy_learn_md` imports its entries as `provisional` rows in the new table. **Trade-off**: every orchestrator-owned write costs one extra Azure OpenAI completion (the LLM-judge call) and every chat turn costs one extra Azure OpenAI embedding (the retrieval query); the agent can no longer record an arbitrary opinion as a learning, which is the point. Migration is one-way — once new entries land, the file-based path is dead.
+**Replaces the single `kb_data/learnings/learn.md` file with a SQLite `agent_learnings` table plus a companion `agent_learnings_vec` virtual table (sqlite-vec) for retrieval embeddings.** The file-based model had no per-entry attribution, no validation history, no scope, and `get_learnings_content()` silently truncated at 4 KB while the file itself grew to 29.6 KB. The new schema reuses the existing sqlite-vec / Azure OpenAI embedding stack — same dimensions as `kb_chunks_vec` — so there's no new third-party dependency. On first startup `migrate_legacy_learn_md` imports legacy entries as `provisional` rows; the original file stays in the KB repo as an archive but is no longer read at runtime. **Trade-off**: the schema is now a hard-to-reverse boundary (the legacy file path is dead, migration is one-way), and every retrieval pays one Azure OpenAI embedding round-trip per turn that the old always-inject path didn't.
+
+### 2026-05-20 — Orchestrator-owned learning writes; agent tools removed
+
+**Replaces the agent-callable `update_learnings` / `read_learnings` tools with an orchestrator-internal write path (`app/agent/learnings.py::record_validated_learning`) called only from the success-after-failure detector in `orchestrator.py`.** Observed failure mode that motivated this: GPT-class models wrote entries like *"the drawio validator is too strict — ignore overlap warnings"* to suppress inconvenient tool output (memory-poisoning via hint-suppression, documented in 2025-2026 LLM agent research). The `ReadLearningsTool` and `UpdateLearningsTool` classes have been deleted, so the agent has no learning-write path at all — a structural defense (Voyager-pattern) rather than a prompt-only constraint. **Trade-off**: agents can no longer record arbitrary opinions as learnings — which is the point; the entry content is now derived from tracked failure→success state, losing some nuance the agent might have added in free text.
+
+### 2026-05-20 — Three-gate write defense for learnings
+
+**Adds three sequential gates to `record_validated_learning`: (1) the existing `_OVERRIDE_PATTERNS` regex, (2) a new environment-specific name guard (rejects GUIDs and `<service>-<env>-<region>-<num>` patterns), (3) a new LLM judge (`app/agent/learn_judge.py`).** Regex alone is brittle to paraphrase — *"ignore the validator"* is caught, but *"the layout looks correct so overlap warnings can be skipped"* is not; the LLM judge catches both. The judge fails closed — any error or timeout returns `approve=False` — so a broken or unreachable judge can only reject legitimate writes, never let a poisoned one through. Rejected entries are persisted with `status='rejected'` and the full verdict for audit, but cannot be re-activated via the admin API. **Trade-off**: each write costs one extra Azure OpenAI completion (the judge call); accepted because the regex-only defense was already shown to miss real attacks.
+
+### 2026-05-20 — Retrieval-on-context replaces always-on injection
+
+**Replaces `_compose_system_prompt`'s unconditional injection of `learn.md` with a per-turn embedding-based retrieval (`retrieve_relevant_learnings(query, top_k=5)`).** The old path always injected the first 4 KB regardless of relevance, then truncated with a message telling the agent to call `read_learnings` — which the orchestrator separately instructed the agent *not* to call; that contradiction is now gone. Retrieved entries appear in the prompt with `[CANONICAL]` / `[PROVISIONAL]` markers, and if zero entries are relevant the section is omitted entirely (correct degraded state, not a misleading empty header). The orchestrator threads the retrieved IDs through the turn so `mark_learning_outcome` can update validation/failure counters as tool calls resolve. **Trade-off**: each chat turn now pays one Azure OpenAI embedding round-trip for the retrieval query; accepted because the old always-on injection cost grew linearly with file size and contradicted itself.
+
+### 2026-05-20 — Auto-promote/auto-archive via validation tracking
+
+**Provisional learnings auto-promote to `active` when `validation_count` reaches 3; entries auto-archive when `failure_count` reaches 3 and exceeds validations.** Counters update when retrieved learnings are in scope and the subsequent tool call resolves — success increments validation, error increments failure. The signal is heuristic — the agent may have ignored the retrieved entry — but across many turns it directionally promotes load-bearing entries and archives drifted ones (e.g. Azure API changes that invalidate a once-correct workaround). Architects can override the counters via PATCH on the admin API, which is why thresholds are 3 and not 1 — single-turn flukes shouldn't promote, and architects can fast-path a promotion when needed. **Trade-off**: a learning that's correct but rarely retrieved (its embedding sits far from any real user query) never promotes; accepted because the alternative — auto-promote on age — would canonize unvalidated entries by default.
+
+### 2026-05-20 — Architect-gated admin API for agent-learnings
+
+**Adds a CRUD admin surface (`/api/learnings`: list, detail, PATCH status, DELETE) plus a frontend page at `/admin/learnings`, both gated to the `architect` Entra App Role via a new `require_architect` dependency in `app/deps.py`.** Engineer-role users get 403; `DEV_AUTH_BYPASS=true` passes through to match the existing pattern in `app/auth/rbac.py`. PATCH cannot set status to `rejected` (Pydantic 422) and cannot change a rejected entry's status at all (409) — reactivating a judge-flagged learning would re-enable the poisoning class of attacks the judge exists to prevent. **Trade-off**: engineer-role users cannot even *view* learnings — they get 403 across the board; accepted because learnings are architectural memory (only architects should promote/archive) and read-only-for-engineer is a follow-up if it turns out to be needed. Alternatives rejected: (1) per-conversation learning ownership with personal vs team scope — learnings are about toolchain behaviour, not user identity; (2) a CLI-only admin path — architects already have a browser session open and a table is lower friction than `sqlite3` queries.
+
+### 2026-05-20 — Engineer skill rejects .drawio writes at tool layer
+
+The Engineer (`chat-with-kb`) skill's prompt ruled out diagram generation in the 2026-05-19 retire decision, but the model kept calling `generate_file` with a `.drawio` filename anyway. We now enforce the rule structurally: a `ContextVar` (`_current_skill_name` in `app/tools/base.py`) carries the active skill slug into the tool layer, and `generate_file` returns an error when `skill_name == "chat-with-kb"` and the extension is `.drawio`. Prompt rewrite alone failed in 2026-05-19 sanity testing; defence-in-depth landed.
+**Trade-off**: tools are no longer skill-agnostic — one tool now branches on skill context, a small architectural smell. The mechanism is reusable for future skill-scoped restrictions (same pattern as ARM-token passthrough in §5 2026-05-15).
+
+### 2026-05-20 — Rendered PNG attaches via assistant `attachments_json`
+
+Diagram tools producing a PNG (`generate_drawio_from_python`, `render_drawio`, `generate_file`, `patch_drawio_cell`) now have their output captured in a per-turn dict (`pending_render_attachments`) and drained onto the next assistant message's `attachments_json` when the turn terminates with no further tool calls. The frontend already renders inline images from `Message.attachments_json` — zero new SSE events, zero new endpoints.
+**Trade-off**: the PNG appears one assistant-turn AFTER the tool call (next to the agent's description), not in the tool-result card itself. Rejected adding a new SSE event type because §5 2026-05-15 and §5 2026-05-18 both established that new information piggy-backs on existing payloads rather than expanding the event vocabulary.
+
+### 2026-05-20 — kb_index.json is optional metadata, not source of truth
+
+`load_index()` now scans `<KB_REPO_LOCAL_PATH>/kb/**/*.md` and produces an entry per file regardless of whether `kb_index.json` exists; curated `summary` and `tags` from the json are layered onto matching disk-scanned entries when present. Replaces the prior implicit "kb_index.json is the index" assumption that left 10 files invisible to `search_kb` and the system-prompt KB summary on 2026-05-19. The merge runs on startup AND after every periodic `sync_repo()`, so new KB-repo files appear without a backend restart.
+**Trade-off**: non-`.md` files (e.g. `.drawio` reference patterns) still require a `kb_index.json` entry to be indexed — the auto-scan is `.md`-only. Curated entries pointing at deleted files are logged as drift warnings and skipped, so omissions on either side are noticed without breaking the live index.
+
+### 2026-05-20 — Orchestrator nudges on narration-instead-of-action
+
+When the model returns no `tool_calls` but the closing of the assistant text matches a "deferred action" pattern (`(I'll|I will|Let me|...)` + action verb, last 400 chars only), the orchestrator appends a synthetic system reminder and re-enters the loop once before yielding `done` — capped at one nudge per turn (`narration_nudges_used`) so a stubborn narrator can't infinite-loop us. Behind feature flag `NARRATION_NUDGE_ENABLED` (default `true`). The architect's "Tool calls are not narration" hard rule didn't hold in practice; this is the structural backstop.
+**Trade-off**: false-positive risk on legitimate informational replies — the regex is intentionally narrow (closed verb list, tail-only match) to limit it. Interim until the DSPy refactor ([dspy-coverage-tracker.md](../IdeasTodo/dspy-coverage-tracker.md) row 4) makes the no-tool-call-with-narration state structurally unrepresentable.
 
 ---
 
@@ -699,7 +768,16 @@ indexing.
 - **Retire cloud `search_kb_semantic`**: after the local path is validated
   on real ingested content with a golden-set comparison.
 - **DSPy refactor** (Phase 3): clean up ad-hoc `chat.completions.create`
-  calls in the compaction summarizer and the eventual query-expansion path
-  into typed signatures. Code-quality, not a new capability.
+  calls into typed `dspy.Signature` modules — and use the same primitives
+  to fix recurring tool-call constraint violations the prompt alone hasn't
+  held. Partial implementation is fine but should be **deliberately scoped**:
+  see [IdeasTodo/dspy-coverage-tracker.md](../IdeasTodo/dspy-coverage-tracker.md)
+  for the live checklist of distinct use cases, the interim fix in place for
+  each (some have none, some have load-bearing workarounds in code today),
+  and the retire-criteria for removing those interim fixes once a given
+  DSPy capability lands. As of 2026-05-20 the tracker covers four rows:
+  compaction summarizer, query expansion, `generate_drawio_from_python`
+  codegen constraints, and the orchestrator's narration-instead-of-action
+  loop branch.
 - **Full corpus ingestion** (1000 wiki + 100 PDF): same code as the pilot,
   just turn on more wiki spaces / longer link lists.

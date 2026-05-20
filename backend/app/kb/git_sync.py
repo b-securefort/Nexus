@@ -90,8 +90,13 @@ async def start_periodic_sync():
             # Run pilot ingestion so new remote content lands in kb_data/kb/
             from app.kb.ingest.runner import run_all_sources
             await asyncio.to_thread(run_all_sources)
-            # Re-index after sync + ingest so all new/changed KB files are searchable
+            # Re-index after sync + ingest so all new/changed KB files are searchable.
+            # Both indexes must be refreshed: kb_chunks (hybrid, used by
+            # search_kb_hybrid) AND the in-memory file-level index (used by
+            # search_kb and the system-prompt KB summary block).
             from app.kb.reindex import reindex_all
+            from app.kb.indexer import load_index
             await asyncio.to_thread(reindex_all)
+            await asyncio.to_thread(load_index)
         except Exception as e:
             logger.error("Periodic KB sync failed: %s", str(e))

@@ -1,7 +1,7 @@
 import { ChatWindow } from "../components/ChatWindow";
 import { ConversationList } from "../components/ConversationList";
 import { SkillPicker } from "../components/SkillPicker";
-import { Settings, PanelLeftClose, PanelLeft, Plus } from "lucide-react";
+import { Settings, PanelLeftClose, PanelLeft, Plus, Brain } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
 
@@ -68,13 +68,20 @@ export function ChatPage() {
           </div>
 
           {/* Footer */}
-          <div className="px-4 py-3 border-t border-base-800/80">
+          <div className="px-4 py-3 border-t border-base-800/80 space-y-2">
             <Link
               to="/skills"
               className="flex items-center gap-2 text-sm text-base-500 hover:text-base-300 transition-colors"
             >
               <Settings className="w-4 h-4" />
               Manage Skills
+            </Link>
+            <Link
+              to="/admin/learnings"
+              className="flex items-center gap-2 text-sm text-base-500 hover:text-base-300 transition-colors"
+            >
+              <Brain className="w-4 h-4" />
+              Agent Learnings
             </Link>
           </div>
         </div>

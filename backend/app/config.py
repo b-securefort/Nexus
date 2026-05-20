@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # Tool bundles — set to false to disable an entire team-specific bundle
     TOOL_BUNDLE_AZURE_ENABLED: bool = True   # set false for non-Azure team deployments
 
+    # Auto-nudge the model when it announces an action but emits no tool call.
+    # When True, the orchestrator detects deferred-action language at the end
+    # of an assistant turn with no tool_calls and re-enters the loop with a
+    # synthetic system reminder (capped at one nudge per chat turn). Set to
+    # False if false positives are hurting more than narration is.
+    NARRATION_NUDGE_ENABLED: bool = True
+
     # Tool config
     TOOL_SEARCH_SEMANTIC_ENABLED: bool = True
     TOOL_SEARCH_STACKOVERFLOW_ENABLED: bool = True

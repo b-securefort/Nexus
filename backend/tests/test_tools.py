@@ -664,6 +664,48 @@ class TestGenerateFileAdversarial:
         )
         assert "Error" in result
 
+    def test_drawio_rejected_under_chat_with_kb(self):
+        """G11: §5 2026-05-19 enforces Engineer (`chat-with-kb`) hands diagrams
+        off to Architect. The skill prompt says so; the LLM ignored it in
+        sanity testing. The tool layer must enforce the contract independently
+        of the prompt — so the model can't write .drawio when the active skill
+        is chat-with-kb, regardless of what the model thinks it should do."""
+        from app.tools.base import set_skill_name
+        tool = get_tool("generate_file")
+        set_skill_name("chat-with-kb")
+        try:
+            result = tool.execute(
+                {"filename": "diagram.drawio", "content": "<mxfile></mxfile>"},
+                _USER,
+            )
+        finally:
+            set_skill_name(None)
+        assert "Error" in result
+        assert "Engineer skill" in result
+        assert "Azure Architect" in result
+
+    def test_drawio_allowed_under_architect(self):
+        """G12: same code path must NOT block .drawio under any other skill —
+        regression guard so the chat-with-kb branch doesn't accidentally widen
+        and break Architect's drawio flow or drawio-diagrammer's hand-written
+        XML flow."""
+        from app.tools.base import set_skill_name
+        tool = get_tool("generate_file")
+        set_skill_name("architect")
+        try:
+            # Minimal mxfile so the validator doesn't crash; we only care that
+            # the skill gate is not what blocks this call.
+            content = '<mxfile host="test"><diagram><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram></mxfile>'
+            result = tool.execute(
+                {"filename": "allowed.drawio", "content": content, "overwrite": True},
+                _USER,
+            )
+        finally:
+            set_skill_name(None)
+        assert "Engineer skill" not in result
+        # No assertion on save success — depends on validator side-effects.
+        # The point of this test is the skill-gate negative case.
+
 
 class TestReadKBFileAdversarial:
     """Adversarial inputs for read_kb_file. The KB lives at kb_data/kb/.

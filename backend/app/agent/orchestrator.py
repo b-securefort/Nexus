@@ -5,6 +5,7 @@ Agent orchestrator — main agent loop with tool calling and approval gating.
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -33,7 +34,7 @@ from app.config import get_settings
 from app.db.models import Conversation, Message
 from app.kb.indexer import get_index_summary
 from app.skills.models import Skill
-from app.tools.base import Tool, resolve_tools, set_arm_token
+from app.tools.base import Tool, resolve_tools, set_arm_token, set_skill_name
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,48 @@ _COMMAND_TOOLS = {"az_cli", "run_shell", "az_resource_graph"}
 
 # Max consecutive failures on the same type of tool before giving up
 _MAX_RETRIES_PER_TOOL = 3
+
+# Narration-instead-of-action detection. The architect / drawio-diagrammer
+# skill prompts say "tool calls are not narration", but the model sometimes
+# ends a response with "I'll generate the diagram now" and emits NO tool
+# call, leaving the user to type "continue" to advance. When the model does
+# this we inject a synthetic system message and re-enter the loop once,
+# instead of yielding `done`. Capped at one nudge per chat turn so we can't
+# infinite-loop on a model that keeps narrating.
+_DEFERRED_ACTION_PATTERN = re.compile(
+    r"\b("
+    r"i\s?'?ll|i\s+will|i\s?'?m\s+going\s+to|i\s?'?m\s+about\s+to|"
+    r"let\s+me|next\s+i\s?'?ll|i\s?'?ll\s+now|i\s+can"
+    r")\s+"
+    # Optional adverbial modifier between the intent and the verb:
+    # "I'll NOW generate", "Let me FIRST render", "I will THEN write".
+    r"(?:(?:now|then|first|finally|also|just|quickly|briefly)\s+)?"
+    r"(generate|render|create|write|run|execute|query|fetch|read|call|"
+    r"patch|add|build|draw|sketch|produce|emit|make)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_deferred_action(text: str) -> bool:
+    """True if the tail of an assistant message announces a future action
+    that should have been a tool call. Only inspects the last 400 chars,
+    because the announcement is almost always the closing sentence; matching
+    against the full body causes false positives on agents recapping past
+    work ("I'll briefly remind you that I generated...")."""
+    if not text:
+        return False
+    tail = text[-400:] if len(text) > 400 else text
+    return _DEFERRED_ACTION_PATTERN.search(tail) is not None
+
+
+_NARRATION_NUDGE_MESSAGE = (
+    "[system nudge] Your previous response announced you would call a tool "
+    "but did not actually call it. The user cannot see your intent — only "
+    "your tool calls. Make the tool call NOW, in this same response. If "
+    "you have no tool to call (you were waiting for user input, the request "
+    "is complete, or you need clarification), reply with that explicitly "
+    "instead of restating intent."
+)
 MAX_HISTORY_MESSAGES = 50
 
 # Per-tool size caps for the in-memory `messages` list that goes back to the
@@ -716,6 +759,10 @@ async def handle_chat(
 
     # 2. Build request
     skill = _skill_from_snapshot(conversation.skill_snapshot_json)
+    # Propagate the active skill slug into the tool execution context so tools
+    # can enforce skill-scoped behaviour that the LLM keeps ignoring in the
+    # system prompt (see generate_file's .drawio guard).
+    set_skill_name(skill.name)
     client = _get_openai_client()
     messages = load_compacted_history(
         session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
@@ -746,6 +793,11 @@ async def handle_chat(
     # De-duplicated by filename so multiple iterations of the same diagram
     # only show the latest render once.
     pending_render_attachments: dict[str, dict] = {}
+
+    # Count of narration-nudge re-entries used this turn. Capped at 1 so the
+    # loop can't be tricked into infinite continuation by a model that keeps
+    # narrating without acting.
+    narration_nudges_used: int = 0
 
     while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
@@ -895,6 +947,30 @@ async def handle_chat(
             messages.append(assistant_hist)
 
             if not tool_calls:
+                # Detect the narration-instead-of-action pattern: the model
+                # wrote "I'll generate the diagram now" but emitted no tool
+                # call, leaving the user to type "continue". When detected,
+                # inject one system reminder and re-enter the loop instead
+                # of terminating. Cap at one nudge per turn so a stubborn
+                # narrator can't infinite-loop us. Feature-flagged so an
+                # operator can turn it off if false positives hurt.
+                if (
+                    settings.NARRATION_NUDGE_ENABLED
+                    and narration_nudges_used < 1
+                    and iteration < MAX_TOOL_ITERATIONS
+                    and _looks_like_deferred_action(assistant_content)
+                ):
+                    narration_nudges_used += 1
+                    messages.append({
+                        "role": "system",
+                        "content": _NARRATION_NUDGE_MESSAGE,
+                    })
+                    logger.info(
+                        "Narration nudge fired (iter=%d, tail=%r)",
+                        iteration,
+                        (assistant_content or "")[-120:],
+                    )
+                    continue
                 yield sse_done(conversation.id, usage=usage_payload)
                 return
 

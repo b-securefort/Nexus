@@ -282,6 +282,14 @@ async def lifespan(app: FastAPI):
     load_index()
     load_shared_skills()
 
+    # Drift check: warn at startup if any shared skill's `tools:` allowlist
+    # references a name not in TOOL_REGISTRY. Catches phantoms (like the
+    # `diagram_gen` typo found in 2026-05-19 sanity testing) BEFORE a user
+    # picks the skill and resolve_tools silently drops the missing name.
+    # Must run after both init_tools() and load_shared_skills() above.
+    from app.skills.shared import audit_shared_skill_tool_allowlists
+    audit_shared_skill_tool_allowlists()
+
     # Kick KB hybrid-retrieval reindex in background (non-blocking)
     from app.kb.reindex import reindex_all
     asyncio.create_task(asyncio.to_thread(reindex_all))
@@ -381,11 +389,13 @@ def create_app() -> FastAPI:
     from app.api.chat import router as chat_router
     from app.api.skills import router as skills_router
     from app.api.conversations import router as conversations_router
+    from app.api.learnings import router as learnings_router
 
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(skills_router)
     app.include_router(conversations_router)
+    app.include_router(learnings_router)
 
     # Prometheus metrics endpoint
     @app.get("/metrics")

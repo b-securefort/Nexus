@@ -59,6 +59,58 @@ def get_shared_skill(name: str) -> Skill | None:
     return _shared_skills_cache.get(name)
 
 
+def audit_shared_skill_tool_allowlists() -> dict[str, list[str]]:
+    """Warn about tool names listed in shared skill allowlists that aren't
+    registered. Catches typos and stale references (e.g. the `diagram_gen`
+    phantom found in 2026-05-19 sanity testing) at startup, before a user
+    picks the skill and `resolve_tools` silently drops the missing name.
+
+    Distinction this audit DOES make:
+      - Known + enabled (no warning)
+      - Known + disabled by config (no warning — operational, not drift)
+      - Not in TOOL_REGISTRY at all → emit WARNING
+
+    Known limitation: tools from a **disabled bundle** don't register at
+    all and look "unknown" to this audit. In multi-bundle deployments
+    (TOOL_BUNDLE_*_ENABLED=false for some teams) the warning may be a
+    false positive. The log line explicitly names this case so an
+    operator reading the warning has the context to decide.
+
+    Must be called AFTER `init_tools()` and `load_shared_skills()`. Idempotent
+    and safe to call multiple times. Returns the drift dict so tests and
+    callers that want a structured handle (not just logs) have one;
+    operational use is the WARNING log line.
+    """
+    from app.tools.base import TOOL_REGISTRY
+
+    drift: dict[str, list[str]] = {}
+    skills = get_shared_skills()
+    if not skills:
+        # Loader hasn't run, or no skills in this deploy. Don't pretend
+        # to audit an empty set as "clean" — silent return.
+        logger.debug("audit_shared_skill_tool_allowlists: no skills loaded, skipping")
+        return drift
+
+    for skill_name, skill in skills.items():
+        unknown = [t for t in skill.tools if t not in TOOL_REGISTRY]
+        if unknown:
+            drift[skill_name] = unknown
+            logger.warning(
+                "Shared skill '%s' references %d tool name(s) not in TOOL_REGISTRY: %s. "
+                "Either remove from the skill's tools allowlist, fix the typo, "
+                "or confirm they live in a bundle this deploy has disabled "
+                "(TOOL_BUNDLE_*_ENABLED=false). Unknown names are silently "
+                "dropped by resolve_tools at chat time.",
+                skill_name, len(unknown), unknown,
+            )
+    if not drift:
+        logger.info(
+            "Shared skill tool allowlists: all %d skills' tool references resolve to known tools",
+            len(skills),
+        )
+    return drift
+
+
 def _parse_skill_file(name: str, filepath: Path) -> Skill | None:
     """Parse a SKILL.md file with YAML frontmatter."""
     content = filepath.read_text(encoding="utf-8")

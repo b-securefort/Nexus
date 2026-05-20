@@ -6,7 +6,9 @@ from typing import Callable
 
 import httpx
 
-DEFAULT_BASE_URL = "http://localhost:8002"
+DEFAULT_BASE_URL = "http://localhost:8000"
+# X-Dev-User is vestigial — backend's get_current_user reads only DEV_AUTH_BYPASS.
+# Kept in case the bypass is ever wired to honour the header for multi-user testing.
 DEFAULT_HEADERS = {"X-Dev-User": "dev-user"}
 
 

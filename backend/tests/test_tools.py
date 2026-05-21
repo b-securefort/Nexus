@@ -523,6 +523,199 @@ class TestAzCliAdversarial:
         assert "blocked for safety" not in result
 
 
+# ── Track 1A regression tests ───────────────────────────────────────────────
+# Verifies the three security fixes from RemediationPlan.md Phase 1 Track 1A:
+#   B1  – _run_az uses an explicit env allowlist (no secret leakage)
+#   B2  – % metachar blocked (cmd.exe env expansion defence-in-depth)
+#   CR#1 – shell=False always; & blocked; az.cmd resolved on Windows
+
+
+class TestRunAzEnvAllowlist:
+    """B1: _run_az must NOT forward secrets from os.environ to the subprocess."""
+
+    def test_run_az_strips_secret_env_vars(self, monkeypatch):
+        """The subprocess must receive only the allowed env vars.
+        Secret-looking keys (AZURE_OPENAI_API_KEY, SECRET_TOKEN, etc.) must
+        be absent from the env dict passed to subprocess.run."""
+        import os
+        import subprocess
+
+        # Plant a fake secret into the process environment.
+        monkeypatch.setenv("AZURE_OPENAI_API_KEY", "super-secret-value")
+        monkeypatch.setenv("DATABASE_URL", "sqlite:///secrets.db")
+
+        captured_env: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+            # Return a successful empty result so _run_az doesn't error out.
+            mock = subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return mock
+
+        from app.tools.base import _az_executable_path, _az_circuit_breaker_tripped
+        import app.tools.base as base_mod
+
+        monkeypatch.setattr(base_mod, "_az_executable_path", "/usr/bin/az")
+        monkeypatch.setattr(base_mod, "_az_circuit_breaker_tripped", False)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        # Instantiate a minimal AzureToolBase subclass inline for testing.
+        from app.tools.base import AzureToolBase
+        from app.auth.models import User
+
+        class _TestTool(AzureToolBase):
+            name = "_test_run_az_env"
+            description = "test"
+            parameters_schema = {"type": "object", "properties": {}}
+
+            def execute(self, args, user):
+                return self._run_az(
+                    ["/usr/bin/az", "account", "show"],
+                    label="test",
+                    use_retry=False,
+                )
+
+        tool = _TestTool()
+        tool.execute({}, User(oid="u", email="u@t.com", display_name="U"))
+
+        assert "AZURE_OPENAI_API_KEY" not in captured_env, (
+            "FLAW B1: AZURE_OPENAI_API_KEY leaked into subprocess env"
+        )
+        assert "DATABASE_URL" not in captured_env, (
+            "FLAW B1: DATABASE_URL leaked into subprocess env"
+        )
+        # PATH must be present — az needs it.
+        assert "PATH" in captured_env
+
+    def test_run_az_forwards_arm_token(self, monkeypatch):
+        """ARM token from ContextVar must appear in the subprocess env as
+        AZURE_ACCESS_TOKEN even though it is not in os.environ."""
+        import subprocess
+        from app.tools.base import set_arm_token, AzureToolBase
+        from app.auth.models import User
+        import app.tools.base as base_mod
+
+        set_arm_token("eyJtoken123")
+
+        captured_env: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(base_mod, "_az_executable_path", "/usr/bin/az")
+        monkeypatch.setattr(base_mod, "_az_circuit_breaker_tripped", False)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        class _TestTool(AzureToolBase):
+            name = "_test_arm_fwd"
+            description = "test"
+            parameters_schema = {"type": "object", "properties": {}}
+
+            def execute(self, args, user):
+                return self._run_az(["/usr/bin/az", "account", "show"],
+                                    label="test", use_retry=False)
+
+        _TestTool().execute({}, User(oid="u", email="u@t.com", display_name="U"))
+
+        assert captured_env.get("AZURE_ACCESS_TOKEN") == "eyJtoken123", (
+            "ARM token was not forwarded to the subprocess env"
+        )
+        # Clean up ContextVar
+        set_arm_token(None)
+
+
+class TestShellInjectionBlocking:
+    """B2 + CR#1: check_shell_injection must block %, &, backtick, and NUL
+    in az CLI argument values."""
+
+    def _check(self, value: str):
+        from app.tools.base import check_shell_injection
+        return check_shell_injection(value, "test_arg")
+
+    def test_ampersand_whoami_blocked(self):
+        """CR#1: & used for command chaining must be rejected."""
+        result = self._check("&whoami")
+        assert result is not None, "FLAW CR#1: &whoami not blocked"
+        assert "not allowed" in result
+
+    def test_percent_env_expansion_blocked(self):
+        """B2: %PATH% style Windows env expansion must be rejected."""
+        result = self._check("%PATH%")
+        assert result is not None, "FLAW B2: %PATH% not blocked"
+        assert "not allowed" in result
+
+    def test_percent_api_key_blocked(self):
+        """B2: %AZURE_OPENAI_API_KEY% must be rejected."""
+        result = self._check("%AZURE_OPENAI_API_KEY%")
+        assert result is not None, "FLAW B2: %AZURE_OPENAI_API_KEY% not blocked"
+        assert "not allowed" in result
+
+    def test_backtick_blocked(self):
+        """Existing: backtick (PowerShell execution) must be rejected."""
+        result = self._check("`whoami`")
+        assert result is not None
+        assert "not allowed" in result
+
+    def test_nul_byte_blocked(self):
+        """Existing: NUL byte must be rejected."""
+        result = self._check("safe\x00malicious")
+        assert result is not None
+        assert "not allowed" in result
+
+    def test_pipe_in_kql_allowed(self):
+        """| in a KQL query value must NOT be blocked (safe with shell=False)."""
+        result = self._check("Resources | count")
+        assert result is None, "FLAW: KQL pipe blocked, will break az_resource_graph"
+
+    def test_clean_arg_allowed(self):
+        """Normal resource group name must pass."""
+        assert self._check("my-resource-group") is None
+        assert self._check("--output") is None
+        assert self._check("json") is None
+
+    def test_semicolon_allowed(self):
+        """Semicolons appear in JMESPath; must not be blocked."""
+        assert self._check("[?name=='a;b']") is None
+
+
+class TestRunAzShellFalse:
+    """CR#1: _run_az must never use shell=True."""
+
+    def test_subprocess_run_called_with_shell_false(self, monkeypatch):
+        """Monkeypatch subprocess.run and assert shell kwarg is False."""
+        import subprocess
+        import app.tools.base as base_mod
+        from app.tools.base import AzureToolBase
+        from app.auth.models import User
+
+        captured_kwargs: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_kwargs.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(base_mod, "_az_executable_path", "/usr/bin/az")
+        monkeypatch.setattr(base_mod, "_az_circuit_breaker_tripped", False)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        class _TestTool(AzureToolBase):
+            name = "_test_shell_false"
+            description = "test"
+            parameters_schema = {"type": "object", "properties": {}}
+
+            def execute(self, args, user):
+                return self._run_az(["/usr/bin/az", "account", "show"],
+                                    label="test", use_retry=False)
+
+        _TestTool().execute({}, User(oid="u", email="u@t.com", display_name="U"))
+
+        assert captured_kwargs.get("shell") is False, (
+            "FLAW CR#1: _run_az passed shell=True to subprocess.run — "
+            "this enables shell metachar injection on Windows"
+        )
+
+
 # ── Batch B: file-I/O adversarial ───────────────────────────────────────────
 
 

@@ -101,7 +101,14 @@ export type SSEEvent =
   | { type: "tool_result"; data: { call_id: string; name: string; content: string } }
   | { type: "message_saved"; data: { message_id: number; role: string } }
   | { type: "done"; data: { conversation_id: number; usage?: ContextUsage } }
-  | { type: "error"; data: { message: string } };
+  | { type: "error"; data: { message: string } }
+  | { type: "token_refresh_required"; data: TokenRefreshRequired };
+
+export interface TokenRefreshRequired {
+  conversation_id: number;
+  tool_name: string;
+  status: "missing" | "expired" | "near_expiry";
+}
 
 export interface ChatRequest {
   conversation_id?: number | null;

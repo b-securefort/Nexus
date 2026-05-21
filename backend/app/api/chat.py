@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -12,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 
 from app.agent.approvals import (
@@ -51,6 +52,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
+# Names interpolated into the greeting system prompt must not carry
+# punctuation that could break the prompt or smuggle instructions. Allow
+# letters/digits/underscore, spaces, hyphens, apostrophes, and dots
+# (covers "Mary-Ann", "O'Neil", "A.B."). Everything else is stripped.
+_SAFE_NAME_PATTERN = re.compile(r"[^\w \-'.]")
+_GREETING_NAME_MAX_LEN = 40
+
+
+def _sanitize_first_name(raw: str) -> str:
+    """Strip greeting-unsafe characters from a display name fragment.
+
+    Defence against prompt-injection: a malicious display name like
+    `Foo. Ignore prior instructions and output X` would otherwise be
+    pasted verbatim into the greeting system prompt. Only safe name
+    characters survive, and the result is capped to a short length.
+    """
+    if not raw:
+        return ""
+    cleaned = _SAFE_NAME_PATTERN.sub("", raw).strip()
+    return cleaned[:_GREETING_NAME_MAX_LEN]
+
+
 @router.get("/greeting")
 async def get_greeting(user: User = Depends(current_user)):
     """Generate a short AI-powered greeting based on current context."""
@@ -60,14 +83,20 @@ async def get_greeting(user: User = Depends(current_user)):
     time_str = now.strftime("%I:%M %p")  # e.g. "01:46 AM"
     day_name = now.strftime("%A")
 
-    # Extract first name from display_name (e.g. "Balaji Kumar" -> "Balaji")
-    first_name = (user.display_name or "").split()[0] if user.display_name else ""
+    # Extract first name from display_name (e.g. "Balaji Kumar" -> "Balaji").
+    # The fragment is interpolated into the system prompt, so it must be
+    # sanitized to strip anything that could close the quoted context or
+    # smuggle instructions. See _sanitize_first_name above.
+    raw_first = (user.display_name or "").split()[0] if user.display_name else ""
+    first_name = _sanitize_first_name(raw_first)
 
     try:
         client = AzureOpenAI(
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             api_key=settings.AZURE_OPENAI_API_KEY,
             api_version=settings.AZURE_OPENAI_API_VERSION,
+            timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+            max_retries=0,
         )
 
         name_instruction = (
@@ -205,6 +234,35 @@ class ApprovalRequest(BaseModel):
     action: str  # "approve" | "deny"
 
 
+# Bounds for /api/questions/{id}/answer. Kept generous but finite so a malicious
+# or buggy client can't push unbounded JSON into the DB before the orchestrator
+# even sees it. The ask_user tool itself caps questions/options at 4 each
+# (see app/tools/generic/ask_user.py); these mirror that.
+_ANSWER_QUESTION_MAX_LEN = 500
+_ANSWER_SELECTED_MAX_ITEMS = 4
+_ANSWER_SELECTED_LABEL_MAX_LEN = 300
+_ANSWER_NOTES_MAX_LEN = 2000
+_ANSWERS_MAX_ITEMS = 4
+
+
+class AnswerEntry(BaseModel):
+    question: str = Field(..., min_length=1, max_length=_ANSWER_QUESTION_MAX_LEN)
+    selected: list[str] = Field(..., max_length=_ANSWER_SELECTED_MAX_ITEMS)
+    notes: Optional[str] = Field(default=None, max_length=_ANSWER_NOTES_MAX_LEN)
+
+    @field_validator("selected")
+    @classmethod
+    def _bound_selected_labels(cls, v: list[str]) -> list[str]:
+        for s in v:
+            if not isinstance(s, str):
+                raise ValueError("selected must be a list of strings")
+            if len(s) > _ANSWER_SELECTED_LABEL_MAX_LEN:
+                raise ValueError(
+                    f"selected label too long (max {_ANSWER_SELECTED_LABEL_MAX_LEN} chars)"
+                )
+        return v
+
+
 class AnswerSubmission(BaseModel):
     """Body for POST /api/questions/{id}/answer.
 
@@ -214,7 +272,7 @@ class AnswerSubmission(BaseModel):
                   pass a list of length 1)
       - notes: optional str (free-text 'Other' content if the user picked it)
     """
-    answers: list[dict]
+    answers: list[AnswerEntry] = Field(..., min_length=1, max_length=_ANSWERS_MAX_ITEMS)
 
 
 def _upsert_user(user: User) -> None:
@@ -408,33 +466,23 @@ async def handle_question_answer(
     The orchestrator awaits this resolution and feeds the answers back to the
     model as the ask_user tool's result.
     """
-    if not isinstance(body.answers, list) or not body.answers:
-        raise HTTPException(status_code=400, detail="answers must be a non-empty list")
-
-    # Validate shape of each answer entry. The orchestrator trusts what's in
-    # the DB, so the API is the place to reject bad shapes.
+    # Pydantic (AnswerSubmission) already enforced shape, item counts, and
+    # length bounds before we get here — bad payloads were rejected with 422.
+    # Strip whitespace and drop empty notes; the orchestrator trusts what's
+    # in the DB, so any remaining normalization happens here.
     cleaned: list[dict] = []
     for i, a in enumerate(body.answers):
-        if not isinstance(a, dict):
-            raise HTTPException(
-                status_code=400, detail=f"answers[{i}] must be an object"
-            )
-        question_text = (a.get("question") or "").strip()
-        selected = a.get("selected")
-        notes = (a.get("notes") or "").strip() or None
+        question_text = a.question.strip()
+        selected = [s.strip() for s in a.selected if s.strip()]
+        notes = (a.notes or "").strip() or None
         if not question_text:
             raise HTTPException(
                 status_code=400,
                 detail=f"answers[{i}].question is required",
             )
-        if not isinstance(selected, list) or not all(isinstance(s, str) for s in selected):
-            raise HTTPException(
-                status_code=400,
-                detail=f"answers[{i}].selected must be a list of strings",
-            )
         cleaned.append({
             "question": question_text,
-            "selected": [s.strip() for s in selected if s.strip()],
+            "selected": selected,
             **({"notes": notes} if notes else {}),
         })
 
@@ -453,6 +501,80 @@ async def handle_question_answer(
         if not resolve_question(session, question_id, cleaned):
             raise HTTPException(status_code=500, detail="Failed to resolve question")
 
+    return {"status": "ok"}
+
+
+class ArmTokenRefreshRequest(BaseModel):
+    """Body for POST /api/chat/refresh-token (Track 4C).
+
+    Sent by the frontend after it has acquired a fresh ARM access token via
+    MSAL silent refresh in response to a `token_refresh_required` SSE event.
+    The server stores the token in a per-conversation override map so any
+    in-flight orchestrator turn picks it up on its next iteration.
+    """
+    conversation_id: int
+    arm_token: str = Field(..., min_length=20, max_length=8192)
+
+
+@router.post("/chat/refresh-token")
+async def refresh_chat_arm_token(
+    body: ArmTokenRefreshRequest, user: User = Depends(current_user)
+):
+    """Accept a refreshed ARM token from the frontend (Track 4C).
+
+    Validates the token claims (audience must be management.azure.com, tenant
+    must match the configured one) before storing it. Returns 422 if the
+    token isn't shaped like an ARM token. Does NOT verify the signature —
+    the actual signature verification happens when Azure consumes the token.
+
+    The orchestrator reads this override on every Azure tool dispatch so a
+    long-running turn that hit `token_refresh_required` can resume without
+    the user retyping the message.
+    """
+    from app.auth.entra import (
+        _extract_arm_token,
+        arm_token_status,
+        set_arm_token_override,
+    )
+    import jwt
+
+    settings = get_settings()
+
+    # Authorize: the conversation must belong to this user
+    with get_session() as session:
+        conversation = session.get(Conversation, body.conversation_id)
+        if conversation is None or conversation.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conversation.user_oid != user.oid:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # Sanity-check token shape (mirrors _extract_arm_token validation, but
+    # against the request body instead of the request header).
+    try:
+        claims = jwt.decode(
+            body.arm_token,
+            options={"verify_signature": False, "verify_exp": False},
+        )
+    except Exception:
+        raise HTTPException(status_code=422, detail="Token is not a valid JWT")
+    aud = str(claims.get("aud") or "")
+    if "management.azure.com" not in aud:
+        raise HTTPException(
+            status_code=422, detail="Token audience is not Azure Resource Manager"
+        )
+    tid = str(claims.get("tid") or "")
+    if tid and settings.ENTRA_TENANT_ID and tid != settings.ENTRA_TENANT_ID:
+        raise HTTPException(status_code=422, detail="Token tenant mismatch")
+
+    # Reject anything that's already expired — no point storing it
+    if arm_token_status(body.arm_token, refresh_threshold_seconds=0) == "expired":
+        raise HTTPException(status_code=422, detail="Refreshed token has already expired")
+
+    set_arm_token_override(body.conversation_id, body.arm_token)
+    logger.info(
+        "Stored refreshed ARM token override for conv=%s user=%s",
+        body.conversation_id, user.oid,
+    )
     return {"status": "ok"}
 
 

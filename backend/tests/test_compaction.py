@@ -150,7 +150,7 @@ def test_load_compacted_returns_as_is_when_under_threshold(db_session):
         _add_message(db_session, conv.id, "user", f"msg {i}", when=base + timedelta(seconds=i))
 
     client = _build_mock_client()
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     assert len(out) == 5
     assert out[0]["content"] == "msg 0"
@@ -168,7 +168,7 @@ def test_load_compacted_prepends_cached_summary_when_under_threshold(db_session)
     _add_message(db_session, conv.id, "user", "recent ask", when=base)
 
     client = _build_mock_client()
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     assert out[0]["role"] == "assistant"
     assert "Summary of earlier conversation" in out[0]["content"]
@@ -212,7 +212,7 @@ def test_compaction_preserves_all_user_messages(db_session):
             msg_idx += 1
 
     client = _build_mock_client(scaffold_summary="- compressed scaffolding")
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     # Every user message must appear verbatim somewhere in the output
     contents = []
@@ -266,7 +266,7 @@ def test_compaction_keeps_recent_scaffolding_verbatim(db_session):
             msg_idx += 1
 
     client = _build_mock_client()
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     # At least one RECENT_VERBATIM tool message survived intact
     flat = "\n".join(
@@ -303,7 +303,7 @@ def test_compaction_falls_back_to_uncompacted_if_scaffold_summarizer_fails(db_se
     failing_client = MagicMock()
     failing_client.chat.completions.create.side_effect = RuntimeError("boom")
 
-    out = load_compacted_history(db_session, conv.id, failing_client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, failing_client, "gpt-test")
     # All originals still present somewhere (verbatim fallback)
     flat = "\n".join(
         m.get("content", "") for m in out if isinstance(m.get("content"), str)
@@ -327,9 +327,14 @@ def test_long_user_paste_summarized_when_not_latest(db_session):
                      when=base + timedelta(seconds=i + 1))
 
     client = _build_mock_client(paste_summary="- compressed long paste")
-    load_compacted_history(db_session, conv.id, client, "gpt-test")
+    _, deferred = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    # Execute deferred background summarisation work synchronously in the test
+    for fn in deferred:
+        fn()
 
-    # Reload the first (long-paste) message — should have text_summary cached
+    # Reload the first (long-paste) message — should have text_summary cached.
+    # Expire the session's identity map so the re-get picks up the committed write.
+    db_session.expire_all()
     long_row = db_session.get(Message, 1)
     assert long_row is not None
     assert long_row.text_summary is not None
@@ -373,7 +378,7 @@ def test_long_user_paste_summary_reused_from_cache(db_session):
                      when=base + timedelta(seconds=i + 1))
 
     client = _build_mock_client(paste_summary="- FRESH NEW SUMMARY")
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     flat = "\n".join(
         m.get("content", "") for m in out if isinstance(m.get("content"), str)
@@ -426,7 +431,12 @@ def test_image_summary_used_for_older_image_owner(db_session, tmp_path, monkeypa
                      when=base + timedelta(seconds=200 + i))
 
     client = _build_mock_client(image_desc="- diagram nodes A,B,C")
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, deferred = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    # Execute deferred background image-description work synchronously in the test
+    for fn in deferred:
+        fn()
+    # Expire identity map so refresh() picks up the committed writes
+    db_session.expire_all()
 
     db_session.refresh(older_with_image)
     db_session.refresh(newer_with_image)
@@ -452,7 +462,7 @@ def test_latest_image_owner_keeps_image_url_in_multipart(db_session, tmp_path, m
         attachments=[{"filename": "pic.png", "content_type": "image/png"}],
     )
     client = _build_mock_client()
-    out = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
 
     # The latest user message gets multipart content with an image_url part
     latest_msg = out[-1]

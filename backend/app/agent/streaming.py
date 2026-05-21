@@ -90,3 +90,24 @@ def sse_done(conversation_id: int, usage: dict | None = None) -> str:
 
 def sse_error(message: str) -> str:
     return sse_event("error", {"message": message})
+
+
+def sse_token_refresh_required(
+    *, conversation_id: int, tool_name: str, status: str
+) -> str:
+    """Signal the frontend that the user's ARM token has expired (or is about
+    to) and the next Azure tool call cannot proceed. The frontend listens for
+    this, calls MSAL silently to acquire a fresh token, and POSTs it back via
+    `/api/chat/refresh-token` so the next turn picks it up.
+
+    `status` is one of "missing" | "expired" | "near_expiry" so the UI can
+    word the prompt appropriately ("please sign in" vs "refreshing token…").
+    """
+    return sse_event(
+        "token_refresh_required",
+        {
+            "conversation_id": conversation_id,
+            "tool_name": tool_name,
+            "status": status,
+        },
+    )

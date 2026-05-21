@@ -84,28 +84,40 @@ SUBPROCESS_FLAGS: dict = (
     {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 )
 
-# Characters that cmd.exe interprets as shell metacharacters when an
-# unquoted command STRING is passed to it. Python's subprocess quotes each
-# list element via list2cmdline() before handing it to cmd.exe, so these
-# chars in arg *values* are not actually shell-interpreted. We therefore
-# screen for the null byte (which truncates C strings) and the backtick
-# (PowerShell escape). Pipe `|`, ampersand `&`, semicolon `;`, redirects
-# `<>`, and `$` are all valid inside KQL queries, file paths, and JSON
-# bodies, so blocking them broke az_resource_graph and az_monitor_logs.
-_SHELL_METACHAR_PATTERN = r'[`\x00]'
+# Characters that must always be blocked in az CLI argument values.
+#
+# shell=False is enforced for every _run_az() call (CR#1), so Python's
+# subprocess passes each list element directly to CreateProcess / execv
+# without involving a shell.  That neutralises most metacharacters.
+# We additionally screen for:
+#   NUL (\x00)   – truncates C strings in the kernel
+#   backtick (`) – PowerShell execution operator
+#   % (percent)  – cmd.exe expands %VAR% inside quoted tokens on Windows,
+#                  e.g. %AZURE_OPENAI_API_KEY% → live value.  Defence-in-
+#                  depth on top of the env allowlist (B1).  (B2)
+#   & (ampersand)– cmd.exe command chaining.  No legitimate az argument
+#                  value should contain a bare &.  (CR#1)
+#
+# NOT blocked: pipe `|` — KQL queries passed as a single "-q" arg value
+# legitimately contain pipes (e.g. "Resources | count"), and with
+# shell=False the pipe is never interpreted by a shell.
+_SHELL_METACHAR_PATTERN = r'[`\x00%&]'
 
 import re as _re
 
 
 def check_shell_injection(value: str, field_name: str = "argument") -> str | None:
-    """Return an error string if *value* contains characters that survive
-    subprocess quoting and could enable command injection.
+    """Return an error string if *value* contains characters that could enable
+    command injection when passed as an az CLI argument.
 
-    Defence-in-depth only — the primary protection is that subprocess uses
-    list2cmdline() to quote each arg before invoking cmd.exe, so most shell
-    metacharacters in arg values are inert. We block only:
-      - NUL (\\x00): truncates the command string in cmd.exe
-      - backtick (`): PowerShell escape character
+    Blocked characters (see _SHELL_METACHAR_PATTERN for rationale):
+      - NUL (\\x00): truncates the command string in cmd.exe / libc
+      - backtick (`): PowerShell execution operator
+      - % (percent): cmd.exe env-variable expansion, e.g. %AZURE_OPENAI_API_KEY%
+      - & (ampersand): cmd.exe command chaining
+
+    Not blocked: pipe `|` — legitimate in KQL query values and safe with
+    shell=False since no shell is involved.
 
     Returns None if safe, or an error message string if blocked.
     """
@@ -113,7 +125,7 @@ def check_shell_injection(value: str, field_name: str = "argument") -> str | Non
         logger.warning(
             "Shell injection blocked in %s: %s", field_name, value[:120],
         )
-        bad = ', '.join(repr(c) for c in '`\x00' if c in value)
+        bad = ', '.join(repr(c) for c in '`\x00%&' if c in value)
         return (
             f"Error: {field_name} contains characters that are not allowed "
             f"for security reasons ({bad}). Remove and retry."
@@ -209,21 +221,49 @@ class AzureToolBase(Tool):
             if injection_err:
                 return injection_err
 
-        # Build subprocess env: inherit everything, then overlay the user's ARM
-        # token so az authenticates as the current user rather than the server identity.
-        env = os.environ.copy()
+        # B1 — Build an explicit allowlist env instead of inheriting the full
+        # process environment.  This prevents credential-exfiltration attacks
+        # where a malicious az argument reads %AZURE_OPENAI_API_KEY% or similar
+        # secrets out of os.environ.  Only the vars required for az to function
+        # are forwarded; everything else is stripped.
+        _ALLOWED_ENV_KEYS = {
+            # Core path resolution
+            "PATH", "PATHEXT",
+            # Unix home (az stores config under ~/.azure)
+            "HOME",
+            # Windows profile root (az config dir default on Windows)
+            "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+            # Explicit az config override
+            "AZURE_CONFIG_DIR",
+            # Windows subsystem / temp
+            "SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP",
+            # Proxy settings that az respects
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            # Needed by some az extension installers
+            "AZURE_EXTENSION_DIR",
+        }
+        env: dict[str, str] = {
+            k: v for k, v in os.environ.items() if k in _ALLOWED_ENV_KEYS
+        }
+        # Overlay the user's ARM token so az authenticates as the current user.
         arm_token = _current_arm_token.get()
         if arm_token:
             env["AZURE_ACCESS_TOKEN"] = arm_token
 
         try:
             def _run():
+                # CR#1 — Never pass shell=True on Windows.  shell=True passes
+                # the full command as a string to cmd.exe which re-interprets
+                # metacharacters (&, |, %, etc.) even inside quoted tokens.
+                # Instead we always use shell=False and let subprocess call the
+                # executable directly.  On Windows, _find_az() already resolves
+                # 'az' to 'az.cmd' so subprocess can invoke it without a shell.
                 return subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=timeout,
-                    shell=(sys.platform == "win32"),
+                    shell=False,
                     env=env,
                     **SUBPROCESS_FLAGS,
                 )

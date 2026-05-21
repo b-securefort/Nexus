@@ -8,7 +8,7 @@ import uuid
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -78,6 +78,24 @@ def _apply_lightweight_migrations(engine):
         except Exception:
             logger.info("Adding summary_through_message_id column to conversations table")
             conn.execute(sqlalchemy.text("ALTER TABLE conversations ADD COLUMN summary_through_message_id INTEGER"))
+            conn.commit()
+
+        # A4 — Lease heartbeat for long-turn recovery
+        try:
+            conn.execute(sqlalchemy.text("SELECT lease_heartbeat_at FROM conversations LIMIT 0"))
+        except Exception:
+            logger.info("Adding lease_heartbeat_at column to conversations table")
+            conn.execute(sqlalchemy.text(
+                "ALTER TABLE conversations ADD COLUMN lease_heartbeat_at DATETIME"
+            ))
+            conn.commit()
+        try:
+            conn.execute(sqlalchemy.text("SELECT lease_owner FROM conversations LIMIT 0"))
+        except Exception:
+            logger.info("Adding lease_owner column to conversations table")
+            conn.execute(sqlalchemy.text(
+                "ALTER TABLE conversations ADD COLUMN lease_owner TEXT"
+            ))
             conn.commit()
 
         # Per-message compression cache (long user pastes + image descriptions)
@@ -197,12 +215,19 @@ def _ensure_kb_virtual_tables(conn) -> None:
 
 
 def _ensure_agent_learnings_vec(conn) -> None:
-    """Create the `agent_learnings_vec` vec0 table if missing.
+    """Create the `agent_learnings_vec` vec0 table AND the FTS5 virtual table
+    `agent_learnings_fts` (LMI #3) if either is missing.
 
     Dimensions match `KB_EMBED_DIMENSIONS` so the same Azure OpenAI embedding
-    model serves both KB and learnings retrieval. If sqlite-vec isn't loaded,
-    log and skip — learnings retrieval falls back to BM25-only over a future
-    FTS table (not yet built; current retrieval requires vec0).
+    model serves both KB and learnings retrieval.
+
+    The FTS5 table covers `summary` + `details` so retrieval can fall back to
+    BM25 when dense embeddings miss things like error codes / CLI flag names
+    (the gap the LMI #3 finding called out). Triggers keep it in sync with
+    inserts / updates / deletes on `agent_learnings`.
+
+    If sqlite-vec isn't loaded, only the FTS half is created — retrieval will
+    still return useful results via BM25 alone.
     """
     import re
     import sqlalchemy
@@ -230,16 +255,77 @@ def _ensure_agent_learnings_vec(conn) -> None:
     except Exception as e:
         logger.warning("agent_learnings_vec dimension check skipped: %s", str(e).split("\n")[0])
 
-    ddl = f"""
+    vec_ddl = f"""
     CREATE VIRTUAL TABLE IF NOT EXISTS agent_learnings_vec USING vec0(
       embedding float[{expected_dims}]
     )
     """
     try:
-        conn.execute(sqlalchemy.text(ddl))
+        conn.execute(sqlalchemy.text(vec_ddl))
         conn.commit()
     except Exception as e:
         logger.warning("agent_learnings_vec creation skipped: %s", str(e).split("\n")[0])
+
+    # FTS5 over agent_learnings.summary + .details (LMI #3). Same unicode61
+    # tokenizer as kb_chunks_fts so behaviour stays consistent across the
+    # two retrieval surfaces.
+    fts_statements = [
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS agent_learnings_fts USING fts5(
+          summary, details,
+          content='agent_learnings', content_rowid='id',
+          tokenize='unicode61 remove_diacritics 2'
+        )
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS agent_learnings_ai
+        AFTER INSERT ON agent_learnings BEGIN
+          INSERT INTO agent_learnings_fts(rowid, summary, details)
+          VALUES (new.id, new.summary, new.details);
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS agent_learnings_ad
+        AFTER DELETE ON agent_learnings BEGIN
+          INSERT INTO agent_learnings_fts(agent_learnings_fts, rowid, summary, details)
+          VALUES('delete', old.id, old.summary, old.details);
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS agent_learnings_au
+        AFTER UPDATE ON agent_learnings BEGIN
+          INSERT INTO agent_learnings_fts(agent_learnings_fts, rowid, summary, details)
+          VALUES('delete', old.id, old.summary, old.details);
+          INSERT INTO agent_learnings_fts(rowid, summary, details)
+          VALUES (new.id, new.summary, new.details);
+        END
+        """,
+    ]
+    for stmt in fts_statements:
+        try:
+            conn.execute(sqlalchemy.text(stmt))
+        except Exception as e:
+            logger.warning(
+                "agent_learnings_fts DDL skipped: %s",
+                str(e).split("\n")[0],
+            )
+            continue
+    conn.commit()
+
+    # Backfill FTS for rows that pre-date the table. content='agent_learnings'
+    # external-content tables are empty after CREATE — the 'rebuild' command
+    # repopulates from the source table. Cheap when already populated; the
+    # row count is tiny relative to the kb chunks table.
+    try:
+        conn.execute(sqlalchemy.text(
+            "INSERT INTO agent_learnings_fts(agent_learnings_fts) VALUES('rebuild')"
+        ))
+        conn.commit()
+    except Exception as e:
+        logger.debug(
+            "agent_learnings_fts rebuild skipped: %s",
+            str(e).split("\n")[0],
+        )
 
 
 @asynccontextmanager
@@ -308,6 +394,13 @@ async def lifespan(app: FastAPI):
     approval_task.cancel()
     if backup_task:
         backup_task.cancel()
+    # Tear down the dedicated tool executor (A2). cancel_futures stops anything
+    # still queued; we don't wait for in-flight work since the process is exiting.
+    try:
+        from app.agent.concurrency import shutdown_tool_executor
+        shutdown_tool_executor(wait=False)
+    except Exception:
+        logger.exception("Failed to shutdown tool executor cleanly")
     logger.info("Shutting down")
 
 
@@ -397,9 +490,15 @@ def create_app() -> FastAPI:
     app.include_router(conversations_router)
     app.include_router(learnings_router)
 
-    # Prometheus metrics endpoint
+    # Prometheus metrics endpoint — gated to the `architect` Entra App Role.
+    # Metrics expose request volumes and tool usage; treat them like other
+    # admin-only data. Scrapers in production should use a service-principal
+    # bearer token with the architect role assigned. DEV_AUTH_BYPASS still
+    # passes through (see app/deps.py:require_architect).
+    from app.deps import require_architect
+
     @app.get("/metrics")
-    async def metrics():
+    async def metrics(_user=Depends(require_architect)):
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app

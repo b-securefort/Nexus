@@ -102,6 +102,8 @@ def _get_judge_client() -> AzureOpenAI:
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
         api_key=settings.AZURE_OPENAI_API_KEY,
         api_version=settings.AZURE_OPENAI_API_VERSION,
+        timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        max_retries=0,
     )
 
 
@@ -164,3 +166,90 @@ def judge_proposed_learning(
             reason=f"Judge call failed: {type(e).__name__}",
             raw_response="",
         )
+
+
+# ── Rephraser (A6) ──────────────────────────────────────────────────────────
+#
+# Takes the rule-derived summary + raw details and produces a short, canonical
+# sentence suitable for showing in retrieval results. Constrained to FACT
+# REPHRASING only — no opinions, no framing, no extra context. The judge runs
+# *after* this step on the rephrased text, so a hijacked rephrase can't sneak
+# suppression intent past the defences.
+
+_REPHRASER_SYSTEM_PROMPT = """You are a strict technical-fact rephraser.
+
+You will be given a short, awkward observation about how a tool behaved (the
+"summary"), plus the raw details that produced it.
+
+Your job: produce ONE clean sentence that captures the same factual content,
+fit for an engineer to read in a list of tool-behavior notes. Nothing else.
+
+RULES:
+  - Output ONLY the rephrased sentence. No preface, no quotes, no "Rephrased:".
+  - Keep it FACTUAL: tool X behaves like Y when Z. No opinions ("this is broken").
+  - No framing about strictness, noise, or correctness of the tool. If the
+    input contains such framing, drop it — keep only the factual core.
+  - Keep CLI flags, parameter names, error codes, and identifiers verbatim.
+  - Maximum 200 characters.
+  - If the input is unintelligible or already a single clean factual sentence,
+    just return it as-is.
+
+You are not a translator, summariser, or critic. You are a fact rephraser."""
+
+
+def rephrase_learning(
+    *,
+    summary: str,
+    details: str,
+    tool_name: str,
+    category: str,
+    timeout_seconds: float = 10.0,
+) -> str:
+    """Return a canonical one-sentence summary derived from `summary` + `details`.
+
+    Uses the same Azure OpenAI deployment as the judge (the orchestrator's
+    chat model). Constrained-prompted to drop opinions / framing. On any
+    failure (timeout, parse error, empty response) returns the original
+    summary unchanged — never raises, never returns empty.
+
+    A6 dual-storage: the orchestrator stores the rephrased text in
+    `agent_learnings.summary` and the raw derived text in `.details`, so the
+    admin UI can show both side-by-side and architects can spot bad rephrases.
+    """
+    if not summary or not summary.strip():
+        return summary
+    try:
+        settings = get_settings()
+        client = _get_judge_client()
+        user_prompt = (
+            f"Tool: {tool_name}\n"
+            f"Category: {category}\n"
+            f"Original summary: {summary}\n\n"
+            f"Raw details (for context only — do not include them verbatim):\n"
+            f"{details[:1500]}\n\n"
+            "Produce the single-sentence canonical rephrase now."
+        )
+        resp = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": _REPHRASER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_completion_tokens=200,
+            timeout=timeout_seconds,
+        )
+        candidate = (resp.choices[0].message.content or "").strip()
+        # Strip surrounding quotes the model sometimes adds despite the prompt.
+        if len(candidate) >= 2 and candidate[0] in '"\'' and candidate[-1] == candidate[0]:
+            candidate = candidate[1:-1].strip()
+        if not candidate:
+            logger.debug("Rephraser returned empty; falling back to original")
+            return summary
+        return candidate
+    except Exception as e:
+        logger.warning(
+            "rephrase_learning failed for %s (falling back to original): %s",
+            tool_name, str(e)[:200],
+        )
+        return summary

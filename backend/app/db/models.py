@@ -38,6 +38,19 @@ class Conversation(SQLModel, table=True):
     # the compaction module when the in-prompt history exceeds thresholds.
     summary_text: Optional[str] = Field(default=None)
     summary_through_message_id: Optional[int] = Field(default=None)
+    # A4 — Lease heartbeat for approval / long-turn recovery. The orchestrator
+    # writes `lease_heartbeat_at` periodically while a chat turn is in flight;
+    # `lease_owner` identifies the FastAPI worker that holds it (host pid for
+    # single-host, hostname:pid in multi-replica deployments).
+    #
+    # The frontend polls these via GET /api/conversations/{id}/lease. If the
+    # heartbeat is older than the staleness threshold (2× the heartbeat
+    # interval), the worker that started the turn has likely died and the
+    # UI surfaces a "Restart turn" affordance. We do NOT auto-reconstruct
+    # synthetic retry / drawio iteration state — recovery means starting the
+    # last user message as a fresh turn.
+    lease_heartbeat_at: Optional[datetime] = Field(default=None)
+    lease_owner: Optional[str] = Field(default=None)
 
 
 class Message(SQLModel, table=True):

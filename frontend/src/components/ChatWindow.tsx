@@ -6,6 +6,7 @@ import {
   resolveApproval,
   fetchGreeting,
   submitQuestionAnswers,
+  refreshArmToken,
 } from "../api/chat";
 import type { QuestionAnswer } from "../api/chat";
 import { fetchConversation } from "../api/conversations";
@@ -20,7 +21,10 @@ import type {
   ContextUsage,
   QuestionInfo,
   QuestionAnswerEntry,
+  TokenRefreshRequired,
 } from "../types";
+import { msalInstance } from "../auth/AuthProvider";
+import { ARM_SCOPE } from "../auth/msalConfig";
 
 /** Simple time-of-day fallback while the AI greeting loads. */
 function getFallbackGreeting(): string {
@@ -208,6 +212,34 @@ export function ChatWindow() {
           setError(d.message as string);
           setIsStreaming(false);
           break;
+
+        case "token_refresh_required": {
+          const info = d as unknown as TokenRefreshRequired;
+          // Silently acquire a fresh ARM token via MSAL and POST it back
+          // so the in-flight orchestrator turn can resume Azure tool calls.
+          if (import.meta.env.VITE_DEV_AUTH_BYPASS !== "true") {
+            (async () => {
+              try {
+                const accounts = msalInstance.getAllAccounts();
+                if (accounts.length === 0) return;
+                const resp = await msalInstance.acquireTokenSilent({
+                  scopes: [ARM_SCOPE],
+                  account: accounts[0],
+                });
+                if (resp.accessToken) {
+                  await refreshArmToken(
+                    info.conversation_id,
+                    resp.accessToken
+                  );
+                }
+              } catch {
+                // Silent refresh failed — user will need to retry manually
+                console.warn("[Nexus] ARM token silent refresh failed");
+              }
+            })();
+          }
+          break;
+        }
       }
     },
     [

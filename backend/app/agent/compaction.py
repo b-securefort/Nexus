@@ -31,12 +31,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from openai import AzureOpenAI
 from sqlmodel import Session, select
 
+from app.agent.circuit_breaker import check as cb_check, record_failure as cb_failure, record_success as cb_success
 from app.config import get_settings
 from app.db.models import Conversation, Message
 
@@ -94,15 +96,23 @@ def _summarize_long_paste(
         "Do not paraphrase intent — keep the user's wording for any direct "
         "ask. Output ONLY the summary, no preamble. Keep under 800 characters."
     )
-    resp = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ],
-        max_completion_tokens=300,
-        temperature=0,
-    )
+    settings = get_settings()
+    cb_check()
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            max_completion_tokens=300,
+            temperature=0,
+            timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        )
+        cb_success()
+    except Exception:
+        cb_failure()
+        raise
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -125,27 +135,35 @@ def _describe_image(
         return f"[image {image_path.name}: empty file]"
 
     b64 = base64.b64encode(data).decode("ascii")
-    resp = client.chat.completions.create(
-        model=deployment,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": (
-                    "Describe this image precisely so it can stand in for the "
-                    "image in a future chat history. Capture: any visible text, "
-                    "diagram structure (nodes/connections/labels), key visual "
-                    "elements, technical details. Be specific. No preamble. "
-                    "Keep under 600 characters."
-                )},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:{content_type};base64,{b64}",
-                    "detail": "auto",
-                }},
-            ],
-        }],
-        max_completion_tokens=250,
-        temperature=0,
-    )
+    settings = get_settings()
+    cb_check()
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "Describe this image precisely so it can stand in for the "
+                        "image in a future chat history. Capture: any visible text, "
+                        "diagram structure (nodes/connections/labels), key visual "
+                        "elements, technical details. Be specific. No preamble. "
+                        "Keep under 600 characters."
+                    )},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:{content_type};base64,{b64}",
+                        "detail": "auto",
+                    }},
+                ],
+            }],
+            max_completion_tokens=250,
+            temperature=0,
+            timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        )
+        cb_success()
+    except Exception:
+        cb_failure()
+        raise
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -156,9 +174,53 @@ def _get_or_create_text_summary(
     session: Session,
     client: AzureOpenAI,
     deployment: str,
+    *,
+    deferred: list[Callable[[], None]] | None = None,
 ) -> str:
+    """Return a summary of the message text.
+
+    Cache hit  → return immediately (no LLM call).
+    Cache miss + deferred provided → schedule the LLM call as a background
+      job, return truncated raw for this turn. The cached summary will be
+      picked up on the next turn.
+    Cache miss + no deferred list → fall back to synchronous LLM call
+      (used outside the critical path, e.g. tests).
+    """
     if row.text_summary:
         return row.text_summary
+
+    if deferred is not None:
+        # Defer the LLM call — use raw truncated content for this turn.
+        # The closure captures the session; SQLAlchemy sessions are reusable
+        # after close, so the background task will re-acquire a connection
+        # from the pool even if the original request is already done.
+        msg_id = row.id
+        raw = row.content or ""
+
+        def _do_text_summary(
+            _session=session, _msg_id=msg_id, _raw=raw
+        ) -> None:
+            try:
+                summary = _summarize_long_paste(_raw, client, deployment)
+            except Exception as exc:
+                logger.warning("BG text_summary failed for msg %s: %s", _msg_id, exc)
+                return
+            if not summary:
+                return
+            bg_row = _session.get(Message, _msg_id)
+            if bg_row and not bg_row.text_summary:
+                bg_row.text_summary = summary
+                _session.add(bg_row)
+                _session.commit()
+                logger.info(
+                    "BG cached text_summary for msg %s (%d → %d chars)",
+                    _msg_id, len(_raw), len(summary),
+                )
+
+        deferred.append(_do_text_summary)
+        return raw[:USER_PASTE_THRESHOLD] + " …[summarizing in background]"
+
+    # Synchronous fallback (no deferred list supplied)
     try:
         summary = _summarize_long_paste(row.content or "", client, deployment)
     except Exception as e:
@@ -178,7 +240,17 @@ def _get_or_create_image_summary(
     session: Session,
     client: AzureOpenAI,
     deployment: str,
+    *,
+    deferred: list[Callable[[], None]] | None = None,
 ) -> str:
+    """Return a vision-LLM description of the message's image attachments.
+
+    Cache hit  → return immediately (no LLM call).
+    Cache miss + deferred provided → schedule the vision call as a background
+      job, return an empty placeholder for this turn. The cached description
+      will be picked up on the next turn.
+    Cache miss + no deferred list → synchronous LLM call (fallback/tests).
+    """
     if row.image_summary:
         return row.image_summary
 
@@ -192,6 +264,43 @@ def _get_or_create_image_summary(
     if not attachments:
         return ""
 
+    if deferred is not None:
+        # Defer the vision LLM call — return empty for this turn.
+        # The session is captured and reused by the background task.
+        msg_id = row.id
+        snapshot_atts = list(attachments)  # capture for closure
+
+        def _do_image_summary(
+            _session=session, _msg_id=msg_id, _atts=snapshot_atts,
+            _upload_dir=upload_dir,
+        ) -> None:
+            descriptions: list[str] = []
+            for att in _atts:
+                fname = att.get("filename", "")
+                ctype = att.get("content_type", "image/png")
+                try:
+                    desc = _describe_image(_upload_dir / fname, ctype, client, deployment)
+                except Exception as exc:
+                    logger.warning("BG image description failed for %s: %s", fname, exc)
+                    desc = "description unavailable"
+                descriptions.append(f"- {fname}: {desc}")
+            summary = "\n".join(descriptions)
+            if not summary:
+                return
+            bg_row = _session.get(Message, _msg_id)
+            if bg_row and not bg_row.image_summary:
+                bg_row.image_summary = summary
+                _session.add(bg_row)
+                _session.commit()
+                logger.info(
+                    "BG cached image_summary for msg %s (%d attachments)",
+                    _msg_id, len(_atts),
+                )
+
+        deferred.append(_do_image_summary)
+        return ""  # placeholder — summary populated on next turn
+
+    # Synchronous fallback
     descriptions: list[str] = []
     for att in attachments:
         filename = att.get("filename", "")
@@ -260,6 +369,7 @@ def _row_to_message(
     *,
     is_latest_user: bool,
     is_latest_image_owner: bool,
+    deferred: list[Callable[[], None]] | None = None,
 ) -> dict:
     """Convert a DB row into an OpenAI message dict, applying compression
     rules for older user messages (long pastes → text_summary, images →
@@ -285,13 +395,13 @@ def _row_to_message(
     # User-message-specific compression
     text = row.content or ""
     if not is_latest_user and len(text) > USER_PASTE_THRESHOLD:
-        text = _get_or_create_text_summary(row, session, client, deployment)
+        text = _get_or_create_text_summary(row, session, client, deployment, deferred=deferred)
 
     if row.attachments_json:
         if is_latest_image_owner:
             msg["content"] = _build_content_with_images(text, row.attachments_json)
         else:
-            img_summary = _get_or_create_image_summary(row, session, client, deployment)
+            img_summary = _get_or_create_image_summary(row, session, client, deployment, deferred=deferred)
             if img_summary:
                 msg["content"] = f"{text}\n\n[Previously attached image(s):]\n{img_summary}"
             else:
@@ -377,15 +487,23 @@ def _summarize_scaffold(
         "Be specific (resource names, IDs, paths). Drop chatter. "
         "Output ONLY the bullet list, no preamble. Keep under 800 characters."
     )
-    resp = client.chat.completions.create(
-        model=deployment,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": rendered},
-        ],
-        max_completion_tokens=350,
-        temperature=0,
-    )
+    settings = get_settings()
+    cb_check()
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": rendered},
+            ],
+            max_completion_tokens=350,
+            temperature=0,
+            timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        )
+        cb_success()
+    except Exception:
+        cb_failure()
+        raise
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -475,17 +593,25 @@ def load_compacted_history(
     conversation_id: int,
     client: AzureOpenAI,
     deployment: str,
-) -> list[dict]:
+) -> tuple[list[dict], list[Callable[[], None]]]:
     """Load conversation history with asymmetric compaction.
 
     All user messages within the window are preserved (long pastes summarized,
     older images described). Scaffolding between user messages in the older
     portion is collapsed into outcome bullets; recent scaffolding stays
     verbatim. Cached summary prepended when present.
+
+    Returns a ``(messages, deferred)`` tuple.  ``deferred`` is a list of
+    zero-argument callables that perform LLM summarisation for cache misses
+    encountered this turn.  The caller should schedule them as background
+    tasks after the main response is delivered so they don't add latency to
+    the current turn.  The cached summaries are picked up on the next turn.
     """
+    deferred: list[Callable[[], None]] = []
+
     conv = session.get(Conversation, conversation_id)
     if conv is None:
-        return []
+        return [], deferred
 
     summary_through = conv.summary_through_message_id or 0
 
@@ -500,7 +626,7 @@ def load_compacted_history(
     rows.reverse()
 
     if not rows:
-        return _with_summary_prefix(conv.summary_text, [])
+        return _with_summary_prefix(conv.summary_text, []), deferred
 
     latest_image_owner_id = _identify_latest_image_row_id(rows)
     latest_user_id = _identify_latest_user_row_id(rows)
@@ -514,6 +640,7 @@ def load_compacted_history(
             r, session, client, deployment,
             is_latest_user=(r.id == latest_user_id),
             is_latest_image_owner=(r.id == latest_image_owner_id),
+            deferred=deferred,
         )
         id_messages.append((int(r.id), msg))
 
@@ -524,7 +651,7 @@ def load_compacted_history(
     over_chars = _estimate_chars(messages) > COMPACT_THRESHOLD_CHARS
 
     if not (over_count or over_chars):
-        return _with_summary_prefix(conv.summary_text, messages)
+        return _with_summary_prefix(conv.summary_text, messages), deferred
 
     # Determine recent window size — keep at least RECENT_KEEP_COUNT
     # messages verbatim. With many small messages we keep the count cap;
@@ -536,7 +663,7 @@ def load_compacted_history(
 
     split_idx = max(0, len(id_messages) - keep_n)
     if split_idx == 0:
-        return _with_summary_prefix(conv.summary_text, messages)
+        return _with_summary_prefix(conv.summary_text, messages), deferred
 
     older_id_msgs = id_messages[:split_idx]
     recent_id_msgs = id_messages[split_idx:]
@@ -587,7 +714,7 @@ def load_compacted_history(
         len(older), len(recent), conv.summary_through_message_id,
     )
 
-    return final
+    return final, deferred
 
 
 def get_original_task(session: Session, conversation_id: int) -> str:

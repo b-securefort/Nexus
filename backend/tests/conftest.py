@@ -19,10 +19,27 @@ os.environ["ENTRA_API_CLIENT_ID"] = "test-client"
 os.environ["ENTRA_API_AUDIENCE"] = "api://test-client"
 
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breaker():
+    """Reset the Azure OpenAI circuit breaker state before each test.
+
+    The circuit breaker uses module-level variables that persist across tests
+    in the same process.  Tests that exercise the 'failing client' path would
+    otherwise open the circuit and contaminate subsequent tests.
+    """
+    from app.agent import circuit_breaker
+    circuit_breaker.reset()
+    yield
+    circuit_breaker.reset()
+
+
 @pytest.fixture
 def db_session():
     """Create an in-memory SQLite database for testing."""
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         yield session

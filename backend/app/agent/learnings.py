@@ -37,7 +37,11 @@ import numpy as np
 from sqlalchemy import text
 from sqlmodel import Session
 
-from app.agent.learn_judge import JudgeVerdict, judge_proposed_learning
+from app.agent.learn_judge import (
+    JudgeVerdict,
+    judge_proposed_learning,
+    rephrase_learning,
+)
 from app.config import get_settings
 from app.db.engine import get_engine
 from app.db.models import AgentLearning
@@ -127,18 +131,25 @@ def record_validated_learning(
     prior_failures_summary: str,
     originating_conversation_id: Optional[int] = None,
     skip_judge: bool = False,
+    skip_rephrase: bool = False,
 ) -> Optional[AgentLearning]:
-    """Record a learning, gated by three defenses in this order:
+    """Record a learning, gated by defences in this order:
       1. Category whitelist + summary/details non-empty
-      2. Regex override-pattern guard (cheap, deterministic)
-      3. Environment-specific name guard (no resource IDs)
-      4. LLM judge (semantic hint-suppression detection)
+      2. A6 dual-storage rephrase: the rule-derived `summary` is sent through
+         a constrained LLM rephraser to produce a clean canonical sentence.
+         `details` (raw facts) is untouched. On rephrase failure we fall back
+         to the rule-derived `summary`. The 3-gate defence below runs on the
+         *rephrased* text so a malicious rephrase can't sneak through.
+      3. Regex override-pattern guard (cheap, deterministic)
+      4. Environment-specific name guard (no resource IDs)
+      5. LLM judge (semantic hint-suppression detection)
 
     Returns the persisted `AgentLearning` on success, or None if rejected.
     The orchestrator is the only legitimate caller. `skip_judge=True` is for
     the legacy-import migration path where the judge has already been run
     (or where the LLM is unavailable at startup); never use it from the
-    request path.
+    request path. `skip_rephrase=True` is for legacy/test paths that want
+    the original behaviour without the extra LLM round-trip.
     """
     if category not in VALID_CATEGORIES:
         logger.warning("Rejecting learning: unknown category %r", category)
@@ -147,28 +158,58 @@ def record_validated_learning(
         logger.warning("Rejecting learning: empty summary or details")
         return None
 
-    # Defense 1 — regex override guard (already in production)
-    if _looks_like_override_attempt(summary, details):
+    # A6 — Rephrase step (summary only). Details stays exactly as derived so
+    # the audit trail keeps the raw facts. The rephraser is constrained ("no
+    # opinions, no framing") and on any failure we fall back to the original
+    # summary so we never lose a learning to a flaky LLM call.
+    canonical_summary = summary
+    if not skip_rephrase:
+        try:
+            canonical_summary = rephrase_learning(
+                summary=summary,
+                details=details,
+                tool_name=tool_name,
+                category=category,
+            )
+            # Guard against a degenerate rephrase (empty / much shorter than
+            # original / much longer). On any oddity, fall back so we don't
+            # silently drop useful content or amplify model hallucinations.
+            if not canonical_summary or not canonical_summary.strip():
+                canonical_summary = summary
+            elif len(canonical_summary) > len(summary) * 3 + 200:
+                logger.warning(
+                    "Rephrase output is suspiciously long (%d → %d chars); "
+                    "falling back to original summary",
+                    len(summary), len(canonical_summary),
+                )
+                canonical_summary = summary
+        except Exception:
+            logger.exception("rephrase_learning failed; using original summary")
+            canonical_summary = summary
+
+    # Defense 1 — regex override guard (against the rephrased + raw text)
+    if _looks_like_override_attempt(canonical_summary, details):
         logger.warning(
             "Rejecting learning by regex guard: tool=%s summary=%r",
-            tool_name, summary[:120],
+            tool_name, canonical_summary[:120],
         )
         return None
 
     # Defense 2 — environment-specific naming
-    is_specific, why = _looks_environment_specific(f"{summary}\n{details}")
+    is_specific, why = _looks_environment_specific(f"{canonical_summary}\n{details}")
     if is_specific:
         logger.warning(
             "Rejecting learning by name guard (%s): tool=%s summary=%r",
-            why, tool_name, summary[:120],
+            why, tool_name, canonical_summary[:120],
         )
         return None
 
-    # Defense 3 — LLM judge
+    # Defense 3 — LLM judge (runs against the rephrased text so a malicious
+    # rephrase can't sneak past the suppression-intent detector).
     verdict: Optional[JudgeVerdict] = None
     if not skip_judge:
         verdict = judge_proposed_learning(
-            summary=summary,
+            summary=canonical_summary,
             details=details,
             tool_name=tool_name,
             prior_failures_summary=prior_failures_summary,
@@ -184,7 +225,7 @@ def record_validated_learning(
                     type=_CATEGORY_TYPE[category],
                     category=category,
                     tool_name=tool_name or "general",
-                    summary=summary,
+                    summary=canonical_summary,
                     details=details,
                     status="rejected",
                     originating_conversation_id=originating_conversation_id,
@@ -194,7 +235,7 @@ def record_validated_learning(
                         "confidence": verdict.confidence,
                         "reason": verdict.reason,
                     }),
-                    content_hash=_content_hash(summary, details),
+                    content_hash=_content_hash(canonical_summary, details),
                     recorded_at=_utcnow(),
                 )
                 session.add(rejected)
@@ -208,7 +249,7 @@ def record_validated_learning(
         type=_CATEGORY_TYPE[category],
         category=category,
         tool_name=tool_name or "general",
-        summary=summary,
+        summary=canonical_summary,
         details=details,
         status="provisional",  # promoted to "active" after re-validation
         originating_conversation_id=originating_conversation_id,
@@ -220,7 +261,7 @@ def record_validated_learning(
                 "reason": verdict.reason,
             }) if verdict else None
         ),
-        content_hash=_content_hash(summary, details),
+        content_hash=_content_hash(canonical_summary, details),
         embed_model=None,  # populated by reembed_dirty()
         recorded_at=_utcnow(),
     )
@@ -311,6 +352,42 @@ def _format_prior_failures(prior_failures: list[tuple[dict, str]]) -> str:
 
 # ── Read path: retrieval ────────────────────────────────────────────────────
 
+# LMI #3 — Hybrid retrieval defaults. Mirror the KB hybrid path but smaller
+# pools because agent_learnings is much smaller than kb_chunks.
+_LRN_BM25_TOP_K = 20
+_LRN_VEC_TOP_K = 20
+_LRN_RRF_K = 60
+
+# Strip everything but word chars + space so it's safe to splice into an
+# FTS5 query without quoting. Mirrors kb/vector_store._FTS_STRIP_RE.
+_FTS_SAFE_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _build_fts_query(query: str) -> str:
+    """Build a safe FTS5 query from a free-text user query. Splits on
+    whitespace and ORs the surviving tokens. Returns an empty match-all
+    string (`""`) when nothing safe remains, which FTS5 treats as no rows.
+    """
+    cleaned = _FTS_SAFE_RE.sub(" ", query)
+    tokens = [t for t in cleaned.split() if t]
+    if not tokens:
+        return '""'
+    return " OR ".join(tokens)
+
+
+def _rrf_fuse(
+    bm25_rowids: list[int], vec_rowids: list[int], k: int = _LRN_RRF_K,
+) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion over two ranked lists. Returns
+    (rowid, fused_score) sorted best-first."""
+    scores: dict[int, float] = {}
+    for rank, rid in enumerate(bm25_rowids):
+        scores[rid] = scores.get(rid, 0.0) + 1.0 / (rank + k)
+    for rank, rid in enumerate(vec_rowids):
+        scores[rid] = scores.get(rid, 0.0) + 1.0 / (rank + k)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+
 def retrieve_relevant_learnings(
     *,
     query: str,
@@ -324,59 +401,94 @@ def retrieve_relevant_learnings(
     current skill name. `tool_name_hint` gives a soft preference for entries
     tagged with that tool but does not exclude others.
 
-    Currently a pure embedding-similarity search. BM25 could be added later
-    for a hybrid retrieval if the volume grows large enough to warrant it.
+    LMI #3 — Hybrid retrieval: runs BM25 (via the FTS5 virtual table
+    `agent_learnings_fts`) and dense vector search (via `agent_learnings_vec`)
+    in parallel, then fuses with Reciprocal Rank Fusion. Either side may be
+    absent (FTS5 not built, sqlite-vec not loaded, embed_query failing) and
+    the other side carries the result.
     """
     if top_k <= 0:
         return []
+
+    # ── Dense via vec0 (best-effort) ──────────────────────────────────────
+    qvec = None
     try:
         qvec = embed_query(query)
     except Exception as e:
-        logger.warning("Learnings retrieval skipped — embed_query failed: %s", e)
-        return []
+        logger.warning("Learnings retrieval — embed_query failed: %s", e)
 
     engine = get_engine()
     with engine.connect() as conn:
-        try:
-            # Pull a generous candidate pool from vec0 — we'll re-rank below.
-            rows = conn.execute(
-                text(
-                    "SELECT rowid, distance FROM agent_learnings_vec "
-                    "WHERE embedding MATCH :v ORDER BY distance LIMIT :k"
-                ),
-                {"v": _serialise_vec(qvec), "k": max(top_k * 4, 20)},
-            ).fetchall()
-        except Exception as e:
-            logger.warning("agent_learnings_vec search failed: %s", e)
+        vec_rowids: list[int] = []
+        vec_distances: dict[int, float] = {}
+        if qvec is not None:
+            try:
+                vrows = conn.execute(
+                    text(
+                        "SELECT rowid, distance FROM agent_learnings_vec "
+                        "WHERE embedding MATCH :v ORDER BY distance LIMIT :k"
+                    ),
+                    {"v": _serialise_vec(qvec), "k": _LRN_VEC_TOP_K},
+                ).fetchall()
+                vec_rowids = [int(r[0]) for r in vrows]
+                vec_distances = {int(r[0]): float(r[1]) for r in vrows}
+            except Exception as e:
+                logger.warning("agent_learnings_vec search failed: %s", e)
+
+        # ── BM25 via FTS5 (best-effort) ───────────────────────────────────
+        bm25_rowids: list[int] = []
+        fts_query = _build_fts_query(query)
+        if fts_query and fts_query != '""':
+            try:
+                brows = conn.execute(
+                    text(
+                        "SELECT rowid FROM agent_learnings_fts "
+                        "WHERE agent_learnings_fts MATCH :q ORDER BY rank LIMIT :k"
+                    ),
+                    {"q": fts_query, "k": _LRN_BM25_TOP_K},
+                ).fetchall()
+                bm25_rowids = [int(r[0]) for r in brows]
+            except Exception as e:
+                logger.warning(
+                    "agent_learnings_fts search failed (continuing with dense-only): %s", e,
+                )
+
+        if not vec_rowids and not bm25_rowids:
             return []
 
-        if not rows:
-            return []
+        # ── RRF fusion ────────────────────────────────────────────────────
+        fused = _rrf_fuse(bm25_rowids, vec_rowids)[: max(top_k * 4, 20)]
+        rowid_to_rrf = dict(fused)
+        ids = [rid for rid, _ in fused]
 
-        rowid_to_dist = {r[0]: r[1] for r in rows}
-        placeholders = ",".join(str(r[0]) for r in rows)
+        id_params = {f"id{i}": v for i, v in enumerate(ids)}
+        placeholders = ",".join(f":id{i}" for i in range(len(ids)))
         meta_rows = conn.execute(
             text(
                 f"SELECT id, type, category, tool_name, summary, details, status, "
                 f"validation_count, failure_count "
                 f"FROM agent_learnings WHERE id IN ({placeholders}) "
                 f"AND status IN ('active', 'provisional')"
-            )
+            ),
+            id_params,
         ).fetchall()
 
     results: list[RetrievedLearning] = []
     for r in meta_rows:
         lid, ltype, lcat, ltool, lsum, ldet, lstat, vcount, fcount = r
-        # Base score from inverse distance (closer = higher score)
-        dist = float(rowid_to_dist.get(lid, 1.0))
-        score = 1.0 / (dist + 0.01)
-        # Status boost: active > provisional
+        # Base score: RRF fused rank score, optionally blended with dense
+        # distance for ties. The RRF score is already well-calibrated for
+        # ranking; the boosts below preserve historical behaviour.
+        rrf_score = float(rowid_to_rrf.get(lid, 0.0))
+        # Fall back to inverse-distance only if RRF gave us nothing useful
+        # (shouldn't happen — we only ranked from the union of rowids).
+        if rrf_score <= 0.0 and lid in vec_distances:
+            rrf_score = 1.0 / (vec_distances[lid] + 0.01)
+        score = rrf_score
         if lstat == "active":
             score *= 1.5
-        # Tool-name match boost
         if tool_name_hint and ltool == tool_name_hint:
             score *= 1.3
-        # Validation track record
         if vcount > 0:
             score *= 1.0 + min(0.3, vcount * 0.05)
         if fcount > 0:
@@ -393,14 +505,16 @@ def retrieve_relevant_learnings(
 
     # Mark retrieved entries' last_retrieved_at for the validation-on-outcome path
     if selected:
-        ids = [s.id for s in selected]
+        sel_ids = [int(s.id) for s in selected]
+        id_params = {f"id{i}": v for i, v in enumerate(sel_ids)}
+        placeholders = ",".join(f":id{i}" for i in range(len(sel_ids)))
         with engine.connect() as conn:
             conn.execute(
                 text(
                     f"UPDATE agent_learnings SET last_retrieved_at = :ts "
-                    f"WHERE id IN ({','.join(str(i) for i in ids)})"
+                    f"WHERE id IN ({placeholders})"
                 ),
-                {"ts": _utcnow().isoformat()},
+                {"ts": _utcnow().isoformat(), **id_params},
             )
             conn.commit()
 
@@ -429,7 +543,9 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
     """
     if not learning_ids:
         return
-    placeholders = ",".join(str(i) for i in learning_ids)
+    int_ids = [int(i) for i in learning_ids]
+    id_params = {f"id{i}": v for i, v in enumerate(int_ids)}
+    placeholders = ",".join(f":id{i}" for i in range(len(int_ids)))
     engine = get_engine()
     now = _utcnow().isoformat()
     with engine.connect() as conn:
@@ -441,7 +557,7 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"    last_validated_at = :ts "
                     f"WHERE id IN ({placeholders})"
                 ),
-                {"ts": now},
+                {"ts": now, **id_params},
             )
             # Auto-promote provisional → active when threshold reached
             conn.execute(
@@ -451,7 +567,7 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"  AND status = 'provisional' "
                     f"  AND validation_count >= :thr"
                 ),
-                {"thr": PROMOTION_VALIDATION_THRESHOLD},
+                {"thr": PROMOTION_VALIDATION_THRESHOLD, **id_params},
             )
         else:
             conn.execute(
@@ -460,6 +576,7 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"SET failure_count = failure_count + 1 "
                     f"WHERE id IN ({placeholders})"
                 ),
+                id_params,
             )
             # Auto-archive when failures dominate
             conn.execute(
@@ -470,7 +587,7 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"  AND failure_count >= :thr "
                     f"  AND failure_count > validation_count"
                 ),
-                {"ts": now, "thr": ARCHIVE_FAILURE_THRESHOLD},
+                {"ts": now, "thr": ARCHIVE_FAILURE_THRESHOLD, **id_params},
             )
         conn.commit()
 

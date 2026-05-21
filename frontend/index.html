@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/nexus_icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content-Security-Policy: defence-in-depth in case the backend's input
+      sanitisation ever lets a markup payload through. %VITE_API_BASE_URL% is
+      substituted by Vite at build time from .env (dev: http://localhost:8000;
+      prod: the deployed API origin).
+        - script-src 'self'  → no inline scripts, no eval, no remote JS
+        - style-src 'self' 'unsafe-inline' → Tailwind v4 injects styles inline
+        - img-src includes blob: for in-memory previews and data: for icons
+        - connect-src includes ws:/wss: so Vite HMR keeps working in dev;
+          remove these in a prod-only CSP if you tighten via headers later
+        - frame-ancestors / sandbox / report-uri are NOT supported via <meta>;
+          set those via an HTTP header at the ingress.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: %VITE_API_BASE_URL%; font-src 'self' data:; connect-src 'self' %VITE_API_BASE_URL% ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self';"
+    />
     <title>NEXUS</title>
   </head>
   <body>

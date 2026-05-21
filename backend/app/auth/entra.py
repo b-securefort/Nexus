@@ -88,6 +88,99 @@ def _decode_token(token: str, jwks: dict, settings) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+# 4C — Per-conversation ARM token overrides (Phase 4 follow-up to B3).
+#
+# When the frontend receives `token_refresh_required` it acquires a fresh ARM
+# token via MSAL silent refresh and posts it via POST /api/chat/refresh-token.
+# The endpoint stores the token here keyed by conversation_id; any in-flight
+# orchestrator turn picks it up on its next iteration so the user doesn't
+# have to retype the message.
+_arm_token_overrides: dict[int, tuple[str, float]] = {}
+_arm_override_lock = __import__("threading").Lock()
+# Overrides past this age are ignored (the user moved on or the new token has
+# itself expired). Tuned generously since the typical refresh-then-pickup
+# window is < 5s.
+_ARM_OVERRIDE_TTL_SECONDS = 300
+
+
+def set_arm_token_override(conversation_id: int, token: str) -> None:
+    """Store a refreshed ARM token for a conversation. Called from the
+    /api/chat/refresh-token endpoint."""
+    with _arm_override_lock:
+        _arm_token_overrides[conversation_id] = (token, time.time())
+
+
+def get_arm_token_override(conversation_id: int) -> str | None:
+    """Return a refreshed ARM token if one exists and is still fresh.
+
+    Returns None if no override is registered for this conversation OR the
+    override is older than `_ARM_OVERRIDE_TTL_SECONDS`. The orchestrator
+    consults this before each Azure tool dispatch (via the B3 ARM pre-flight)
+    and prefers the override over the request-scoped ContextVar so a turn
+    that has been running for a while can pick up a refresh.
+    """
+    with _arm_override_lock:
+        entry = _arm_token_overrides.get(conversation_id)
+        if entry is None:
+            return None
+        token, set_at = entry
+        if time.time() - set_at > _ARM_OVERRIDE_TTL_SECONDS:
+            _arm_token_overrides.pop(conversation_id, None)
+            return None
+        return token
+
+
+def clear_arm_token_override(conversation_id: int) -> None:
+    """Drop the override entry for a conversation. Called at end-of-turn."""
+    with _arm_override_lock:
+        _arm_token_overrides.pop(conversation_id, None)
+
+
+def arm_token_status(
+    token: str | None, refresh_threshold_seconds: int = 60
+) -> str:
+    """Inspect an ARM token's `exp` claim. Used by the orchestrator before
+    issuing an Azure tool call so we can prompt for a fresh token instead of
+    burning a subprocess + retry budget on an "AADSTS70043 token expired"
+    error inside az.
+
+    SECURITY: signature is intentionally NOT verified — this check is purely
+    a pre-flight gate to avoid wasted work. The actual signature check happens
+    when Azure consumes the token. The `exp` claim is forgeable; the worst a
+    forger achieves is bypassing the pre-flight and falling through to Azure
+    rejecting their forged token. No authorization decision rides on this.
+
+    Returns one of:
+      - "missing"     — no token attached at all (frontend never got one)
+      - "valid"       — well-formed, exp is > now + threshold
+      - "near_expiry" — exp is within `refresh_threshold_seconds` of now
+      - "expired"     — exp is in the past
+      - "invalid"     — couldn't decode or no exp claim
+    """
+    if not token:
+        return "missing"
+    try:
+        claims = jwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+        )
+    except Exception:
+        return "invalid"
+    exp = claims.get("exp")
+    if exp is None:
+        return "invalid"
+    try:
+        exp_ts = float(exp)
+    except (TypeError, ValueError):
+        return "invalid"
+    now = time.time()
+    if exp_ts <= now:
+        return "expired"
+    if exp_ts <= now + max(0, refresh_threshold_seconds):
+        return "near_expiry"
+    return "valid"
+
+
 def _extract_arm_token(request: Request, expected_tenant_id: str) -> str | None:
     """Read the X-ARM-Token header and do a basic sanity check.
 
@@ -96,12 +189,26 @@ def _extract_arm_token(request: Request, expected_tenant_id: str) -> str | None:
     (without full signature verification — that happens implicitly when Azure
     rejects invalid tokens) just to confirm it's for the right tenant and the
     right audience before attaching it to the User.
+
+    SECURITY: The claims read here (`aud`, `tid`) are **unverified** — the JWT
+    signature is intentionally NOT checked. These claims MUST NOT be used for
+    any authorization decision on this server. They serve two narrow purposes
+    only:
+      1. Reject obviously-wrong tokens early (wrong audience / wrong tenant)
+         so we don't pass garbage to ARM.
+      2. Pass the *opaque* raw token through to Azure, which will perform full
+         signature validation against the upstream JWKS before honoring the
+         request.
+    Anything more (e.g. trusting `oid`, `roles`, `groups` from this token to
+    grant privileges in Nexus) is unsafe. Use the `get_current_user` path —
+    that token IS signature-verified against Entra JWKS.
     """
     raw = request.headers.get("X-ARM-Token", "").strip()
     if not raw:
         return None
     try:
-        # Decode without verification to read claims
+        # SECURITY: verify_signature=False — see docstring. Claims read below
+        # are pass-through filters only, never authorization input.
         claims = jwt.decode(raw, options={"verify_signature": False, "verify_exp": False})
         aud = claims.get("aud", "")
         tid = claims.get("tid", "")

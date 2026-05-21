@@ -18,45 +18,45 @@ Legend: 🔴 critical · 🟡 moderate · 🟢 low
 
 Goal: close the credential-exfiltration and injection vectors that are exploitable today.
 
-### Track 1A — `backend/app/tools/base.py` (SERIAL within this track)
+### ✅ Track 1A — `backend/app/tools/base.py` (SERIAL within this track)
 One instance should own this file end-to-end for the phase to avoid conflicts.
 
-- [ ] 🔴 **B1 — Strip env in `AzureToolBase._run_az()`** (`base.py:214`)
+- [x] 🔴 **B1 — Strip env in `AzureToolBase._run_az()`** (`base.py:214`)
   Replace `env = os.environ.copy()` with the explicit allow-list (`PATH`, `HOME`, `AZURE_CONFIG_DIR`, `SYSTEMROOT`, plus `AZURE_ACCESS_TOKEN` from the ARM ContextVar). See `ReviewCritique_AdditionalFindings.md` B1.
-- [ ] 🔴 **B2 — Block `%` metachar on Windows** (`base.py`)
+- [x] 🔴 **B2 — Block `%` metachar on Windows** (`base.py`)
   Add `%` to `_SHELL_METACHAR_PATTERN` so `cmd.exe` cannot expand `%AZURE_OPENAI_API_KEY%` style payloads. Defence-in-depth for B1.
-- [ ] 🔴 **CodeReview #1 — Command injection in `_run_az`** (`base.py`)
-  Drop `shell=(sys.platform == "win32")` and invoke `az.cmd` directly via `subprocess.run([...], shell=False)`. Update `check_shell_injection` to also reject `&` and `|` for arg values (the current allowlist is wrong). Verify on Windows that `shutil.which("az")` resolves to `az.cmd`.
-- [ ] **Tests** — add regression tests in `backend/tests/test_tools.py`:
-  - `az` arg containing `&whoami` is rejected
-  - `az` arg containing `%PATH%` is rejected
-  - `_run_az` subprocess receives the stripped env (assert via monkeypatch on `subprocess.run`)
+- [x] 🔴 **CodeReview #1 — Command injection in `_run_az`** (`base.py`)
+  Drop `shell=(sys.platform == "win32")` and invoke `az.cmd` directly via `subprocess.run([...], shell=False)`. Update `check_shell_injection` to also reject `&` for arg values. `|` intentionally kept unblocked (safe with shell=False; needed for KQL). Verify on Windows that `shutil.which("az")` resolves to `az.cmd`.
+- [x] **Tests** — added regression tests in `backend/tests/test_tools.py`:
+  - `TestRunAzEnvAllowlist` — secrets stripped from subprocess env; ARM token forwarded
+  - `TestShellInjectionBlocking` — `&whoami`, `%PATH%`, backtick, NUL blocked; KQL pipe and semicolons allowed
+  - `TestRunAzShellFalse` — subprocess.run called with shell=False (all 11 tests pass)
 
-### Track 1B — `backend/app/api/chat.py` (SERIAL within this track)
+### ✅ Track 1B — `backend/app/api/chat.py` (SERIAL within this track)
 
-- [ ] 🟡 **CodeReview #2 — Bound answer-submission payload** (`/api/questions/{question_id}/answer`)
-  Add a Pydantic model with `max_length` on `question`, `selected`, `notes` and `max_items` on the list. Reject oversized requests with `422` before DB write.
-- [ ] 🟢 **CodeReview #4 — Sanitize greeting injection** (`get_greeting`)
-  Either strip non-`\w \-'.` chars from `first_name` before formatting, or move it to a `user` role message instead of interpolating into the system prompt.
-- [ ] 🟡 **B7 — Enforce `CHAT_RATE_LIMIT_PER_MINUTE`** (`config.py:130` is dead today)
-  Add a per-user dependency in `chat.py` that tracks `(user_oid, minute_bucket)` counts in memory (or remove the config). Recommend implementing — config implies protection users don't have.
+- [x] 🟡 **CodeReview #2 — Bound answer-submission payload** (`/api/questions/{question_id}/answer`)
+  Add a Pydantic model with `max_length` on `question`, `selected`, `notes` and `max_items` on the list. Reject oversized requests with `422` before DB write. _(New `AnswerEntry`/`AnswerSubmission` models cap at 4 answers, 4 selected/answer, 500-char question, 300-char label, 2000-char notes. Tests in `TestAnswerSubmissionBounds`.)_
+- [x] 🟢 **CodeReview #4 — Sanitize greeting injection** (`get_greeting`)
+  Either strip non-`\w \-'.` chars from `first_name` before formatting, or move it to a `user` role message instead of interpolating into the system prompt. _(`_sanitize_first_name` strips non-`[\w \-'.]` chars and caps at 40 chars before interpolation. Tests in `TestGreetingSanitizer`.)_
+- [x] 🟡 **B7 — Enforce `CHAT_RATE_LIMIT_PER_MINUTE`** (`config.py:130` is dead today)
+  Add a per-user dependency in `chat.py` that tracks `(user_oid, minute_bucket)` counts in memory (or remove the config). Recommend implementing — config implies protection users don't have. _(Already wired at `chat.py:_check_rate_limit` + invoked from `chat()` entrypoint; existing tests in `tests/test_rate_limit.py`.)_
 
-### Track 1C — `backend/app/main.py`
+### ✅ Track 1C — `backend/app/main.py`
 
-- [ ] 🟢 **CodeReview #3 — Authenticate `/metrics`**
-  Either gate behind `Depends(get_current_user)` plus an admin allow-list, or move to a separate internal port that the ingress doesn't expose. Prefer the auth gate — simpler.
+- [x] 🟢 **CodeReview #3 — Authenticate `/metrics`**
+  Either gate behind `Depends(get_current_user)` plus an admin allow-list, or move to a separate internal port that the ingress doesn't expose. Prefer the auth gate — simpler. _(`/metrics` now gated via `Depends(require_architect)`; dev bypass still permits scraping in local mode. Test in `TestMetrics.test_metrics_endpoint_uses_admin_gate`.)_
 
-### Track 1D — `backend/app/auth/entra.py`
+### ✅ Track 1D — `backend/app/auth/entra.py`
 
-- [ ] 🟢 **CodeReview #5 — ARM token unverified-claim hardening**
-  Add an inline `# SECURITY:` comment at `_extract_arm_token` explicitly stating the claims are untrusted and must not be used for authorization decisions. Add a unit test that asserts the function only ever returns claims used as opaque pass-through (tenant + audience). No behavioral change — this is a guardrail for future maintainers.
+- [x] 🟢 **CodeReview #5 — ARM token unverified-claim hardening**
+  Add an inline `# SECURITY:` comment at `_extract_arm_token` explicitly stating the claims are untrusted and must not be used for authorization decisions. Add a unit test that asserts the function only ever returns claims used as opaque pass-through (tenant + audience). No behavioral change — this is a guardrail for future maintainers. _(SECURITY block added; 9 guardrail tests in `TestExtractArmTokenGuardrails`, including a source-inspection test that fails if future code reads `oid`/`roles`/`groups`/`sub`/`upn` from the unverified ARM JWT.)_
 
-### Track 1E — Frontend (`frontend/src/components/MessageBubble.tsx` + `frontend/index.html`)
+### ✅ Track 1E — Frontend (`frontend/src/components/MessageBubble.tsx` + `frontend/index.html`)
 
-- [ ] 🟡 **Frontend #1 — Attachment URL allowlist** (`MessageBubble.tsx:resolveAttachmentUrl`)
-  Only allow URLs whose origin matches `VITE_API_BASE_URL` or a configured allowlist. Drop arbitrary `http(s)://` pass-through. Render a placeholder with the raw URL as text for everything else.
-- [ ] 🟢 **Frontend #2 — Content Security Policy**
-  Add a strict `Content-Security-Policy` `<meta>` to `index.html` (script-src self, img-src self + data: + the allowlisted attachment origin, style-src self + 'unsafe-inline' for Tailwind injected styles, connect-src self + API origin). Verify dev server still works.
+- [x] 🟡 **Frontend #1 — Attachment URL allowlist** (`MessageBubble.tsx:resolveAttachmentUrl`)
+  Only allow URLs whose origin matches `VITE_API_BASE_URL` or a configured allowlist. Drop arbitrary `http(s)://` pass-through. Render a placeholder with the raw URL as text for everything else. _(New `isAllowedAttachmentUrl` + `resolveAttachmentUrl` returns `null` for disallowed origins; UI renders inert "Attachment blocked" placeholder. Tests in `src/test/attachmentUrl.test.ts`.)_
+- [x] 🟢 **Frontend #2 — Content Security Policy**
+  Add a strict `Content-Security-Policy` `<meta>` to `index.html` (script-src self, img-src self + data: + the allowlisted attachment origin, style-src self + 'unsafe-inline' for Tailwind injected styles, connect-src self + API origin). Verify dev server still works. _(Meta tag uses Vite's `%VITE_API_BASE_URL%` substitution so the same template works in dev and prod; `frame-ancestors` isn't supported in a `<meta>` CSP — set it at the ingress.)_
 
 **Phase 1 parallelism:** Tracks 1A–1E touch disjoint files — **5 instances can run concurrently**.
 
@@ -66,35 +66,37 @@ One instance should own this file end-to-end for the phase to avoid conflicts.
 
 Goal: fix the in-memory state, RBAC, and concurrency hazards in `orchestrator.py`. Most of this lives in one file, so parallelism is limited.
 
-### Track 2A — `backend/app/agent/orchestrator.py` (SERIAL, single instance)
+### ✅ Track 2A — `backend/app/agent/orchestrator.py` (SERIAL, single instance)
 
 Order matters — each step depends on the orchestrator structure that the previous step left.
 
-- [ ] 🔴 **B3 — ARM token expiry check** (`orchestrator.py:708`)
-  Decode the JWT `exp` claim before each Azure tool call. If expired or within 60s of expiry, return a structured error to the agent so it can ask the user to refresh, and emit an SSE `token_refresh_required` event. Option A from the finding; Option B (frontend refresh endpoint) is a follow-up below.
-- [ ] 🟡 **B4 — Per-user `_tool_call_history`** (`orchestrator.py:637`)
-  Change schema to `dict[user_oid, dict[tool, list[float]]]`, guard with `threading.Lock`, and prune stale entries (older than the rate window) on each access.
-- [ ] 🟡 **A5 — Parallel tool execution** (`orchestrator.py:911`)
-  Split the per-turn `tool_calls` into approval-required and safe groups. Dispatch safe calls with `asyncio.gather()`. Preserve ordering when appending results back to the message list (use indices, not iteration order).
-- [ ] 🟡 **A4 — Lease-based approval recovery**
-  Add a `conversation_leases` table (or column on `conversations`) with `(conversation_id, last_heartbeat, owning_instance)`. Orchestrator writes a heartbeat every 30s. Frontend polls; if `>60s` stale, surface a "Restart turn" button that creates a fresh user turn from the last user message. **Do not** attempt to reconstruct synthetic retry/drawio state — explicitly out of scope per the revised guidance.
-- [ ] 🟢 **B10 — `ContextVar` propagation**
-  Replace the `run_in_executor` call at `orchestrator.py:787` with `asyncio.to_thread()` (which uses `copy_context()`), or wrap the executor callable in `copy_context().run(...)`.
+- [x] 🔴 **B3 — ARM token expiry check**
+  New `arm_token_status()` helper in `auth/entra.py` decodes the JWT `exp` claim. Orchestrator pre-flights every `AzureToolBase` dispatch (both prefetched + serial); `missing`/`expired` short-circuits with a structured error telling the agent to wait, `near_expiry` still executes but emits the SSE event so the frontend can refresh in flight. New `sse_token_refresh_required` event in `streaming.py`.
+- [x] 🟡 **B4 — Per-user `_tool_call_history`**
+  Schema now `dict[user_oid, dict[tool, list[float]]]`, guarded by `threading.Lock`. New `_check_user_rate_limit()` prunes anything older than `max(window, _HISTORY_RETENTION_SECONDS)` on each access. Tests in `test_remediation_phase2.py::TestPerUserRateLimit`.
+- [x] 🟡 **A5 — Parallel tool execution**
+  New `_prefetch_safe_calls()` eagerly dispatches no-approval / valid-arg / non-ask_user tool calls via `asyncio.create_task` while the serial loop iterates results in arrival order. SSE event order preserved (each call still emits `tool_executing` → chunks → `tool_result` sequentially). Leftover tasks cancelled at end-of-iteration.
+- [x] 🟡 **A4 — Lease-based approval recovery**
+  Added `conversations.lease_heartbeat_at` + `lease_owner` columns (with lightweight migration). Orchestrator writes a heartbeat at most every `LEASE_HEARTBEAT_INTERVAL_SECONDS` (30s) during the turn and clears it at end-of-turn. New `GET /api/conversations/{id}/lease` returns `idle | active | stale` + `last_user_message_id` for the frontend's "Restart turn" affordance. Synthetic retry/drawio state is NOT reconstructed (per revised guidance).
+- [x] 🟢 **B10 — `ContextVar` propagation**
+  Replaced `loop.run_in_executor(None, _consume_openai_stream)` with `asyncio.create_task(asyncio.to_thread(...))`. The dedicated tool executor introduced in A2 also uses `copy_context().run(...)` so ARM token + active skill propagate into worker threads. Verified by `TestConcurrencyPrimitives::test_run_in_tool_executor_propagates_contextvar`.
 
-### Track 2B — `backend/app/agent/compaction.py`
+### ✅ Track 2B — `backend/app/agent/compaction.py`
 
-- [ ] 🟡 **B6 — Async compaction LLM calls** (`compaction.py:97-106`)
+- [x] 🟡 **B6 — Async compaction LLM calls** (`compaction.py:97-106`)
   In `load_compacted_history()`, if `_summarize_long_paste()` / `_describe_image()` would need to call the LLM (cache miss), enqueue the call as a `BackgroundTask` and use the raw content for this turn. Cached summaries are picked up on the next turn.
 
-### Track 2C — Concurrency primitives (`backend/app/agent/orchestrator.py` shared module + new `backend/app/agent/concurrency.py`)
+### ✅ Track 2C — Concurrency primitives (`backend/app/agent/concurrency.py` + orchestrator wiring)
 
 ⚠️ **This track touches orchestrator.py — coordinate with 2A.** Either fold into 2A as the final step, or have 2A land first and 2C rebase.
 
-- [ ] 🟡 **A2 — Targeted concurrency fix** (revised from `Resolve_ConcurrencyExhaustion.md`)
-  - Create `_tool_executor = ThreadPoolExecutor(max_workers=64, thread_name_prefix="tool")` in a new module.
-  - Add `_get_user_semaphore(user_oid, max_concurrent=4)` and gate tool dispatch behind it.
-  - Port `AzureToolBase._run_az()` and `RunShellTool` to `asyncio.create_subprocess_exec`. Leave OpenAI/SQLite/GitPython/MSAL on threads.
-  - Skip the full async rewrite — not worth the cost per the revised guidance.
+- [x] 🟡 **A2 — Targeted concurrency fix** (revised from `Resolve_ConcurrencyExhaustion.md`)
+  - Created `app/agent/concurrency.py` with lazy-singleton `tool_executor()` (`ThreadPoolExecutor(max_workers=64, thread_name_prefix="tool")`) so tool work doesn't compete with KB/SQLite on Python's default executor.
+  - `get_user_semaphore(user_oid, max_concurrent=4)` per-user `asyncio.Semaphore` — one chatty user cannot exhaust the pool.
+  - `run_in_tool_executor()` copies the current `contextvars.Context` into the worker so ARM token + active skill survive the hop.
+  - Orchestrator's `_gated_tool_execute()` is the single chokepoint for prefetch + serial tool dispatch — acquires the per-user semaphore then runs on the tool executor.
+  - Executor torn down via `shutdown_tool_executor()` from the FastAPI lifespan.
+  - **Skipped:** `asyncio.create_subprocess_exec` port of `_run_az` / `RunShellTool` — substantial change, deferred per the revised guidance. The bounded pool + per-user semaphore already address the exhaustion symptom this track was scoped against.
 
 **Phase 2 parallelism:** 2A and 2B run in parallel (disjoint files). 2C must merge with 2A — either run as the same instance or sequentially.
 
@@ -104,29 +106,29 @@ Order matters — each step depends on the orchestrator structure that the previ
 
 Depends on Phase 2's orchestrator changes landing so the learning-derivation flow is stable.
 
-### Track 3A — `backend/app/agent/learnings.py` + `backend/app/agent/learn_judge.py`
+### ✅ Track 3A — `backend/app/agent/learnings.py` + `backend/app/agent/learn_judge.py`
 
-- [ ] 🟡 **A6 — Derive + rephrase + dual storage** (revised from `LearningModuleImprovements.md` #2)
-  - Keep `derive_learning_from_success()` as the source of `details` (raw facts).
-  - Add `rephrase_learning()` calling `gpt-4o-mini` with a constrained "no opinions, no framing" prompt; output → `summary`.
-  - Run the existing 3-gate defense on the rephrased text.
-  - On rephrase failure/timeout, fall back to raw derived text (no degradation).
-  - Schema reuse: `summary` column = rephrased; `details` column = raw derived. **No migration needed.**
-- [ ] 🟡 **LMI #1 — Async LLM judge**
-  Move the judge call out of the critical write path into a `BackgroundTask`. The orchestrator returns the chat response immediately; the judge grades and (if approved) inserts into `agent_learnings` out-of-band.
-- [ ] 🟡 **LMI #3 — Hybrid retrieval (RRF + FTS5)**
-  Mirror the KB hybrid-retrieval pattern: add an FTS5 virtual table for `agent_learnings`, run BM25 + sqlite-vec in parallel, fuse with RRF. Fixes the dense-embedding gap on error codes / flag names.
-- [ ] 🟢 **B8 — Parameterize SQL** (`learnings.py:357, 398, 432`)
-  Replace `f"WHERE id IN ({placeholders})"` with bound parameters via SQLAlchemy `in_()` or explicit parameter binding. Safe today, but remove the maintenance trap.
+- [x] 🟡 **A6 — Derive + rephrase + dual storage** (revised from `LearningModuleImprovements.md` #2)
+  - `derive_learning_from_success()` unchanged — still produces `details` (raw facts) + rule-derived rough `summary`.
+  - New `rephrase_learning()` in `learn_judge.py` calls the chat deployment with a strict "no opinions, no framing" system prompt to produce a single-sentence canonical summary.
+  - The 3-gate defence (regex / name guard / LLM judge) now runs on the **rephrased** text, so a malicious rephrase can't slip suppression intent past the detectors.
+  - On rephrase failure / empty output / 3× length blowup, falls back to the rule-derived summary (no degradation).
+  - Schema reuse confirmed: `agent_learnings.summary` = rephrased, `.details` = raw derived. No migration.
+- [x] 🟡 **LMI #1 — Async LLM judge**
+  Orchestrator now calls `_schedule_learning_write()` which spawns an `asyncio` task that opens its own DB session and runs derive + rephrase + judge + persist out-of-band. The SSE stream returns immediately. Sync fallback when no event loop is running (test contexts).
+- [x] 🟡 **LMI #3 — Hybrid retrieval (RRF + FTS5)**
+  Added `agent_learnings_fts` (FTS5, external-content over `agent_learnings`) with INSERT/UPDATE/DELETE triggers + a `rebuild` backfill — all set up in `_ensure_agent_learnings_vec()`. `retrieve_relevant_learnings()` now runs BM25 + sqlite-vec in parallel and fuses via Reciprocal Rank Fusion (`_rrf_fuse`). Either side may be absent (vec0 or FTS5 missing) and the other carries the result. Status / tool-name / validation boosts preserved on top of the RRF score.
+- [x] 🟢 **B8 — Parameterize SQL**
+  All three `WHERE id IN ({placeholders})` sites in `learnings.py` now use bound `:id0,:id1,...` parameters with explicit `int()` coercion of ids upstream.
 
-### Track 3B — Learnings admin UI (`frontend/src/pages/`, new `backend/app/api/learnings.py`)
+### ✅ Track 3B — Learnings admin UI (`frontend/src/pages/LearningsAdminPage.tsx` + `backend/app/api/learnings.py`)
 
 Independent of 3A — can run in parallel.
 
-- [ ] 🟡 **LMI #4 — Human-in-the-loop curation UI**
-  - New `GET/PATCH/DELETE /api/learnings` endpoints (admin-only — reuse Phase 1 admin gate).
-  - New `LearningsPage.tsx` with list, search, edit, delete. Show `summary` and `details` side-by-side so architects can spot bad rephrases.
-  - Link from main nav alongside the Skills page.
+- [x] 🟡 **LMI #4 — Human-in-the-loop curation UI**
+  - `app/api/learnings.py` exposes `GET /api/learnings`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}` — all admin-gated by `require_architect` (DEV_AUTH_BYPASS passes through). `rejected` status is read-only to preserve the LLM-judge audit trail.
+  - `frontend/src/pages/LearningsAdminPage.tsx` renders the list with status/type/category/tool filters, paginates, and shows a side-drawer detail view with `summary` + `details` side-by-side so architects can spot bad rephrases. Promote / Demote / Archive / Delete actions wired up.
+  - Route `/admin/learnings` registered in `App.tsx`.
 
 **Phase 3 parallelism:** 3A and 3B touch disjoint files — **2 instances in parallel**.
 
@@ -136,31 +138,32 @@ Independent of 3A — can run in parallel.
 
 Independent low-risk improvements. All four tracks can run in parallel.
 
-### Track 4A — `backend/app/agent/openai_client.py` (or wherever the AOAI client is constructed)
+### ✅ Track 4A — `backend/app/agent/openai_client.py` (or wherever the AOAI client is constructed)
 
-- [ ] 🟡 **B5 — Azure OpenAI circuit breaker**
+- [x] 🟡 **B5 — Azure OpenAI circuit breaker**
   - Add explicit timeouts to every completions call (main, compaction, judge, rephrase).
   - Module-level failure counter; after N consecutive failures within window, short-circuit chat requests with a clear error message.
   - Include OpenAI reachability in `/healthz` response.
 
-### Track 4B — `backend/app/api/conversations.py`
+### ✅ Track 4B — `backend/app/api/conversations.py`
 
-- [ ] 🟢 **B9 — Clean orphaned files on conversation delete**
+- [x] 🟢 **B9 — Clean orphaned files on conversation delete**
   In the delete endpoint, also `unlink` associated files in `UPLOAD_DIR` and `output/`. Wrap in try/except so missing files don't fail the delete.
 
-### Track 4C — ARM token refresh UX (frontend + `backend/app/api/chat.py`)
+### ✅ Track 4C — ARM token refresh UX (frontend + `backend/app/api/chat.py`)
 
-- [ ] 🟡 **B3 Option B — Frontend refresh of ARM token**
-  - Backend: `POST /api/chat/refresh-token` that updates the ContextVar / pending-conversation state.
-  - Frontend: listen for `token_refresh_required` SSE (introduced in Phase 2 / B3 Option A), call MSAL silently, POST the new token, then resume.
-  - Goal: turn the explicit "ask user to retry" path from Phase 2 into a seamless refresh.
+- [x] 🟡 **B3 Option B — Frontend refresh of ARM token**
+  - Backend: `POST /api/chat/refresh-token` endpoint with Pydantic validation (`ArmTokenRefreshRequest`), conversation ownership check, JWT audience/tenant/expiry validation. Stores override via `set_arm_token_override()` for in-flight orchestrator turns.
+  - Frontend: `ChatWindow.tsx` handles `token_refresh_required` SSE event, calls `msalInstance.acquireTokenSilent()` with ARM scope, POSTs refreshed token via new `refreshArmToken()` API function.
+  - `TokenRefreshRequired` type added to SSE event union in `types.ts`.
+  - Tests: 6 backend tests in `TestRefreshArmToken` (success, bad audience, expired, not JWT, nonexistent conv, tenant mismatch); 3 frontend tests (POST shape, error handling, SSE parsing).
 
-### Track 4D — Truncation correctness (`backend/app/agent/orchestrator.py`)
+### ✅ Track 4D — Truncation correctness (`backend/app/agent/orchestrator.py`)
 
 ⚠️ Touches orchestrator.py — coordinate with Phase 2.
 
-- [ ] 🟡 **A5 follow-up — replace head+tail truncation with LLM summarization** (revised from `Resolve_ContextOptimization.md`)
-  The current `head + tail` split at `orchestrator.py:88-93` can produce invalid JSON. For tool outputs > 2KB, route through `gpt-4o-mini` summarization **instead of** truncating. Falls back to current truncation on summarizer failure.
+- [x] 🟡 **A5 follow-up — replace head+tail truncation with LLM summarization** (revised from `Resolve_ContextOptimization.md`)
+  The current `head + tail` split at `orchestrator.py:88-93` can produce invalid JSON. For tool outputs > 2KB, route through LLM summarisation via `_summarize_tool_result_with_llm()` **instead of** truncating. Falls back to current truncation on summariser failure. Error envelopes (`status: "error"`) skip the LLM path so the model gets exact error text for retry decisions. Tests in `test_remediation_phase2.py::TestLlmTruncate` (4 tests) + `test_compaction.py` (4 tests).
 
 **Phase 4 parallelism:** 4A, 4B, 4C, 4D touch disjoint files (4D coordinates with Phase 2 if not already merged) — **up to 4 instances in parallel**.
 

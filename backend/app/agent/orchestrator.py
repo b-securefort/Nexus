@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -14,7 +15,9 @@ from openai import AzureOpenAI
 from sqlmodel import Session, select
 
 from app.agent.approvals import create_pending_approval, wait_for_approval
+from app.agent.circuit_breaker import CircuitOpenError, check as cb_check, record_failure as cb_failure, record_success as cb_success
 from app.agent.compaction import get_original_task, load_compacted_history
+from app.agent.concurrency import get_user_semaphore, run_in_tool_executor
 from app.agent.questions import create_pending_question, wait_for_answer
 from app.agent.streaming import (
     sse_approval_required,
@@ -24,22 +27,83 @@ from app.agent.streaming import (
     sse_question_answered,
     sse_question_required,
     sse_token,
+    sse_token_refresh_required,
     sse_tool_call_start,
     sse_tool_executing,
     sse_tool_output_chunk,
     sse_tool_result,
+)
+from app.auth.entra import (
+    arm_token_status,
+    clear_arm_token_override,
+    get_arm_token_override,
 )
 from app.auth.models import User
 from app.config import get_settings
 from app.db.models import Conversation, Message
 from app.kb.indexer import get_index_summary
 from app.skills.models import Skill
-from app.tools.base import Tool, resolve_tools, set_arm_token, set_skill_name
+from app.tools.base import (
+    AzureToolBase,
+    Tool,
+    resolve_tools,
+    set_arm_token,
+    set_skill_name,
+)
 
 logger = logging.getLogger(__name__)
 
 # Safety caps
 MAX_TOOL_ITERATIONS = 15  # Increased to allow room for retry strategies
+
+# A4 — Conversation lease heartbeat. The orchestrator stamps
+# `conversations.lease_heartbeat_at` at most this often during a long turn so
+# the frontend can detect a dead worker (heartbeat older than ~2× this value)
+# and offer the user a "restart turn" affordance.
+LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
+LEASE_STALE_AFTER_SECONDS = 60.0
+
+
+def _lease_owner_id() -> str:
+    """Identify the FastAPI worker that's writing heartbeats. Hostname:pid is
+    enough to disambiguate replicas in a multi-instance deployment; pid alone
+    is enough for the current single-replica setup."""
+    import os
+    import socket
+    try:
+        return f"{socket.gethostname()}:{os.getpid()}"
+    except Exception:
+        return f"unknown:{os.getpid()}"
+
+
+def _write_lease_heartbeat(session: Session, conversation_id: int) -> None:
+    """Update the lease heartbeat for this conversation. Best-effort — a
+    failure to write the heartbeat must not abort the chat turn."""
+    try:
+        conv = session.get(Conversation, conversation_id)
+        if conv is None:
+            return
+        conv.lease_heartbeat_at = datetime.now(timezone.utc)
+        conv.lease_owner = _lease_owner_id()
+        session.add(conv)
+        session.commit()
+    except Exception:
+        logger.exception("Lease heartbeat write failed for conv=%s", conversation_id)
+
+
+def _clear_lease(session: Session, conversation_id: int) -> None:
+    """Drop the lease at end-of-turn so the next request can immediately tell
+    that no one is currently holding it. Best-effort."""
+    try:
+        conv = session.get(Conversation, conversation_id)
+        if conv is None:
+            return
+        conv.lease_heartbeat_at = None
+        conv.lease_owner = None
+        session.add(conv)
+        session.commit()
+    except Exception:
+        logger.exception("Lease clear failed for conv=%s", conversation_id)
 
 # Tools whose errors should trigger automatic multi-strategy retry
 _COMMAND_TOOLS = {"az_cli", "run_shell", "az_resource_graph"}
@@ -103,6 +167,86 @@ _TOOL_RESULT_LIMITS = {
 }
 _DRAWIO_TOOLS = {"render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell"}
 
+# Track 4D — threshold above which the head+tail truncation is replaced by
+# an LLM summarisation pass. The old head+tail split could leave the model
+# staring at half a JSON object and either truncate mid-value (parse error)
+# or duplicate keys (model confusion). Below the threshold, head+tail is
+# fine — JSON parse errors won't matter because the model only sees a tiny
+# snippet either way.
+_LLM_TRUNCATE_THRESHOLD = 2_048
+
+
+def _summarize_tool_result_with_llm(tool_name: str, enveloped_result: str) -> str | None:
+    """LLM-summarise a tool result that's too large for the in-prompt context.
+    Returns a compact summary string on success, or None on failure (caller
+    falls back to head+tail truncation).
+
+    Synchronous so it can be invoked from the orchestrator via
+    `asyncio.to_thread`. Uses the same Azure OpenAI deployment as the chat
+    model — a separate gpt-4o-mini deployment isn't a hard requirement; what
+    matters is that the call is bounded, deterministic, and short.
+    """
+    settings = get_settings()
+    try:
+        client = AzureOpenAI(
+            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+            timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+            max_retries=0,
+        )
+        # Cap the input we send to the summariser so a multi-MB shell dump
+        # doesn't burn the model's context window before it can compress it.
+        # Keep both head and tail so summarisation reflects both ends.
+        truncated_input = enveloped_result
+        max_in = 24_000
+        if len(enveloped_result) > max_in:
+            half = max_in // 2
+            truncated_input = (
+                enveloped_result[:half]
+                + f"\n...[middle {len(enveloped_result) - max_in} chars elided]...\n"
+                + enveloped_result[-half:]
+            )
+        resp = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You compress tool output for a downstream agent. "
+                        "Preserve EVERY detail relevant to deciding the next "
+                        "action: resource names, error codes, counts, specific "
+                        "field values. Drop boilerplate, headers, pagination "
+                        "tokens, blank lines, repeated values. Keep it under "
+                        "1500 characters. Output the summary text only — no "
+                        "preface, no JSON wrapper, no quotes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Tool: {tool_name}\n\n"
+                        f"Raw output (length {len(enveloped_result)}):\n"
+                        f"{truncated_input}\n\n"
+                        "Produce the compressed summary now."
+                    ),
+                },
+            ],
+            temperature=0.0,
+            max_completion_tokens=600,
+        )
+        compressed = (resp.choices[0].message.content or "").strip()
+        if not compressed:
+            return None
+        return (
+            f"[LLM-compressed tool output for `{tool_name}` "
+            f"— original {len(enveloped_result)} chars, full in DB]\n"
+            f"{compressed}"
+        )
+    except Exception:
+        logger.exception("LLM tool-output summarisation failed for %s", tool_name)
+        return None
+
 
 def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
     """Trim an enveloped tool result for the in-memory messages list.
@@ -110,6 +254,11 @@ def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
     DB content stays full — this only affects what we send back to OpenAI on
     the next iteration so retries and tool dumps don't push the original task
     out of context.
+
+    Track 4D — For outputs above `_LLM_TRUNCATE_THRESHOLD` (2 KB) we attempt
+    an LLM summarisation pass. On any summariser failure we fall back to the
+    legacy head+tail split below, so a degraded LLM never breaks the chat
+    turn outright.
     """
     # For drawio tools, strip echoed XML from the envelope.data.xml field
     # if it's present — the validator/renderer often echoes the whole file
@@ -125,6 +274,25 @@ def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
                     return json.dumps(envelope, indent=2)
         except (json.JSONDecodeError, TypeError):
             pass
+
+    # 4D — Attempt LLM summarisation for sufficiently-large outputs. We don't
+    # touch error envelopes — the model needs the exact error text to retry.
+    is_error_envelope = False
+    if len(enveloped_result) > _LLM_TRUNCATE_THRESHOLD:
+        try:
+            envelope = json.loads(enveloped_result)
+            if isinstance(envelope, dict) and envelope.get("status") == "error":
+                is_error_envelope = True
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if (
+        len(enveloped_result) > _LLM_TRUNCATE_THRESHOLD
+        and not is_error_envelope
+    ):
+        summarised = _summarize_tool_result_with_llm(tool_name, enveloped_result)
+        if summarised:
+            return summarised
+        # fall through to head+tail
 
     limit = _TOOL_RESULT_LIMITS.get(tool_name)
     if limit and len(enveloped_result) > limit:
@@ -168,7 +336,162 @@ def _get_openai_client() -> AzureOpenAI:
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
         api_key=settings.AZURE_OPENAI_API_KEY,
         api_version=settings.AZURE_OPENAI_API_VERSION,
+        timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        max_retries=0,  # circuit breaker handles retry logic; don't double-count failures
     )
+
+
+# B3 — ARM token expiry pre-flight.
+#
+# Azure tools call az.cmd via AzureToolBase._run_az(), which only sees the ARM
+# token through the per-request ContextVar set at the top of handle_chat. If
+# the token has expired (or is about to) we'd otherwise burn an approval round-
+# trip + a subprocess timeout before az reports "AADSTS70043 token expired."
+# Detect the situation here, return a structured error to the agent, and emit
+# `token_refresh_required` so the frontend can drive MSAL silent refresh.
+_ARM_REFRESH_THRESHOLD_SECONDS = 60
+
+
+def _tool_requires_arm_token(tool: Tool) -> bool:
+    """True if the tool is implemented on top of AzureToolBase and therefore
+    relies on the per-request ARM token to authenticate to Azure.
+
+    Pure registry/class check — we don't introspect the args; even a "read-only"
+    Resource Graph query needs a valid bearer to ARM.
+    """
+    return isinstance(tool, AzureToolBase)
+
+
+def _current_arm_token(user: User, conversation_id: int) -> str | None:
+    """Resolve the effective ARM token for this point in the turn.
+
+    Prefers a per-conversation override (set via POST /api/chat/refresh-token
+    after a `token_refresh_required` SSE) over the request-scoped token. This
+    is what lets a long-running turn pick up a refreshed token without the
+    user retyping the message (Track 4C).
+
+    If an override exists and is used, the per-request ContextVar is updated
+    too so subprocesses spawned later in the turn pick it up via the existing
+    `_current_arm_token` ContextVar plumbing in `tools/base.py`.
+    """
+    override = get_arm_token_override(conversation_id)
+    if override is not None and override != user.arm_token:
+        user.arm_token = override
+        set_arm_token(override)
+        return override
+    return user.arm_token
+
+
+def _arm_token_error_payload(tool_name: str, status: str) -> str:
+    """Structured tool-result string handed back to the agent when a tool call
+    is short-circuited by the ARM expiry pre-flight. Phrased so the model
+    surfaces the issue to the user and waits instead of grinding through
+    retries that will all fail with the same expired token."""
+    if status == "missing":
+        msg = (
+            f"Error: cannot call `{tool_name}` — no Azure access token is "
+            "attached to this session. Ask the user to sign in to Azure (the "
+            "frontend will prompt) and retry the same request."
+        )
+    elif status == "expired":
+        msg = (
+            f"Error: cannot call `{tool_name}` — the user's Azure access "
+            "token has expired. The frontend has been notified to refresh; "
+            "tell the user to wait a moment and re-send the same request "
+            "(or click Retry). Do NOT retry this tool until that happens."
+        )
+    else:  # near_expiry
+        msg = (
+            f"Notice: the user's Azure access token will expire in under "
+            f"{_ARM_REFRESH_THRESHOLD_SECONDS}s; calling `{tool_name}` now "
+            "may fail mid-flight. The frontend has been told to refresh."
+        )
+    return msg
+
+
+def _prefetch_safe_calls(
+    tool_calls: list[dict], tools: list[Tool], user: User
+) -> dict[str, tuple[asyncio.Task, list[str]]]:
+    """Pre-dispatch safe-to-parallelise tool calls so they run concurrently
+    while the serial loop processes each in arrival order.
+
+    Returns `{call_id: (task, stream_chunks)}`. The serial loop awaits the
+    task when it reaches that call instead of starting a fresh one. Chunks
+    accumulate during execution; the serial loop yields them in order so the
+    SSE event stream stays consistent regardless of parallelism.
+
+    Calls that aren't safe (bad JSON, unknown tool, needs approval, ask_user,
+    Azure tool with missing/expired ARM token) are not prefetched — the
+    serial loop handles them with the original code path.
+    """
+    prefetched: dict[str, tuple[asyncio.Task, list[str]]] = {}
+    for call in tool_calls:
+        call_id = call.get("id") or ""
+        func_name = call.get("function", {}).get("name", "")
+        raw_args = call.get("function", {}).get("arguments") or ""
+        if not call_id or not func_name:
+            continue
+        if func_name == "ask_user":
+            continue
+        try:
+            func_args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            continue
+        tool = next((t for t in tools if t.name == func_name), None)
+        if tool is None:
+            continue
+        if _tool_needs_approval(tool, func_args):
+            continue
+        if _tool_requires_arm_token(tool):
+            # Prefetch reads from `user.arm_token`, which the serial loop
+            # keeps in sync with any per-conversation override (Track 4C) via
+            # `_current_arm_token()`. So a refreshed token posted between
+            # turns is already reflected here.
+            status_ = arm_token_status(
+                user.arm_token,
+                refresh_threshold_seconds=_ARM_REFRESH_THRESHOLD_SECONDS,
+            )
+            if status_ in ("missing", "expired"):
+                continue  # serial loop will emit the refresh SSE event
+        chunks: list[str] = []
+        task = asyncio.create_task(
+            _gated_tool_execute(
+                user_oid=user.oid or "anonymous",
+                tool=tool,
+                func_args=func_args,
+                user=user,
+                call_id=call_id,
+                chunk_sink=chunks,
+            )
+        )
+        prefetched[call_id] = (task, chunks)
+    return prefetched
+
+
+async def _gated_tool_execute(
+    *,
+    user_oid: str,
+    tool: Tool,
+    func_args: dict,
+    user: User,
+    call_id: str,
+    chunk_sink: list[str],
+) -> str:
+    """Run `_execute_tool_streaming` on the dedicated tool executor while
+    holding the per-user concurrency semaphore.
+
+    This is the single chokepoint A2 introduced: every tool dispatch (prefetch
+    or serial) routes through here so:
+      - Tool subprocesses share a bounded pool that doesn't compete with SQLite
+        / KB / OpenAI threads on Python's default executor.
+      - A single user can't fill the pool with their own parallel calls — the
+        semaphore caps them at `_DEFAULT_USER_MAX_CONCURRENT` slots.
+    """
+    sem = get_user_semaphore(user_oid)
+    async with sem:
+        return await run_in_tool_executor(
+            _execute_tool_streaming, tool, func_args, user, call_id, chunk_sink,
+        )
 
 
 def _tool_needs_approval(tool: Tool, args: dict) -> bool:
@@ -677,7 +1000,147 @@ def _build_failure_summary_for_learning(
     return "\n".join(lines)
 
 
-_tool_call_history: dict[str, list[float]] = {}
+# B4 — Per-user tool call history.
+#
+# Previously a single global `dict[tool_name, list[timestamp]]` shared by every
+# user — a noisy neighbour could trip the rate limit for everyone else, and
+# concurrent calls could race on the same list without a lock. Now keyed by
+# (user_oid, tool_name) and guarded by a single coarse lock. Stale entries
+# (older than the largest configured window) are pruned on every access so the
+# dict can't grow unbounded for users who fire one call and never come back.
+def _schedule_learning_write(
+    *,
+    tool_name: str,
+    final_successful_args: dict,
+    prior_failures: list[tuple[dict, str]],
+    originating_conversation_id: int,
+) -> None:
+    """LMI #1 — Schedule the learning derivation + judge + write on a
+    background task so the orchestrator's SSE stream is never blocked by an
+    LLM call (~1-3s for the rephraser + judge round trips).
+
+    Runs in its own DB session because the orchestrator's session is owned by
+    the request handler and may already have been closed by the time the
+    background task fires. Failures are logged and silently swallowed — a
+    missed learning is far less bad than failing the user's chat turn.
+    """
+    async def _do_write() -> None:
+        try:
+            from app.agent.learnings import (
+                derive_learning_from_success,
+                record_validated_learning,
+            )
+            from app.db.engine import get_session
+
+            derived = derive_learning_from_success(
+                tool_name=tool_name,
+                final_successful_args=final_successful_args,
+                prior_failures=prior_failures,
+            )
+
+            def _persist() -> None:
+                with get_session() as bg_session:
+                    record_validated_learning(
+                        session=bg_session,
+                        tool_name=derived["tool_name"],
+                        category=derived["category"],
+                        summary=derived["summary"],
+                        details=derived["details"],
+                        prior_failures_summary=derived["prior_failures_summary"],
+                        originating_conversation_id=originating_conversation_id,
+                    )
+
+            await asyncio.to_thread(_persist)
+            logger.info(
+                "Background-recorded learning for %s after %d failures",
+                tool_name, len(prior_failures),
+            )
+        except Exception:
+            logger.exception(
+                "Background learning write failed for %s", tool_name,
+            )
+
+    try:
+        asyncio.create_task(_do_write())
+    except RuntimeError:
+        # No running event loop (e.g. unit tests calling the orchestrator
+        # sync helpers directly). Fall back to a synchronous best-effort
+        # write so the behaviour matches the pre-LMI#1 path in that context.
+        try:
+            from app.agent.learnings import (
+                derive_learning_from_success,
+                record_validated_learning,
+            )
+            from app.db.engine import get_session
+
+            derived = derive_learning_from_success(
+                tool_name=tool_name,
+                final_successful_args=final_successful_args,
+                prior_failures=prior_failures,
+            )
+            with get_session() as bg_session:
+                record_validated_learning(
+                    session=bg_session,
+                    tool_name=derived["tool_name"],
+                    category=derived["category"],
+                    summary=derived["summary"],
+                    details=derived["details"],
+                    prior_failures_summary=derived["prior_failures_summary"],
+                    originating_conversation_id=originating_conversation_id,
+                )
+        except Exception:
+            logger.exception(
+                "Synchronous fallback learning write failed for %s", tool_name,
+            )
+
+
+_tool_call_history: dict[str, dict[str, list[float]]] = {}
+_tool_call_history_lock = threading.Lock()
+# Global cap on how long any timestamp is retained — defensive pruning beyond
+# the per-tool window so the dict can't leak for users who used a tool once
+# and never came back. Set generously (1 hour) so we never prune entries that
+# might still be inside a tool's own rate_limit_window.
+_HISTORY_RETENTION_SECONDS = 3600
+
+
+def _check_user_rate_limit(
+    user_oid: str, tool_name: str, limit: int, window: int, now: float
+) -> tuple[bool, list[float]]:
+    """Per-user rate-limit check. Atomically prunes stale entries, decides
+    allow/deny, and (when allowed) records the current call timestamp.
+
+    Returns (allowed, current_history_after_decision). Caller only consults
+    `allowed`; the second tuple element is exposed for tests.
+    """
+    with _tool_call_history_lock:
+        user_bucket = _tool_call_history.setdefault(user_oid, {})
+        history = user_bucket.get(tool_name, [])
+        # Prune anything older than the tool's window — the rate check itself
+        # only cares about this window, and the secondary retention cap is a
+        # belt-and-braces guard against leaks elsewhere.
+        cutoff = now - max(window, _HISTORY_RETENTION_SECONDS)
+        window_cutoff = now - window
+        pruned = [ts for ts in history if ts > cutoff]
+        in_window = [ts for ts in pruned if ts > window_cutoff]
+
+        if len(in_window) >= limit:
+            user_bucket[tool_name] = pruned
+            return False, pruned
+
+        pruned.append(now)
+        user_bucket[tool_name] = pruned
+        # Opportunistically drop empty tool buckets and empty user buckets
+        # touched but not used (defensive — won't trigger on this path).
+        if not user_bucket:
+            _tool_call_history.pop(user_oid, None)
+        return True, pruned
+
+
+def _reset_tool_call_history() -> None:
+    """Test hook — wipe per-user history between cases."""
+    with _tool_call_history_lock:
+        _tool_call_history.clear()
+
 
 def _execute_tool_streaming(
     tool: Tool, func_args: dict, user, call_id: str, chunk_sink: list[str]
@@ -689,23 +1152,30 @@ def _execute_tool_streaming(
     Returns the full combined tool output.
     """
     start_time = time.time()
-    
-    # Rate Limiting Check
+
+    # Rate Limiting Check — per (user, tool) instead of global so one user can
+    # not exhaust another's quota.
     if getattr(tool, "rate_limit_calls", None) is not None:
-        history = _tool_call_history.setdefault(tool.name, [])
         window = getattr(tool, "rate_limit_window", 60)
-        
-        # Prune timestamps older than the window
-        history = [ts for ts in history if start_time - ts < window]
-        _tool_call_history[tool.name] = history
-        
-        if len(history) >= tool.rate_limit_calls:
-            logger.warning("Rate limit tripped for tool %s", tool.name)
-            err = f"Error: Rate limit exceeded for `{tool.name}`. Maximum {tool.rate_limit_calls} calls per {window} seconds. Please wait or use a different strategy."
+        user_oid = getattr(user, "oid", None) or "anonymous"
+        allowed, _hist = _check_user_rate_limit(
+            user_oid=user_oid,
+            tool_name=tool.name,
+            limit=tool.rate_limit_calls,
+            window=window,
+            now=start_time,
+        )
+        if not allowed:
+            logger.warning(
+                "Rate limit tripped for tool %s user=%s", tool.name, user_oid,
+            )
+            err = (
+                f"Error: Rate limit exceeded for `{tool.name}`. Maximum "
+                f"{tool.rate_limit_calls} calls per {window} seconds. Please "
+                "wait or use a different strategy."
+            )
             chunk_sink.append(err)
             return err
-            
-        history.append(start_time)
         
     gen = tool.execute_streaming(func_args, user)
     full_result = ""
@@ -764,7 +1234,7 @@ async def handle_chat(
     # system prompt (see generate_file's .drawio guard).
     set_skill_name(skill.name)
     client = _get_openai_client()
-    messages = load_compacted_history(
+    messages, _deferred_compaction = load_compacted_history(
         session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
     )
     original_task = get_original_task(session, conversation.id)
@@ -799,8 +1269,21 @@ async def handle_chat(
     # narrating without acting.
     narration_nudges_used: int = 0
 
+    # A4 — Mark this conversation as held by this worker. Refreshed at the
+    # top of each iteration AND opportunistically during long approval waits.
+    _last_heartbeat_ts: float = 0.0
+    _write_lease_heartbeat(session, conversation.id)
+    _last_heartbeat_ts = time.time()
+
     while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
+
+        # Refresh the lease heartbeat. Throttled to the configured interval
+        # so we don't slam SQLite with one write per loop iteration on
+        # fast-iterating turns.
+        if time.time() - _last_heartbeat_ts >= LEASE_HEARTBEAT_INTERVAL_SECONDS:
+            _write_lease_heartbeat(session, conversation.id)
+            _last_heartbeat_ts = time.time()
 
         try:
             # 3. Call Azure OpenAI
@@ -819,21 +1302,31 @@ async def handle_chat(
             # Run the synchronous OpenAI streaming call in a thread so we
             # don't block the event loop (which would stall all other HTTP
             # requests, including health-checks and approval POSTs).
+            # B10 — Use asyncio.to_thread instead of run_in_executor so the
+            # current contextvars.Context (ARM token, active skill) propagates
+            # into the worker thread. run_in_executor does NOT copy the
+            # context by default, which silently broke any code path that
+            # reads ContextVars from inside the streaming thread.
             chunk_queue: asyncio.Queue = asyncio.Queue()
             _SENTINEL = object()
 
             def _consume_openai_stream():
                 try:
+                    cb_check()
                     s = client.chat.completions.create(**create_kwargs)
                     for c in s:
                         chunk_queue.put_nowait(c)
+                    cb_success()
+                except CircuitOpenError as exc:
+                    chunk_queue.put_nowait(exc)
                 except Exception as exc:
+                    cb_failure()
                     chunk_queue.put_nowait(exc)
                 finally:
                     chunk_queue.put_nowait(_SENTINEL)
 
-            stream_thread = asyncio.get_event_loop().run_in_executor(
-                None, _consume_openai_stream
+            stream_thread = asyncio.create_task(
+                asyncio.to_thread(_consume_openai_stream)
             )
 
             # Consume stream
@@ -883,6 +1376,9 @@ async def handle_chat(
                                     tool_calls_accumulator[idx]["function"]["arguments"] += tc.function.arguments
             except Exception as stream_err:
                 err_str = str(stream_err)
+                if isinstance(stream_err, CircuitOpenError):
+                    yield sse_error(str(stream_err))
+                    return
                 if "content_filter" in err_str or "content management policy" in err_str:
                     yield sse_error(
                         "Your message was flagged by the content filter. "
@@ -972,6 +1468,18 @@ async def handle_chat(
                     )
                     continue
                 yield sse_done(conversation.id, usage=usage_payload)
+                # Schedule deferred compaction work (LLM summarisation of cache
+                # misses encountered when loading history this turn).  These run
+                # after the response is delivered so they don't block the user.
+                for _work_fn in _deferred_compaction:
+                    asyncio.ensure_future(asyncio.to_thread(_work_fn))
+                _deferred_compaction.clear()
+                # A4 — Clear the lease so the next polling client immediately
+                # sees that no worker is holding the conversation.
+                _clear_lease(session, conversation.id)
+                # 4C — Drop any leftover ARM token override; the next chat
+                # request will attach a fresh one in the X-ARM-Token header.
+                clear_arm_token_override(conversation.id)
                 return
 
             # 4. Execute tool calls
@@ -980,6 +1488,21 @@ async def handle_chat(
             # current assistant turn has been answered. Inserting a user message
             # mid-loop would orphan later tool responses and the API would 400.
             post_iteration_messages: list[dict] = []
+
+            # A5 — Pre-dispatch parallelisable tool calls so multiple safe
+            # tools issued in the same assistant turn (e.g. several Resource
+            # Graph queries) run concurrently. The serial loop below still
+            # iterates calls in arrival order — it just awaits the prefetched
+            # task instead of starting a fresh one.
+            #
+            # A call is parallelisable when ALL of:
+            #   - args parse as JSON (else we report the parse error inline)
+            #   - tool exists in the registry
+            #   - tool does NOT need approval (approvals are inherently serial
+            #     because they require user interaction)
+            #   - tool is NOT `ask_user` (waits on user)
+            #   - the ARM-token pre-flight wouldn't reject it
+            prefetched_calls = _prefetch_safe_calls(tool_calls, tools, user)
             for call in tool_calls:
                 call_id = call["id"]
                 func_name = call["function"]["name"]
@@ -1013,12 +1536,51 @@ async def handle_chat(
 
                 # Find tool
                 tool = next((t for t in tools if t.name == func_name), None)
+                arm_short_circuit_status: str | None = None
+                if (
+                    tool is not None
+                    and not json_parse_error
+                    and _tool_requires_arm_token(tool)
+                ):
+                    # B3 — Pre-flight the ARM token. If we don't have one, or
+                    # it's expired / about to expire, short-circuit before we
+                    # ask for approval / burn a subprocess slot. The frontend
+                    # listens for `token_refresh_required` and drives the
+                    # MSAL silent refresh, after which the user re-sends.
+                    #
+                    # _current_arm_token() prefers a per-conversation override
+                    # (Track 4C) so a refresh posted while the turn was idle
+                    # is honoured here without restarting the turn.
+                    effective_token = _current_arm_token(user, conversation.id)
+                    status_ = arm_token_status(
+                        effective_token,
+                        refresh_threshold_seconds=_ARM_REFRESH_THRESHOLD_SECONDS,
+                    )
+                    if status_ in ("missing", "expired", "near_expiry"):
+                        arm_short_circuit_status = status_
+                        yield sse_token_refresh_required(
+                            conversation_id=conversation.id,
+                            tool_name=func_name,
+                            status=status_,
+                        )
+                        logger.warning(
+                            "ARM token %s — short-circuiting %s for conv=%s",
+                            status_, func_name, conversation.id,
+                        )
+
                 if json_parse_error:
                     # Skip tool execution — feed the parse error back so the model
                     # understands what went wrong on its own previous turn.
                     tool_result = f"Error: {json_parse_error}"
                 elif not tool:
                     tool_result = f"Error: Unknown tool '{func_name}'"
+                elif arm_short_circuit_status is not None and arm_short_circuit_status != "near_expiry":
+                    # Only "missing" and "expired" are hard short-circuits.
+                    # "near_expiry" still allows the call (better than leaving
+                    # the user staring at a refresh prompt for a token that
+                    # still has 50s left). The notification has been emitted
+                    # so the frontend can refresh while the call is in flight.
+                    tool_result = _arm_token_error_payload(func_name, arm_short_circuit_status)
                 elif func_name == "ask_user":
                     # Special case: ask_user pauses the agent until the user
                     # picks options in the UI. The tool's execute() is a
@@ -1076,9 +1638,13 @@ async def handle_chat(
 
                     if status == "approved":
                         yield sse_tool_executing(call_id, func_name)
-                        tool_result = await asyncio.to_thread(
-                            _execute_tool_streaming,
-                            tool, func_args, user, call_id, _stream_chunks,
+                        tool_result = await _gated_tool_execute(
+                            user_oid=user.oid or "anonymous",
+                            tool=tool,
+                            func_args=func_args,
+                            user=user,
+                            call_id=call_id,
+                            chunk_sink=_stream_chunks,
                         )
                     elif status == "denied":
                         tool_result = "User denied the tool call."
@@ -1086,10 +1652,28 @@ async def handle_chat(
                         tool_result = "Approval timed out."
                 else:
                     yield sse_tool_executing(call_id, func_name)
-                    tool_result = await asyncio.to_thread(
-                        _execute_tool_streaming,
-                        tool, func_args, user, call_id, _stream_chunks,
-                    )
+                    prefetched = prefetched_calls.pop(call_id, None)
+                    if prefetched is not None:
+                        task, prefetched_chunks = prefetched
+                        try:
+                            tool_result = await task
+                        except Exception as exc:
+                            logger.exception(
+                                "Prefetched tool task failed for %s", func_name,
+                            )
+                            tool_result = f"Error: {exc}"
+                        # Replace local chunk sink with the prefetched one so
+                        # the existing "yield chunks" loop below stays unchanged.
+                        _stream_chunks = prefetched_chunks
+                    else:
+                        tool_result = await _gated_tool_execute(
+                            user_oid=user.oid or "anonymous",
+                            tool=tool,
+                            func_args=func_args,
+                            user=user,
+                            call_id=call_id,
+                            chunk_sink=_stream_chunks,
+                        )
 
                 # Yield any streaming chunks as SSE events
                 for chunk in _stream_chunks:
@@ -1124,7 +1708,12 @@ async def handle_chat(
                     tool_name=func_name,
                 )
                 # In-memory copy is trimmed; DB and UI still get the full envelope.
-                trimmed_for_prompt = _truncate_tool_result(func_name, enveloped_result)
+                # 4D — _truncate_tool_result may issue an LLM summarisation call
+                # for outputs > 2KB, so hop off the event loop. The DB write
+                # above and the SSE event below are unaffected by the trim.
+                trimmed_for_prompt = await asyncio.to_thread(
+                    _truncate_tool_result, func_name, enveloped_result,
+                )
                 messages.append({"role": "tool", "content": trimmed_for_prompt, "tool_call_id": call_id})
                 
                 # The UI gets the raw text for streaming/display, but can also parse the enveloped result if needed
@@ -1251,39 +1840,17 @@ async def handle_chat(
                                 "Pruned %d retry-strategy messages for %s after success",
                                 stripped, func_name,
                             )
-                        # ORCHESTRATOR-OWNED LEARNING WRITE.
-                        # The agent no longer has an `update_learnings` tool. We
-                        # derive the learning content from tracked failure/success
-                        # state, then push it through the judge + regex + name
-                        # guards in app/agent/learnings.py.
-                        try:
-                            from app.agent.learnings import (
-                                derive_learning_from_success,
-                                record_validated_learning,
-                            )
-                            derived = derive_learning_from_success(
-                                tool_name=func_name,
-                                final_successful_args=func_args,
-                                prior_failures=prior_failures,
-                            )
-                            record_validated_learning(
-                                session=session,
-                                tool_name=derived["tool_name"],
-                                category=derived["category"],
-                                summary=derived["summary"],
-                                details=derived["details"],
-                                prior_failures_summary=derived["prior_failures_summary"],
-                                originating_conversation_id=conversation.id,
-                            )
-                            logger.info(
-                                "Orchestrator recorded learning for %s after %d failures",
-                                func_name, len(prior_failures),
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Orchestrator-owned learning record failed for %s",
-                                func_name,
-                            )
+                        # LMI #1 — Schedule the learning write (judge + rephrase
+                        # + gates + DB) on a background task instead of blocking
+                        # the SSE stream. The orchestrator returns the chat
+                        # response immediately; the judge grades + persists
+                        # out-of-band. A failure here can't stall the user.
+                        _schedule_learning_write(
+                            tool_name=func_name,
+                            final_successful_args=func_args,
+                            prior_failures=list(prior_failures),
+                            originating_conversation_id=conversation.id,
+                        )
                     # Reset tracker
                     failure_tracker.pop(func_name, None)
                     failure_history.pop(func_name, None)
@@ -1308,6 +1875,14 @@ async def handle_chat(
             # safe to splice in any deferred user-role messages.
             if post_iteration_messages:
                 messages.extend(post_iteration_messages)
+
+            # A5 — Drop any prefetched tasks the serial loop never consumed.
+            # Should be empty in steady state (every tool_call took one branch);
+            # this guards against a future code path that classifies differently.
+            for _leftover_id, (leftover_task, _) in prefetched_calls.items():
+                if not leftover_task.done():
+                    leftover_task.cancel()
+            prefetched_calls.clear()
 
             # 5. Loop back
 

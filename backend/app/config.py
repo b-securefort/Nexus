@@ -136,6 +136,15 @@ class Settings(BaseSettings):
     # Rate limiting
     CHAT_RATE_LIMIT_PER_MINUTE: int = 30
 
+    # Azure OpenAI circuit breaker + timeouts
+    # AOAI_CB_FAILURE_THRESHOLD — consecutive failures within AOAI_CB_WINDOW_SECONDS before opening
+    # AOAI_CB_OPEN_SECONDS      — how long the circuit stays open before a half-open probe
+    # AOAI_TIMEOUT_SECONDS      — per-request HTTP timeout for all completions calls
+    AOAI_CB_FAILURE_THRESHOLD: int = 5
+    AOAI_CB_WINDOW_SECONDS: int = 60
+    AOAI_CB_OPEN_SECONDS: int = 30
+    AOAI_TIMEOUT_SECONDS: int = 60
+
     @field_validator("DEV_AUTH_BYPASS", mode="after")
     @classmethod
     def validate_dev_auth_bypass(cls, v: bool, info) -> bool:

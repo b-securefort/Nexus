@@ -652,6 +652,46 @@ Diagram tools producing a PNG (`generate_drawio_from_python`, `render_drawio`, `
 When the model returns no `tool_calls` but the closing of the assistant text matches a "deferred action" pattern (`(I'll|I will|Let me|...)` + action verb, last 400 chars only), the orchestrator appends a synthetic system reminder and re-enters the loop once before yielding `done` — capped at one nudge per turn (`narration_nudges_used`) so a stubborn narrator can't infinite-loop us. Behind feature flag `NARRATION_NUDGE_ENABLED` (default `true`). The architect's "Tool calls are not narration" hard rule didn't hold in practice; this is the structural backstop.
 **Trade-off**: false-positive risk on legitimate informational replies — the regex is intentionally narrow (closed verb list, tail-only match) to limit it. Interim until the DSPy refactor ([dspy-coverage-tracker.md](../IdeasTodo/dspy-coverage-tracker.md) row 4) makes the no-tool-call-with-narration state structurally unrepresentable.
 
+### 2026-05-21 — Subprocess hardening: env allowlist + shell=False + block %, &
+
+**Replaces the 2026-05-15 "Shell injection blocks only backtick and NUL" decision.** `_run_az()` now builds an explicit ~14-key env allowlist (PATH, HOME, AZURE_CONFIG_DIR, Windows profile vars, proxy vars, plus the ARM token overlay) instead of inheriting `os.environ`, so a malicious `az` argument expanding `%AZURE_OPENAI_API_KEY%` (or similar) has nothing to leak. `subprocess.run` is now invoked with `shell=False` unconditionally; `shutil.which("az")` resolves to `az.cmd` on Windows so cmd.exe is never in the path. `check_shell_injection` additionally rejects `%` (Windows env expansion) and `&` (command chaining); `|`, `;`, `<`, `>`, `$` are still allowed because KQL queries and JSON bodies legitimately use them.
+**Trade-off**: any future tool that depends on an env var outside the allowlist must add it explicitly — accepted because the previous "inherit everything" stance made credential exfiltration a one-arg attack. The block-list narrowing on `%` and `&` is defence-in-depth on top of `shell=False`, not the primary defence.
+
+### 2026-05-21 — ARM token preflight + frontend-driven refresh via new SSE event
+
+Orchestrator now calls `arm_token_status()` (decodes only the JWT `exp` claim, unverified) before every `AzureToolBase` dispatch; `missing` / `expired` short-circuits with a structured error telling the model to wait, `near_expiry` still executes but emits a new `token_refresh_required` SSE event. The frontend handles the event by calling `msalInstance.acquireTokenSilent()` and POSTs the new token to `/api/chat/refresh-token`, which JWT-validates audience/tenant/expiry and stores it via `set_arm_token_override()` for the in-flight turn. This extends the typed-SSE-events approach from §5 2026-05-15 with one new event type — chosen over piggy-backing on `done` (§5 2026-05-18) because the refresh needs to happen *mid-turn*, before `done` ever fires.
+**Trade-off**: one new event type and one new endpoint to maintain; vs the alternative of always failing the turn and letting the user retry — rejected because long architect turns can outlive a 1-hour ARM token and silent-renewal preserves the conversation.
+
+### 2026-05-21 — Lease heartbeat on conversations row; recovery is "restart turn" not state replay
+
+Added `conversations.lease_heartbeat_at` + `lease_owner` columns (lightweight migration in `_apply_lightweight_migrations`) plus `GET /api/conversations/{id}/lease` returning `idle | active | stale` and the last user message id. The orchestrator writes a heartbeat at most every 30s (`LEASE_HEARTBEAT_INTERVAL_SECONDS`) and clears it at end-of-turn. The frontend uses this to offer a "Restart turn" affordance when a worker crashes mid-turn — synthetic retry / drawio state is **deliberately not** reconstructed, because reasoning context can't be restored faithfully from DB rows and a partial replay would mislead the agent.
+**Trade-off**: schema migration is hard to reverse, and a crashed turn loses in-flight reasoning; accepted because "restart from the last user message" is a clear UX contract and reconstructing partial state has been a source of bugs in agent frameworks we surveyed.
+
+### 2026-05-21 — Dedicated tool ThreadPoolExecutor + per-user asyncio.Semaphore
+
+Tool dispatch now goes through `app/agent/concurrency.py`: a lazy-singleton `ThreadPoolExecutor(max_workers=64, thread_name_prefix="tool")` torn down via FastAPI lifespan, a per-user `asyncio.Semaphore(4)` chokepoint (`_gated_tool_execute`), and a `run_in_tool_executor()` helper that `copy_context().run(...)` propagates `ContextVar`s (ARM token, active skill) into the worker. KB indexing / SQLite / GitPython / MSAL stay on Python's default executor — only orchestrator tool subprocesses move. The full `asyncio.create_subprocess_exec` port of `_run_az` was deliberately deferred: the bounded pool + per-user cap addresses the exhaustion symptom this change was scoped against.
+**Trade-off**: two thread pools to reason about instead of one, plus a hidden invariant that `ContextVar`s only survive the hop when callers use `run_in_tool_executor` (not `asyncio.to_thread`); accepted because a single chatty user could previously starve everyone else's tool calls.
+
+### 2026-05-21 — Rephrase learnings before the 3-gate defense, not after
+
+**Refines the 2026-05-20 "Three-gate write defense" decision.** `derive_learning_from_success()` still produces raw `details` + a rule-derived rough `summary`, but a new `rephrase_learning()` call now runs the summary through the chat deployment with a strict "no opinions, no framing" system prompt to produce the canonical sentence stored in `agent_learnings.summary`. The three gates (regex / name guard / LLM judge) then run on the **rephrased** text, so a malicious rephrase can't slip suppression intent past the detectors. On rephrase failure / empty output / 3× length blowup, the rule-derived summary is used unchanged.
+**Trade-off**: one extra Azure OpenAI completion per learning write (in addition to the judge call); accepted because rephrasing-then-gating is structurally safer than gating-then-rephrasing, and the write path is already async via `_schedule_learning_write` so end-of-turn latency is unaffected.
+
+### 2026-05-21 — Hybrid retrieval for agent_learnings: FTS5 + vec0 + RRF
+
+Added `agent_learnings_fts` (FTS5 external-content over `agent_learnings`) with INSERT/UPDATE/DELETE triggers and a `rebuild` backfill in `_ensure_agent_learnings_vec()`. `retrieve_relevant_learnings()` now runs BM25 and sqlite-vec in parallel and fuses via Reciprocal Rank Fusion (`_rrf_fuse`); either side may be absent (FTS5 or vec0 module missing) and the other carries the result. Status / tool-name / validation boosts are applied on top of the fused score. Mirrors the architecture already validated for KB hybrid retrieval (§5 2026-05-14 / 2026-05-15) so there are no new dependencies — same `sqlite-vec` extension, same Azure OpenAI embedding deployment.
+**Trade-off**: a third virtual table on the same logical row (`agent_learnings`, `agent_learnings_vec`, `agent_learnings_fts`) — more schema surface for a relatively small table; accepted because vector-only retrieval was missing keyword matches on tool names and exact phrases architects search for in the admin UI.
+
+### 2026-05-21 — Azure OpenAI circuit breaker around every completions call
+
+Module-level `app/agent/circuit_breaker.py` with closed / open / half_open states, configured via three `AOAI_CB_*` settings (failure threshold 5, window 60s, open 30s). Every chat-completions call (main orchestrator loop, compaction summarizer, learning judge, learning rephrase) now wraps in `cb_check()` → call → `cb_success()` / `cb_failure()`, and `/healthz` includes `aoai_circuit_breaker: <state>` so deployers can detect a stuck-open breaker without watching logs. When open, calls short-circuit with a clear error to the agent rather than piling up timeouts.
+**Trade-off**: chat halts entirely during the open window for the affected deployment; vs the previous behaviour of cascading timeouts that exhausted retry budgets across every concurrent conversation. The breaker is process-local, so multi-replica deployments will need a shared store before scaling out — noted alongside the §6 concurrency assumption.
+
+### 2026-05-21 — LLM summarisation for large tool outputs; head+tail is the fallback
+
+Tool results over 2 KB (configurable threshold) are now routed through `_summarize_tool_result_with_llm()` before being fed back to the agent, instead of the previous head+tail split that could leave the model staring at half a JSON object or duplicate top-level keys. Error envelopes (`status == "error"`) skip the summariser path — the agent gets exact error text so retry strategy decisions stay faithful. On summariser failure / timeout / empty output, the old head+tail truncation is the fallback so a degraded LLM never breaks the chat.
+**Trade-off**: one extra Azure OpenAI call per oversized tool result and a small risk of summary loss-of-fidelity on novel formats; accepted because the head+tail split was a documented source of model confusion on JSON / drawio outputs and the new path preserves the *meaning* across both ends.
+
 ---
 
 ## 6. Operations

@@ -194,4 +194,60 @@ describe('API: chat', () => {
       });
     });
   });
+
+  describe('refreshArmToken', () => {
+    it('sends POST with conversation_id and arm_token', async () => {
+      mockApiFetch.mockResolvedValue({ ok: true });
+
+      const { refreshArmToken } = await import('../api/chat');
+      await refreshArmToken(42, 'fresh-arm-token-value');
+
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/chat/refresh-token', {
+        method: 'POST',
+        body: JSON.stringify({
+          conversation_id: 42,
+          arm_token: 'fresh-arm-token-value',
+        }),
+      });
+    });
+
+    it('throws on HTTP error response', async () => {
+      mockApiFetch.mockResolvedValue({
+        ok: false,
+        status: 422,
+        json: () => Promise.resolve({ detail: 'Token audience is not Azure Resource Manager' }),
+      });
+
+      const { refreshArmToken } = await import('../api/chat');
+      await expect(refreshArmToken(1, 'bad-token')).rejects.toThrow(
+        'Token audience is not Azure Resource Manager'
+      );
+    });
+  });
+
+  describe('sendChatMessage - token_refresh_required SSE', () => {
+    it('parses token_refresh_required events', async () => {
+      const sseData =
+        'event: token_refresh_required\ndata: {"conversation_id":5,"tool_name":"az_cli","status":"expired"}\n\n' +
+        'event: done\ndata: {"conversation_id":5}\n\n';
+
+      mockApiFetch.mockResolvedValue({
+        ok: true,
+        body: makeSSEStream(sseData),
+      });
+
+      const events: Array<[string, unknown]> = [];
+      const { sendChatMessage } = await import('../api/chat');
+      await sendChatMessage(
+        { message: 'list vms', skill_id: 'shared:architect' },
+        (event, data) => events.push([event, data])
+      );
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual([
+        'token_refresh_required',
+        { conversation_id: 5, tool_name: 'az_cli', status: 'expired' },
+      ]);
+    });
+  });
 });

@@ -162,3 +162,26 @@ export async function fetchGreeting(): Promise<string> {
   const data = await response.json();
   return data.greeting || "";
 }
+
+/**
+ * POST a refreshed ARM token to the backend so an in-flight orchestrator
+ * turn can resume Azure tool calls without the user retyping the message.
+ * Called automatically when the frontend receives a `token_refresh_required`
+ * SSE event (Track 4C).
+ */
+export async function refreshArmToken(
+  conversationId: number,
+  armToken: string
+): Promise<void> {
+  const response = await apiFetch("/api/chat/refresh-token", {
+    method: "POST",
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      arm_token: armToken,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Failed" }));
+    throw new Error(err.detail || "Failed to refresh ARM token");
+  }
+}

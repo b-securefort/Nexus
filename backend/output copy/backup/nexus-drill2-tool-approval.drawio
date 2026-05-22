@@ -1,0 +1,121 @@
+<mxfile host="app.diagrams.net" version="24.7.17" type="device">
+  <diagram id="d1" name="Page-1">
+    <mxGraphModel dx="2373" dy="646" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="2373" pageHeight="646">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Nexus Drill 2 - Tool execution &amp; approval pipeline" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=16;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="2313" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_" value="Tool dispatch pipeline (app/agent/concurrency.py)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="257" y="67" width="1363" height="190" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Result_handling" value="Result handling" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="171" width="460" height="375" as="geometry"/>
+        </mxCell>
+        <mxCell id="355664e3c3e94341a44bfc136e68fb56" value="Orchestrator&lt;br&gt;(LLM returned tool_call)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/management_governance/Policy.svg;" vertex="1" parent="1">
+          <mxGeometry x="82" y="258" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="1bb22fa15018494abbbab09db03b4290" value="Skill allowlist&lt;br&gt;+ skill_name CV" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/identity/Conditional_Access.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="54" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="7fc13fe999d54430a21b5481eb2fadc6" value="Per-user Semaphore(4)&lt;br&gt;+ ThreadPool(64)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Resource_Groups.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="281" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="f516ea12aa3b46d6b4d528b9b37577ab" value="ARM token preflight&lt;br&gt;(JWT exp claim)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/identity/Conditional_Access.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="460" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="88583a82e54d48d1aedea916b87ffec6" value="Blocked-prefix check&lt;br&gt;(az account clear,&lt;br&gt;ad app/sp create/delete,&lt;br&gt;role assignment delete)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/management_governance/Policy.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="765" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="0ca436846cc74a1f8cdc0668949cc1f0" value="Approval gate /&lt;br&gt;ask_user pause&lt;br&gt;(pending_approvals,&lt;br&gt;pending_questions)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/identity/Conditional_Access.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="1015" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="d01ff147ae3b4984b50149cc43d32d1f" value="subprocess.run&lt;br&gt;env allowlist (~14 keys)&lt;br&gt;shell=False&lt;br&gt;AZURE_ACCESS_TOKEN injected" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/management_governance/Automation_Accounts.svg;" vertex="1" parent="cluster_Tool_dispatch_pipeline__app_agent_concurrency_py_">
+          <mxGeometry x="1252" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="dd552a291bc84284b17f5abac157dd7b" value="Tool result&lt;br&gt;(status/output)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Resource_Groups.svg;" vertex="1" parent="cluster_Result_handling">
+          <mxGeometry x="54" y="126" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="56d46ae3b66e4cd0bbc93ff77cdfa4c7" value="LLM summariser&lt;br&gt;(if &gt;2 KB, non-error)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg;" vertex="1" parent="cluster_Result_handling">
+          <mxGeometry x="350" y="265" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="2c01fefd134e4a62a0cda49832823157" value="Success-after-failure&lt;br&gt;detector&lt;br&gt;(triggers learning write)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Cognitive_Search.svg;" vertex="1" parent="cluster_Result_handling">
+          <mxGeometry x="350" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="a9e3d43d56de4c60b6dd093dffb089ad" value="Azure ARM / CLI" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Subscriptions.svg;" vertex="1" parent="1">
+          <mxGeometry x="1775" y="82" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="12cbcfeab57a4096ac1baa3b6085d941" value="Azure OpenAI&lt;br&gt;(summariser deployment)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg;" vertex="1" parent="1">
+          <mxGeometry x="2257" y="436" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="tool_call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="355664e3c3e94341a44bfc136e68fb56" target="1bb22fa15018494abbbab09db03b4290">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_1" value="1" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="201" y="216" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="allowed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="1bb22fa15018494abbbab09db03b4290" target="7fc13fe999d54430a21b5481eb2fadc6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_2" value="2" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="412" y="140" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="7fc13fe999d54430a21b5481eb2fadc6" target="f516ea12aa3b46d6b4d528b9b37577ab">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="ok / refresh" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="f516ea12aa3b46d6b4d528b9b37577ab" target="88583a82e54d48d1aedea916b87ffec6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_3" value="4" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="841" y="140" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="not blocked" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="88583a82e54d48d1aedea916b87ffec6" target="0ca436846cc74a1f8cdc0668949cc1f0">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_4" value="5" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="140" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="approved" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="0ca436846cc74a1f8cdc0668949cc1f0" target="d01ff147ae3b4984b50149cc43d32d1f">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_5" value="6" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1376" y="140" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="az + token CV" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="d01ff147ae3b4984b50149cc43d32d1f" target="a9e3d43d56de4c60b6dd093dffb089ad">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_6" value="7" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1621" y="108" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="stdout/stderr" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="d01ff147ae3b4984b50149cc43d32d1f" target="dd552a291bc84284b17f5abac157dd7b">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_7" value="8" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1640" y="180" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="if &gt;2 KB" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="dd552a291bc84284b17f5abac157dd7b" target="56d46ae3b66e4cd0bbc93ff77cdfa4c7">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_8" value="9" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1914" y="333" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="56d46ae3b66e4cd0bbc93ff77cdfa4c7" target="12cbcfeab57a4096ac1baa3b6085d941">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="back to orchestrator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="dd552a291bc84284b17f5abac157dd7b" target="355664e3c3e94341a44bfc136e68fb56">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_9" value="11" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="272" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="after retry success" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="dd552a291bc84284b17f5abac157dd7b" target="2c01fefd134e4a62a0cda49832823157">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_10" value="12" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1895" y="268" width="26" height="26" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,109 @@
+<mxfile host="app.diagrams.net" version="24.7.17" type="device">
+  <diagram id="d1" name="Page-1">
+    <mxGraphModel dx="779" dy="1460" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="779" pageHeight="1460">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Nexus Drill 3 - KB hybrid retrieval" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=16;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="719" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_app_db__SQLite___sqlite-vec__WAL_mode_" value="app.db (SQLite + sqlite-vec, WAL mode)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="44" y="817" width="407" height="543" as="geometry"/>
+        </mxCell>
+        <mxCell id="cf72b5e73283445b83a4e4cb8e41472b" value="KB Git repo&lt;br&gt;(ADO / GitHub)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/github/github-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="179" y="82" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="674b03a433b64a15b2b7d39e75689634" value="git sync (15m)&lt;br&gt;+ normalize markdown" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="179" y="285" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="2fdfb1892d944c8dbd278c38a286a561" value="Chunker&lt;br&gt;(split at H2/H3,&lt;br&gt;KB_CHUNK_MAX_CHARS)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="179" y="489" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="59f85b57083840b980caafc1b2657d0b" value="Azure OpenAI embed&lt;br&gt;text-embedding-3-small&lt;br&gt;(1536 dims, document side)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg;" vertex="1" parent="1">
+          <mxGeometry x="179" y="692" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="2f4edb4bd63b48aaaa29c7062d7b3c27" value="kb_chunks&lt;br&gt;(canonical: path,&lt;br&gt;chunk_idx, heading, text,&lt;br&gt;content_hash, source_url,&lt;br&gt;embed_model)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg;" vertex="1" parent="cluster_app_db__SQLite___sqlite-vec__WAL_mode_">
+          <mxGeometry x="135" y="153" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e28f92eb9fca40bc8d40f70d9e7eac20" value="kb_chunks_fts&lt;br&gt;(FTS5 virtual,&lt;br&gt;unicode61 no porter)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg;" vertex="1" parent="cluster_app_db__SQLite___sqlite-vec__WAL_mode_">
+          <mxGeometry x="76" y="432" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="0aac82aed1a9428a99f30fc78f73f63d" value="kb_chunks_vec&lt;br&gt;(vec0 virtual,&lt;br&gt;float[1536])" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg;" vertex="1" parent="cluster_app_db__SQLite___sqlite-vec__WAL_mode_">
+          <mxGeometry x="285" y="432" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ba2d2ce70f5740e7976d61de9351229f" value="search_kb_hybrid&lt;br&gt;(tool call from agent)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="547" y="82" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="15b46a0f99544c279d8c1ec559ee2fdc" value="Azure OpenAI embed&lt;br&gt;(query side, ~50 ms)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg;" vertex="1" parent="1">
+          <mxGeometry x="425" y="285" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="7cf1e18aedc64950aa01e0409e5dd6f1" value="BM25 stage&lt;br&gt;(FTS5 MATCH)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="663" y="285" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="8185b81702084590822d5632b89aff11" value="Vector stage&lt;br&gt;(vec0 MATCH ORDER BY distance)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="400" y="489" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="0bb0201b996543749fc47f4b18cd1bec" value="Reciprocal Rank Fusion&lt;br&gt;(_rrf_fuse)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="457" y="692" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="f5a5fcd34f6040db92608eda9d0cd1f4" value="Top-K chunks&lt;br&gt;+ source_url cite" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="457" y="971" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="pull" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="cf72b5e73283445b83a4e4cb8e41472b" target="674b03a433b64a15b2b7d39e75689634">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_1" value="1" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="175" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="changed *.md" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="674b03a433b64a15b2b7d39e75689634" target="2fdfb1892d944c8dbd278c38a286a561">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_2" value="2" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="378" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="chunk text" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="2fdfb1892d944c8dbd278c38a286a561" target="59f85b57083840b980caafc1b2657d0b">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_3" value="3" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="581" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="vector" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="59f85b57083840b980caafc1b2657d0b" target="2f4edb4bd63b48aaaa29c7062d7b3c27">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_4" value="4" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="785" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="2f4edb4bd63b48aaaa29c7062d7b3c27" target="e28f92eb9fca40bc8d40f70d9e7eac20">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_5" value="5" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1139" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="vec0 insert" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="2f4edb4bd63b48aaaa29c7062d7b3c27" target="0aac82aed1a9428a99f30fc78f73f63d">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_6" value="6" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="245" y="1112" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="A query text" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="ba2d2ce70f5740e7976d61de9351229f" target="15b46a0f99544c279d8c1ec559ee2fdc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="B vec" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="15b46a0f99544c279d8c1ec559ee2fdc" target="8185b81702084590822d5632b89aff11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="C tokens" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="ba2d2ce70f5740e7976d61de9351229f" target="7cf1e18aedc64950aa01e0409e5dd6f1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="D rank list" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="7cf1e18aedc64950aa01e0409e5dd6f1" target="0bb0201b996543749fc47f4b18cd1bec">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="E rank list" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="8185b81702084590822d5632b89aff11" target="0bb0201b996543749fc47f4b18cd1bec">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="F fused" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="0bb0201b996543749fc47f4b18cd1bec" target="f5a5fcd34f6040db92608eda9d0cd1f4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

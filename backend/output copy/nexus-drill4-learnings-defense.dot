@@ -1,0 +1,73 @@
+digraph "Nexus Drill 4 - Learnings write defense + retrieval" {
+	graph [fontcolor="#2D3436" fontname="Sans-Serif" fontsize=15 label="Nexus Drill 4 - Learnings write defense + retrieval" nodesep=1.5 pad=2.0 rankdir=TB ranksep=1.2 splines=ortho]
+	node [fixedsize=true fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 height=1.4 imagescale=true labelloc=b shape=box style=rounded width=1.4]
+	edge [color="#7B8894"]
+	"852999ac309643c2bd3693c8139a0e34" [label="Orchestrator
+(success-after-failure
+detector)" azure_icon=policy]
+	subgraph "cluster_Write path (orchestrator-owned, no agent tool)" {
+		graph [bgcolor="#E5F5FD" fontname="Sans-Serif" fontsize=12 label="Write path (orchestrator-owned, no agent tool)" labeljust=l pencolor="#AEB6BE" rankdir=LR shape=box style=rounded]
+		"73d8e3cbdab44ce1bc26a5f74e7d498a" [label="Derive raw learning
+(rule-based from
+failure -> success delta)" azure_icon=resource_group]
+		"0ed24749cfad48f9bfe55ed266faa8a2" [label="Rephrase via LLM
+strict 'no opinions' prompt" azure_icon=openai]
+		"2b796a27a61b442fab7ff2adc9961539" [label="Gate 1: Regex
+_OVERRIDE_PATTERNS
+(ignore validator,
+too strict, skip check)" azure_icon=policy]
+		"2e6219113e2e4d099f38f5455e9f8520" [label="Gate 2: Name guard
+(GUIDs, env-specific
+resource names)" azure_icon=policy]
+		"9d3305b5ecd747b0885500822b08cef1" [label="Gate 3: LLM judge
+fails closed
+(approve=False on error)" azure_icon=openai]
+	}
+	"7cf55acf97474846ada0c217c6972029" [label="Rejected entry
+status=rejected
+(audit only,
+cannot reactivate)" azure_icon=policy]
+	subgraph "cluster_Storage (app.db, sqlite-vec)" {
+		graph [bgcolor="#E5F5FD" fontname="Sans-Serif" fontsize=12 label="Storage (app.db, sqlite-vec)" labeljust=l pencolor="#AEB6BE" rankdir=LR shape=box style=rounded]
+		"3c2647dd94334fce8e6f42b055e60a5d" [label="agent_learnings
+status=provisional/active/
+archived/rejected
+validation_count, failure_count" azure_icon=ai_search]
+		"8f7d43f10df64c409d7d8107c276fc4e" [label="Azure OpenAI embed
+(same deployment as KB)" azure_icon=openai]
+		"31d3eab8d0b1441fbd61f798d7a36900" [label="agent_learnings_vec
+float[1536]" azure_icon=ai_search]
+		"4adc842f0f8f4d1d90a3d3fab6c3d5f0" [label="agent_learnings_fts
+(FTS5)" azure_icon=ai_search]
+	}
+	subgraph "cluster_Retrieval (per turn, into next system prompt)" {
+		graph [bgcolor="#E5F5FD" fontname="Sans-Serif" fontsize=12 label="Retrieval (per turn, into next system prompt)" labeljust=l pencolor="#AEB6BE" rankdir=LR shape=box style=rounded]
+		"673a5d14a34c411ab3e034fc33b0476f" [label="retrieve_relevant_learnings
+BM25 + vec + RRF
++ status/tool boosts" azure_icon=ai_search]
+		d9f7467836764dbda8fe54dacfa707e5 [label="Inject [CANONICAL] / [PROVISIONAL]
+markers into system prompt
+(omitted if 0 matches)" azure_icon=resource_group]
+		"57bb8927b01340ad990346c797a4894a" [label="mark_learning_outcome
+incr validation_count / failure_count
+auto-promote at 3, auto-archive at 3" azure_icon=automation]
+	}
+	"852999ac309643c2bd3693c8139a0e34" -> "73d8e3cbdab44ce1bc26a5f74e7d498a" [label="1 success after failure" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"73d8e3cbdab44ce1bc26a5f74e7d498a" -> "0ed24749cfad48f9bfe55ed266faa8a2" [label=2 dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"0ed24749cfad48f9bfe55ed266faa8a2" -> "2b796a27a61b442fab7ff2adc9961539" [label=3 dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"2b796a27a61b442fab7ff2adc9961539" -> "2e6219113e2e4d099f38f5455e9f8520" [label="4 pass" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"2e6219113e2e4d099f38f5455e9f8520" -> "9d3305b5ecd747b0885500822b08cef1" [label="5 pass" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"9d3305b5ecd747b0885500822b08cef1" -> "3c2647dd94334fce8e6f42b055e60a5d" [label="6 approve" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"2b796a27a61b442fab7ff2adc9961539" -> "7cf55acf97474846ada0c217c6972029" [label=reject dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"2e6219113e2e4d099f38f5455e9f8520" -> "7cf55acf97474846ada0c217c6972029" [label=reject dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"9d3305b5ecd747b0885500822b08cef1" -> "7cf55acf97474846ada0c217c6972029" [label=reject dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"3c2647dd94334fce8e6f42b055e60a5d" -> "8f7d43f10df64c409d7d8107c276fc4e" [label="7 inline embed (limit=1)" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"8f7d43f10df64c409d7d8107c276fc4e" -> "31d3eab8d0b1441fbd61f798d7a36900" [label=8 dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"3c2647dd94334fce8e6f42b055e60a5d" -> "4adc842f0f8f4d1d90a3d3fab6c3d5f0" [label=trigger dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"31d3eab8d0b1441fbd61f798d7a36900" -> "673a5d14a34c411ab3e034fc33b0476f" [label=A dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"4adc842f0f8f4d1d90a3d3fab6c3d5f0" -> "673a5d14a34c411ab3e034fc33b0476f" [label=B dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"673a5d14a34c411ab3e034fc33b0476f" -> d9f7467836764dbda8fe54dacfa707e5 [label="C top-5" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	d9f7467836764dbda8fe54dacfa707e5 -> "852999ac309643c2bd3693c8139a0e34" [label="next turn" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	d9f7467836764dbda8fe54dacfa707e5 -> "57bb8927b01340ad990346c797a4894a" [label="track usage" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"57bb8927b01340ad990346c797a4894a" -> "3c2647dd94334fce8e6f42b055e60a5d" [label="counter update" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+}

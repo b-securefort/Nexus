@@ -1,0 +1,100 @@
+<mxfile host="app.diagrams.net" version="24.7.17" type="device">
+  <diagram id="d1" name="Page-1">
+    <mxGraphModel dx="700" dy="1817" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="700" pageHeight="1817">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Nexus L1 - Backend Internals" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=16;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="640" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Backend__FastAPI__single_process_" value="Backend (FastAPI, single process)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="44" y="431" width="596" height="1137" as="geometry"/>
+        </mxCell>
+        <mxCell id="9a210753f173499fb9d28c17dc59845c" value="User" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Globe.svg;" vertex="1" parent="1">
+          <mxGeometry x="218" y="100" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="3979939fed3f4b39b4d46fc2331b688a" value="Frontend&lt;br&gt;(React + Vite)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/react/react-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="218" y="306" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="29c2b0c5941045beb3c797aa047cb342" value="api/chat&lt;br&gt;(SSE stream)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/fastapi/fastapi-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="174" y="153" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="b6d54a72c4cc413d957ce0b73bcdf7a2" value="Orchestrator&lt;br&gt;(loop, &lt;=15 iters)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="174" y="417" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="47adee27ae9f4dcb8b8e3c1350453abc" value="Compaction&lt;br&gt;(preserve user msgs)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="112" y="620" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="65378ace5d3b4226bb263f9cb6db5b31" value="Learnings retrieval&lt;br&gt;(BM25 + vec + RRF)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="68" y="823" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="15519daf7a6a49f083003ab0969fdcec" value="Circuit breaker&lt;br&gt;(closed/open/half_open)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="101" y="1027" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="85476a66b09b46e9819b719f08943a70" value="Tool dispatch&lt;br&gt;ThreadPool(64) +&lt;br&gt;Semaphore(4)/user" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="321" y="620" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="d53f927a33bb4e98b9d239c5eccb102c" value="Approval gate /&lt;br&gt;ask_user pause" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="277" y="823" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="3ec05423a5624858a660f2b69bfda622" value="Read-only tools&lt;br&gt;search_kb_hybrid, read_kb_file,&lt;br&gt;ms_docs, web_fetch,&lt;br&gt;az_resource_graph,&lt;br&gt;az_cost_query, az_monitor_logs" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="486" y="823" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="6c78ad7a781145a59adef44d9071d1ba" value="Mutating tools&lt;br&gt;az_cli, run_shell,&lt;br&gt;az_rest_api (writes)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="310" y="1027" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="fcdb79144d2a41f7982be532b4e3382d" value="app.db&lt;br&gt;SQLite + sqlite-vec&lt;br&gt;messages, conversations,&lt;br&gt;pending_approvals,&lt;br&gt;kb_chunks*, agent_learnings*" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg;" vertex="1" parent="cluster_Backend__FastAPI__single_process_">
+          <mxGeometry x="451" y="153" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="66a5ad1634d447ad83b23c99ec20e123" value="Azure OpenAI&lt;br&gt;(chat + embed)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg;" vertex="1" parent="1">
+          <mxGeometry x="145" y="1661" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="19fc8533b15d4108809211203132d32b" value="Azure ARM / CLI" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Subscriptions.svg;" vertex="1" parent="1">
+          <mxGeometry x="354" y="1661" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="94ec1dd7b5a442a08bc45898f6d9f382" value="KB Git repo&lt;br&gt;(ADO / GitHub)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/github/github-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="495" y="306" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="9a210753f173499fb9d28c17dc59845c" target="3979939fed3f4b39b4d46fc2331b688a">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="SSE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="3979939fed3f4b39b4d46fc2331b688a" target="29c2b0c5941045beb3c797aa047cb342">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="29c2b0c5941045beb3c797aa047cb342" target="b6d54a72c4cc413d957ce0b73bcdf7a2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="history" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="b6d54a72c4cc413d957ce0b73bcdf7a2" target="47adee27ae9f4dcb8b8e3c1350453abc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="retrieve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="47adee27ae9f4dcb8b8e3c1350453abc" target="65378ace5d3b4226bb263f9cb6db5b31">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="prompt" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="65378ace5d3b4226bb263f9cb6db5b31" target="15519daf7a6a49f083003ab0969fdcec">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="chat / embed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="15519daf7a6a49f083003ab0969fdcec" target="66a5ad1634d447ad83b23c99ec20e123">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="tool_calls" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="b6d54a72c4cc413d957ce0b73bcdf7a2" target="85476a66b09b46e9819b719f08943a70">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="no approval" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="85476a66b09b46e9819b719f08943a70" target="3ec05423a5624858a660f2b69bfda622">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="needs approval" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="85476a66b09b46e9819b719f08943a70" target="d53f927a33bb4e98b9d239c5eccb102c">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="d53f927a33bb4e98b9d239c5eccb102c" target="6c78ad7a781145a59adef44d9071d1ba">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="ARM preflight + token CV" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="6c78ad7a781145a59adef44d9071d1ba" target="19fc8533b15d4108809211203132d32b">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="reindex 15m" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="94ec1dd7b5a442a08bc45898f6d9f382" target="fcdb79144d2a41f7982be532b4e3382d">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

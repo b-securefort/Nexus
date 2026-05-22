@@ -1,0 +1,124 @@
+<mxfile host="app.diagrams.net" version="24.7.17" type="device">
+  <diagram id="d1" name="Page-1">
+    <mxGraphModel dx="895" dy="1784" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="895" pageHeight="1784">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Nexus Drill 5 - Skills &amp; RBAC" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=16;fontColor=#1A1A1A;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="835" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Backend_startup" value="Backend startup" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="438" y="44" width="397" height="409" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Per-request_auth" value="Per-request auth" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="253" y="672" width="164" height="188" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster_Filter_points__3_enforcement_boundaries_" value="Filter points (3 enforcement boundaries)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#BBBBBB;strokeWidth=1;fontStyle=1;fontSize=11;align=left;verticalAlign=top;spacingTop=6;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="44" y="875" width="582" height="188" as="geometry"/>
+        </mxCell>
+        <mxCell id="bd42385157b54cc0ba72d861636c19f1" value="User" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/general/Globe.svg;" vertex="1" parent="1">
+          <mxGeometry x="307" y="122" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="7d9dc619edd8428e9fce4c4019038656" value="Frontend&lt;br&gt;(MSAL acquireToken)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/react/react-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="307" y="343" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="28a3e1b69c7e43d8a215d7977f4b5313" value="Entra ID&lt;br&gt;(JWT + roles claim)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/identity/Azure_Active_Directory.svg;" vertex="1" parent="1">
+          <mxGeometry x="307" y="546" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8dda1e3bec84e02a71a6244221a69ac" value="App Configuration&lt;br&gt;Nexus:RoleAccessMap&lt;br&gt;(JSON, read once)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=img/lib/azure2/integration/App_Configurations.svg;" vertex="1" parent="cluster_Backend_startup">
+          <mxGeometry x="78" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="40d52ff76d2e40c4b05fc44256e03407" value="Hardcoded defaults&lt;br&gt;app/auth/rbac.py&lt;br&gt;(fallback)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend_startup">
+          <mxGeometry x="287" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="51d9dd5fd9c845109abfbe9b336486a1" value="_ACCESS_MAP&lt;br&gt;(in-process,&lt;br&gt;role -&gt; skills+tools)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Backend_startup">
+          <mxGeometry x="199" y="299" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="5870b12f7d214e48bfdfdeb7968b3b0f" value="Auth middleware&lt;br&gt;validate JWT&lt;br&gt;extract User.roles" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="cluster_Per-request_auth">
+          <mxGeometry x="54" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="765dbae912304a7c8d54dbe70770d5c0" value="GET /api/skills&lt;br&gt;(visibility filter)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/fastapi/fastapi-original.svg;" vertex="1" parent="cluster_Filter_points__3_enforcement_boundaries_">
+          <mxGeometry x="54" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="a89b753f655c45ad85b01ec244d72546" value="GET /api/tools&lt;br&gt;(allow-list filter)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/fastapi/fastapi-original.svg;" vertex="1" parent="cluster_Filter_points__3_enforcement_boundaries_">
+          <mxGeometry x="263" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="c92adf7e7bf34c1a9aa692f18ee1d205" value="POST /api/skills/personal&lt;br&gt;403 gate on tool save&lt;br&gt;(non-negotiable)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/fastapi/fastapi-original.svg;" vertex="1" parent="cluster_Filter_points__3_enforcement_boundaries_">
+          <mxGeometry x="472" y="78" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="5a96cefe4d27480a917b75de63892c28" value="POST /api/conversations&lt;br&gt;freeze skill_snapshot_json&lt;br&gt;(invariant: snapshot wins)" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/fastapi/fastapi-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="98" y="1156" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="4df4ed2d58c5404dbc4c614dcc593d7e" value="conversations.skill_snapshot_json&lt;br&gt;+ personal_skills.tools_json" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="98" y="1392" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="045fb48649314c55b996f3043a734dc5" value="Orchestrator&lt;br&gt;resolves tools from snapshot,&lt;br&gt;not live skill" style="sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;shape=image;image=https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/python/python-original.svg;" vertex="1" parent="1">
+          <mxGeometry x="98" y="1628" width="56" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="sign in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="bd42385157b54cc0ba72d861636c19f1" target="7d9dc619edd8428e9fce4c4019038656">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_1" value="1" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="298" y="232" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="token req" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="7d9dc619edd8428e9fce4c4019038656" target="28a3e1b69c7e43d8a215d7977f4b5313">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_2" value="2" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="298" y="436" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="JWT (roles)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="28a3e1b69c7e43d8a215d7977f4b5313" target="5870b12f7d214e48bfdfdeb7968b3b0f">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_3" value="3" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="298" y="639" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="@ startup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="e8dda1e3bec84e02a71a6244221a69ac" target="51d9dd5fd9c845109abfbe9b336486a1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_4" value="0" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="576" y="185" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="fallback" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#999999;strokeWidth=1;dashed=1;dashPattern=4 4;endArrow=block;endFill=0;" edge="1" parent="1" source="40d52ff76d2e40c4b05fc44256e03407" target="51d9dd5fd9c845109abfbe9b336486a1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="visibility" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="5870b12f7d214e48bfdfdeb7968b3b0f" target="765dbae912304a7c8d54dbe70770d5c0">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_5" value="4" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="223" y="787" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="allow-list" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="5870b12f7d214e48bfdfdeb7968b3b0f" target="a89b753f655c45ad85b01ec244d72546">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_6" value="5" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="298" y="842" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="save gate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="5870b12f7d214e48bfdfdeb7968b3b0f" target="c92adf7e7bf34c1a9aa692f18ee1d205">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_7" value="6" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="787" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="user picks" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="765dbae912304a7c8d54dbe70770d5c0" target="5a96cefe4d27480a917b75de63892c28">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_8" value="7" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="89" y="1046" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="freeze" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="5a96cefe4d27480a917b75de63892c28" target="4df4ed2d58c5404dbc4c614dcc593d7e">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_9" value="8" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="89" y="1249" width="26" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="resolve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#444444;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="4df4ed2d58c5404dbc4c614dcc593d7e" target="045fb48649314c55b996f3043a734dc5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="badge_10" value="9" style="ellipse;aspect=fixed;fillColor=#107C10;fontColor=#FFFFFF;strokeColor=none;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;html=1;" vertex="1" parent="1">
+          <mxGeometry x="89" y="1517" width="26" height="26" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,53 @@
+digraph "Nexus Drill 3 - KB hybrid retrieval" {
+	graph [fontcolor="#2D3436" fontname="Sans-Serif" fontsize=15 label="Nexus Drill 3 - KB hybrid retrieval" nodesep=1.5 pad=2.0 rankdir=TB ranksep=1.2 splines=ortho]
+	node [fixedsize=true fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 height=1.4 imagescale=true labelloc=b shape=box style=rounded width=1.4]
+	edge [color="#7B8894"]
+	cf72b5e73283445b83a4e4cb8e41472b [label="KB Git repo
+(ADO / GitHub)" azure_icon=devops]
+	"674b03a433b64a15b2b7d39e75689634" [label="git sync (15m)
++ normalize markdown" azure_icon=automation]
+	"2fdfb1892d944c8dbd278c38a286a561" [label="Chunker
+(split at H2/H3,
+KB_CHUNK_MAX_CHARS)" azure_icon=resource_group]
+	"59f85b57083840b980caafc1b2657d0b" [label="Azure OpenAI embed
+text-embedding-3-small
+(1536 dims, document side)" azure_icon=openai]
+	subgraph "cluster_app.db (SQLite + sqlite-vec, WAL mode)" {
+		graph [bgcolor="#E5F5FD" fontname="Sans-Serif" fontsize=12 label="app.db (SQLite + sqlite-vec, WAL mode)" labeljust=l pencolor="#AEB6BE" rankdir=LR shape=box style=rounded]
+		"2f4edb4bd63b48aaaa29c7062d7b3c27" [label="kb_chunks
+(canonical: path,
+chunk_idx, heading, text,
+content_hash, source_url,
+embed_model)" height=3.5 image="E:\Work\MyProjects\Nexus\backend\.venv\Lib\site-packages\resources/azure/database\sql-databases.png" shape=none]
+		e28f92eb9fca40bc8d40f70d9e7eac20 [label="kb_chunks_fts
+(FTS5 virtual,
+unicode61 no porter)" azure_icon=ai_search]
+		"0aac82aed1a9428a99f30fc78f73f63d" [label="kb_chunks_vec
+(vec0 virtual,
+float[1536])" azure_icon=ai_search]
+	}
+	ba2d2ce70f5740e7976d61de9351229f [label="search_kb_hybrid
+(tool call from agent)" azure_icon=apim]
+	"15b46a0f99544c279d8c1ec559ee2fdc" [label="Azure OpenAI embed
+(query side, ~50 ms)" azure_icon=openai]
+	"7cf1e18aedc64950aa01e0409e5dd6f1" [label="BM25 stage
+(FTS5 MATCH)" azure_icon=ai_search]
+	"8185b81702084590822d5632b89aff11" [label="Vector stage
+(vec0 MATCH ORDER BY distance)" azure_icon=ai_search]
+	"0bb0201b996543749fc47f4b18cd1bec" [label="Reciprocal Rank Fusion
+(_rrf_fuse)" azure_icon=resource_group]
+	f5a5fcd34f6040db92608eda9d0cd1f4 [label="Top-K chunks
++ source_url cite" azure_icon=apim]
+	cf72b5e73283445b83a4e4cb8e41472b -> "674b03a433b64a15b2b7d39e75689634" [label="1 pull" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"674b03a433b64a15b2b7d39e75689634" -> "2fdfb1892d944c8dbd278c38a286a561" [label="2 changed *.md" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"2fdfb1892d944c8dbd278c38a286a561" -> "59f85b57083840b980caafc1b2657d0b" [label="3 chunk text" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"59f85b57083840b980caafc1b2657d0b" -> "2f4edb4bd63b48aaaa29c7062d7b3c27" [label="4 vector" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"2f4edb4bd63b48aaaa29c7062d7b3c27" -> e28f92eb9fca40bc8d40f70d9e7eac20 [label="5 trigger" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	"2f4edb4bd63b48aaaa29c7062d7b3c27" -> "0aac82aed1a9428a99f30fc78f73f63d" [label="6 vec0 insert" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13 style=dashed]
+	ba2d2ce70f5740e7976d61de9351229f -> "15b46a0f99544c279d8c1ec559ee2fdc" [label="A query text" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"15b46a0f99544c279d8c1ec559ee2fdc" -> "8185b81702084590822d5632b89aff11" [label="B vec" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	ba2d2ce70f5740e7976d61de9351229f -> "7cf1e18aedc64950aa01e0409e5dd6f1" [label="C tokens" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"7cf1e18aedc64950aa01e0409e5dd6f1" -> "0bb0201b996543749fc47f4b18cd1bec" [label="D rank list" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"8185b81702084590822d5632b89aff11" -> "0bb0201b996543749fc47f4b18cd1bec" [label="E rank list" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+	"0bb0201b996543749fc47f4b18cd1bec" -> f5a5fcd34f6040db92608eda9d0cd1f4 [label="F fused" dir=forward fontcolor="#2D3436" fontname="Sans-Serif" fontsize=13]
+}

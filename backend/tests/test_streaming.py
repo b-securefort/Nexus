@@ -43,11 +43,11 @@ class TestSSEFormatting:
         assert data["args"]["path"] == "test.md"
 
     def test_sse_approval_required(self):
-        result = sse_approval_required("ap-1", "run_shell", {"command": "ls"}, "List files")
+        result = sse_approval_required("ap-1", "execute_script", {"path": "list-resources.ps1"}, "List files")
         assert "event: approval_required" in result
         data = json.loads(result.split("data: ")[1].strip())
         assert data["approval_id"] == "ap-1"
-        assert data["tool_name"] == "run_shell"
+        assert data["tool_name"] == "execute_script"
         assert data["reason"] == "List files"
 
     def test_sse_tool_result(self):

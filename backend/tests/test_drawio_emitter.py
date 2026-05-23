@@ -17,6 +17,7 @@ from app.tools.generic._drawio_emitter import (
     _safe_id,
     build_capture_script,
     emit_drawio,
+    map_aws_icon,
     map_icon,
     translate_layout,
 )
@@ -111,6 +112,80 @@ def test_map_icon_azure_kind_takes_precedence_over_image_path():
         "key_vault",
     )
     assert svg == "img/lib/azure2/security/Key_Vaults.svg"
+
+
+# ── map_aws_icon ──────────────────────────────────────────────────────────
+
+
+def test_map_aws_icon_compute_ec2():
+    """A canonical mingrammer AWS compute image maps to the drawio aws4 stencil."""
+    assert map_aws_icon(
+        "/x/y/z/resources/aws/compute/ec2.png",
+    ) == "ec2"
+
+
+def test_map_aws_icon_storage_s3_long_filename():
+    """mingrammer's S3 file is `simple-storage-service-s3.png`; drawio's shape
+    is the short `s3`. The map must bridge the two naming conventions."""
+    assert map_aws_icon(
+        "/r/resources/aws/storage/simple-storage-service-s3.png",
+    ) == "s3"
+
+
+def test_map_aws_icon_network_alb():
+    assert map_aws_icon(
+        "/r/resources/aws/network/elb-application-load-balancer.png",
+    ) == "application_load_balancer"
+
+
+def test_map_aws_icon_network_transit_gateway():
+    """Transit Gateway is the canonical hub-and-spoke connector — added
+    after the initial MVP because the first hub-and-spoke smoke diagram
+    had no way to model VPC interconnect."""
+    assert map_aws_icon(
+        "/r/resources/aws/network/transit-gateway.png",
+    ) == "transit_gateway"
+
+
+def test_map_aws_icon_security_iam_long_name():
+    """IAM ships under aws.security with the longest filename in the catalog;
+    the map keeps the drawio shape name verbatim (no truncation)."""
+    assert map_aws_icon(
+        "/r/resources/aws/security/identity-and-access-management-iam.png",
+    ) == "identity_and_access_management"
+
+
+def test_map_aws_icon_handles_windows_backslashes():
+    assert map_aws_icon(
+        r"C:\Program Files\diagrams\resources\aws\database\dynamodb.png",
+    ) == "dynamodb"
+
+
+def test_map_aws_icon_unknown_aws_path_returns_none():
+    """An aws image outside the MVP namespaces (e.g. aws/analytics/) falls
+    through to None so the emitter uses the rectangle fallback rather than
+    silently producing an invalid shape= name."""
+    assert map_aws_icon(
+        "/r/resources/aws/analytics/athena.png",
+    ) is None
+
+
+def test_map_aws_icon_no_input_returns_none():
+    assert map_aws_icon(None) is None
+    assert map_aws_icon("") is None
+
+
+def test_emit_drawio_uses_aws_style_for_aws_node():
+    """An AWS-mapped node renders with the mxgraph.aws4 stencil shape, not
+    the generic rectangle fallback the validator now blocks."""
+    nodes = [
+        _Node(id="ec2_a", label="Web", abs_x=100, abs_y=100, w=56, h=56,
+              icon_path="/x/resources/aws/compute/ec2.png"),
+    ]
+    xml = emit_drawio("AWS test", [], nodes, [], 500, 300)
+    assert "shape=mxgraph.aws4.ec2" in xml
+    # Should NOT fall through to the rectangle-fallback style.
+    assert "#F8F8F8" not in xml
 
 
 # ── _extract_node_images ──────────────────────────────────────────────────

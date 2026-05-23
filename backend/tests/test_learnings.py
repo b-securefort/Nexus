@@ -237,7 +237,7 @@ class TestDeriveLearning:
 
     def test_default_classification_is_workaround(self):
         out = lrn.derive_learning_from_success(
-            tool_name="run_shell",
+            tool_name="execute_script",
             final_successful_args={"command": "Get-AzVM"},
             prior_failures=[
                 ({"command": "Get-AzVMs"}, "command not recognized"),

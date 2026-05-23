@@ -21,17 +21,17 @@ class TestApprovalStateMachine:
             session=db_session,
             conversation_id=1,
             user_oid="user-1",
-            tool_name="run_shell",
+            tool_name="execute_script",
             tool_args_json='{"command": "ls"}',
             reason="List files",
         )
         assert approval.status == "pending"
-        assert approval.tool_name == "run_shell"
+        assert approval.tool_name == "execute_script"
         assert approval.id in _approval_events
 
     def test_approve(self, db_session):
         approval = create_pending_approval(
-            db_session, 1, "user-1", "run_shell", '{}', "test"
+            db_session, 1, "user-1", "execute_script", '{}', "test"
         )
         resolved = resolve_approval(db_session, approval.id, "approve")
         assert resolved is True
@@ -43,7 +43,7 @@ class TestApprovalStateMachine:
 
     def test_deny(self, db_session):
         approval = create_pending_approval(
-            db_session, 1, "user-1", "run_shell", '{}', "test"
+            db_session, 1, "user-1", "execute_script", '{}', "test"
         )
         resolved = resolve_approval(db_session, approval.id, "deny")
         assert resolved is True
@@ -53,7 +53,7 @@ class TestApprovalStateMachine:
 
     def test_cannot_resolve_twice(self, db_session):
         approval = create_pending_approval(
-            db_session, 1, "user-1", "run_shell", '{}', "test"
+            db_session, 1, "user-1", "execute_script", '{}', "test"
         )
         resolve_approval(db_session, approval.id, "approve")
         result = resolve_approval(db_session, approval.id, "deny")
@@ -61,7 +61,7 @@ class TestApprovalStateMachine:
 
     def test_get_pending_for_conversation(self, db_session):
         create_pending_approval(
-            db_session, 1, "user-1", "run_shell", '{}', "test"
+            db_session, 1, "user-1", "execute_script", '{}', "test"
         )
         pending = get_pending_approval_for_conversation(db_session, 1)
         assert pending is not None
@@ -69,7 +69,7 @@ class TestApprovalStateMachine:
 
     def test_no_pending_after_resolve(self, db_session):
         approval = create_pending_approval(
-            db_session, 1, "user-1", "run_shell", '{}', "test"
+            db_session, 1, "user-1", "execute_script", '{}', "test"
         )
         resolve_approval(db_session, approval.id, "approve")
         pending = get_pending_approval_for_conversation(db_session, 1)

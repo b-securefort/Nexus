@@ -86,8 +86,9 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             # Engineer additions (write / execute, approval-gated)
             "az_cli",
             "az_rest_api",
-            "run_shell",
+            "execute_script",
             "generate_file",
+            "read_file",
             "az_devops",
         ],
     },
@@ -118,8 +119,9 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "network_test",
             "az_cli",
             "az_rest_api",
-            "run_shell",
+            "execute_script",
             "generate_file",
+            "read_file",
             "az_devops",
             # Architect diagram tools (inline drawio-from-python flow)
             "validate_drawio",

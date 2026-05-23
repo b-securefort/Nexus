@@ -225,6 +225,7 @@ _MINGRAMMER_TO_AWS4: dict[str, str] = {
     "aws/network/cloudfront.png":                       "cloudfront",
     "aws/network/api-gateway.png":                      "api_gateway",
     "aws/network/nat-gateway.png":                      "nat_gateway",
+    "aws/network/transit-gateway.png":                  "transit_gateway",
     # database
     "aws/database/rds.png":                             "rds",
     "aws/database/dynamodb.png":                        "dynamodb",
@@ -244,6 +245,20 @@ _MINGRAMMER_TO_AWS4: dict[str, str] = {
     # identity — mingrammer ships these under aws.security (no aws.identity
     # module), so the image path stays under aws/security/.
     "aws/security/cognito.png":                         "cognito",
+}
+
+# Per-AWS-service-group fill color. AWS4 stencils render as a colored tile
+# with a white icon embedded inside — without a fillColor, the icon is
+# invisible against the default white background (proven by a headless-render
+# smoke test). Colors below match the official AWS architecture-icon palette
+# (REFERENCE.md and Microsoft's AWS+drawio guidance):
+#   compute=orange, network=purple, database=red, storage=green, security=red.
+_AWS_GROUP_FILL: dict[str, str] = {
+    "compute":  "#ED7100",
+    "network":  "#8C4FFF",
+    "database": "#C7131F",
+    "storage":  "#7AA116",
+    "security": "#DD344C",
 }
 
 # Aliases for AzureGeneric(..., azure_icon="bastions"). Anything not in the
@@ -379,6 +394,18 @@ def map_aws_icon(image_path: str | None) -> str | None:
     return None
 
 
+def aws_group_fill(image_path: str | None) -> str:
+    """Return the AWS service-group fill color for the given mingrammer image
+    path. Defaults to the compute orange when the path doesn't match a known
+    group (the renderer needs *some* fill or the icon goes invisible)."""
+    if image_path:
+        norm = image_path.replace("\\", "/")
+        m = re.search(r"resources/aws/([^/]+)/", norm)
+        if m:
+            return _AWS_GROUP_FILL.get(m.group(1), _AWS_GROUP_FILL["compute"])
+    return _AWS_GROUP_FILL["compute"]
+
+
 # --- Style strings -------------------------------------------------------
 #
 # Container styles vary by depth and cluster kind. The detection is keyword-
@@ -390,9 +417,10 @@ _AZURE_ICON_STYLE = (
     "verticalAlign=top;align=center;html=1;shape=image;image={image};"
 )
 _AWS_ICON_STYLE = (
-    "sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;"
-    "fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;"
-    "verticalAlign=top;align=center;html=1;shape=mxgraph.aws4.{service};"
+    "sketch=0;outlineConnect=0;gradientColor=none;dashed=0;"
+    "verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;"
+    "fontColor=#1A1A1A;fillColor={fill};strokeColor=#ffffff;"
+    "shape=mxgraph.aws4.{service};"
 )
 _RECT_FALLBACK_STYLE = (
     "rounded=1;whiteSpace=wrap;html=1;fillColor=#F8F8F8;strokeColor=#666666;"
@@ -960,7 +988,10 @@ def emit_drawio(
         if svg:
             style = _AZURE_ICON_STYLE.format(image=svg)
         elif aws_service:
-            style = _AWS_ICON_STYLE.format(service=aws_service)
+            style = _AWS_ICON_STYLE.format(
+                service=aws_service,
+                fill=aws_group_fill(n.icon_path),
+            )
         else:
             style = _RECT_FALLBACK_STYLE
         out.append(

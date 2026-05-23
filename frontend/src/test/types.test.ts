@@ -98,16 +98,16 @@ describe('TypeScript interfaces', () => {
   it('ApprovalInfo interface', () => {
     const approval: ApprovalInfo = {
       approval_id: 'uuid-1',
-      tool_name: 'run_shell',
+      tool_name: 'execute_script',
       args: { command: 'ls -la' },
       reason: 'List files in directory',
     };
-    expect(approval.tool_name).toBe('run_shell');
+    expect(approval.tool_name).toBe('execute_script');
   });
 
   it('ToolInfo interface', () => {
     const tool: ToolInfo = {
-      name: 'run_shell',
+      name: 'execute_script',
       description: 'Run a shell command',
       requires_approval: true,
     };

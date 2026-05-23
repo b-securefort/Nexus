@@ -76,7 +76,7 @@ describe('API: chat', () => {
 
     it('parses approval_required events', async () => {
       const sseData =
-        'event: approval_required\ndata: {"approval_id":"ap-1","tool_name":"run_shell","args":{"command":"ls"},"reason":"needs approval"}\n\n';
+        'event: approval_required\ndata: {"approval_id":"ap-1","tool_name":"execute_script","args":{"path":"list.ps1"},"reason":"needs approval"}\n\n';
 
       mockApiFetch.mockResolvedValue({
         ok: true,
@@ -94,8 +94,8 @@ describe('API: chat', () => {
         'approval_required',
         {
           approval_id: 'ap-1',
-          tool_name: 'run_shell',
-          args: { command: 'ls' },
+          tool_name: 'execute_script',
+          args: { path: 'list.ps1' },
           reason: 'needs approval',
         },
       ]);

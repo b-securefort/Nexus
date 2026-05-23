@@ -184,13 +184,18 @@ Higher effort, requires Bicep / deployment changes. Sequence with care.
 - [ ] **Future-path docs**
   Add a section to `CLAUDE.md` noting the migration trigger ("when multi-instance becomes a real requirement") and target (PostgreSQL + pgvector, not Azure SQL — sqlite-vec/FTS5 have no clean Azure SQL equivalent).
 
-### Track 5B — `run_shell` sandbox container
+### ✅ Track 5B — Retire `run_shell`; close the typed-tool gaps it papered over
 
-- [ ] 🟡 **Sandbox `run_shell` in ACI** (revised from `Resolve_ExecutionSandbox.md`)
-  - Build a minimal sandbox image: Python + curl + jq, no Azure SDKs, no env secrets.
-  - Refactor `RunShellTool` to submit scripts to an ACI instance via the management API, poll for completion, stream output back.
-  - Network policy: no egress to internal vnet, only public internet.
-  - **Prerequisite:** Phase 1 Track 1A (B1) must ship first — that closes the most immediate vector and de-risks delaying this work.
+**Revised scope** (replaces the original "sandbox `run_shell` in ACI" plan after the 14-conv DB audit; rationale captured in §5 2026-05-22 of DESIGN.md). The data showed `run_shell` was either being misused (Azure tool bypass, self-startup, test traffic) or hitting two specific typed-tool gaps. Closing those gaps + replacing the inline-command surface with a path-only `execute_script` covers every legitimate use without the ACI image/network/cold-start surface.
+
+- [x] 🟡 **Add `read_file` tool** scoped to `output/` — symmetric with `generate_file`. Read-only inside the sandbox; no approval needed. Uses the same `_DANGEROUS_PATTERNS` + `Path.resolve().relative_to(sandbox)` defence-in-depth as §5 2026-05-15 "Output sandbox defense-in-depth." Closes the "model wrote a file, now needs to read it back" gap that conv 257 hit.
+- [x] 🟡 **Add `body_file` parameter to `az_rest_api`** — accepts a path under `output/`, resolves it server-side, forwards as `az rest --body @<abs_path>`. Mutually exclusive with `body`. Pre-validates JSON before the az call so the model gets a clear error instead of az's generic "Invalid JSON body." Closes the conv 257 Logic App PATCH cascade.
+- [x] 🟡 **Replace `RunShellTool` with `ExecuteScriptTool`** (`app/tools/generic/execute_script.py`). Path-only, must resolve under `output/scripts/`. Shell inferred from extension (`.ps1` → PowerShell, `.sh` → bash). No `command:` parameter, no `args:` parameter (deferred — observed scripts were self-contained). Still `requires_approval=True`. Streaming + non-streaming variants. Env-allowlist + `shell=False` like the §5 2026-05-21 `_run_az` hardening.
+- [x] 🟢 **Delete `RunShellTool`** source (`app/tools/generic/shell.py`), registry entry, and its tests. Replace test fixtures using `"run_shell"` with `"execute_script"` across `test_agent.py`, `test_streaming.py`, `test_compaction.py`, `test_db_models.py`, `test_learnings.py`, `test_learnings_api.py`, `test_rbac.py`, `test_new_tools.py`, `test_tools.py`, plus the frontend `chat.test.ts`, `types.test.ts`, `useAppStore.test.ts`, `ApprovalCard.test.tsx`, `ChatWindow.test.tsx`. Update `ApprovalCard.tsx` + `ToolCallCard.tsx` `formatCommand` to render the script path instead of an inline command.
+- [x] 🟢 **Update skill allowlists** — `chat-with-kb` (Engineer) and `architect` SKILL.md frontmatter swap `run_shell` for `execute_script` + `read_file`; in-prose tool guides updated. `app/auth/rbac.py` engineer + architect tool lists updated.
+- [x] 🟢 **Update DESIGN.md** §2 Tools table and add §5 2026-05-22 entry recording the decision and the audit that drove it.
+
+**ACI sandbox dropped** — the perimeter-style protection it offered is replaced by structural impossibility: the model cannot pass an inline command, cannot bypass `az_cli` by running `az` directly from a string, and cannot self-deploy Nexus. If a future use case genuinely needs arbitrary shell, it surfaces as a typed-tool gap and gets closed deliberately rather than smuggled in as "ACI sandbox is safer."
 
 **Phase 5 parallelism:** 5A and 5B touch disjoint surfaces — **2 instances in parallel**, but each is multi-day work.
 

@@ -51,7 +51,7 @@ def seeded_learnings():
                   summary="prov-1"),
             _seed(s, status="provisional", category="workaround", tool_name="az_cli",
                   type="procedural", summary="prov-2"),
-            _seed(s, status="archived", category="best-practice", tool_name="run_shell",
+            _seed(s, status="archived", category="best-practice", tool_name="execute_script",
                   type="procedural", failure_count=4, summary="archived-1",
                   archived_at=datetime.now(timezone.utc)),
             _seed(s, status="rejected", category="workaround", tool_name="validate_drawio",

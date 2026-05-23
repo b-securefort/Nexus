@@ -12,8 +12,8 @@ function formatCommand(toolName: string, args: Record<string, unknown>): string 
   if (toolName === "az_cli" && Array.isArray(args.args)) {
     return `az ${(args.args as string[]).join(" ")}`;
   }
-  if (toolName === "run_shell" && typeof args.command === "string") {
-    return args.command;
+  if (toolName === "execute_script" && typeof args.path === "string") {
+    return `script: output/scripts/${String(args.path).replace(/^scripts\//, "")}`;
   }
   if (toolName === "az_resource_graph" && typeof args.query === "string") {
     return args.query;

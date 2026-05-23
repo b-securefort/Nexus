@@ -53,16 +53,18 @@ class TestSkillsAPI:
         assert resp.status_code == 200
         tools = resp.json()
         assert isinstance(tools, list)
-        assert len(tools) == 27  # 29 minus the two retired learning tools
+        assert len(tools) == 28  # 27 prior + read_file (run_shell → execute_script is a rename, net +1)
         tool_names = [t["name"] for t in tools]
         assert "generate_file" in tool_names
+        assert "read_file" in tool_names
         assert "validate_drawio" in tool_names
         assert "read_kb_file" in tool_names
         assert "read_learnings" not in tool_names
         assert "update_learnings" not in tool_names
+        assert "run_shell" not in tool_names  # retired in favor of execute_script
         assert "search_kb" in tool_names
         assert "fetch_ms_docs" in tool_names
-        assert "run_shell" in tool_names
+        assert "execute_script" in tool_names
         assert "az_cli" in tool_names
         assert "az_resource_graph" in tool_names
         assert "az_cost_query" in tool_names
@@ -70,7 +72,7 @@ class TestSkillsAPI:
         assert "az_rest_api" in tool_names
         # Approval-required tools
         for t in tools:
-            if t["name"] in ("run_shell", "az_cli"):
+            if t["name"] in ("execute_script", "az_cli"):
                 assert t["requires_approval"] is True
             else:
                 assert t["requires_approval"] is False

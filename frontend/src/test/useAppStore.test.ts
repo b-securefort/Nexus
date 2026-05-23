@@ -96,7 +96,7 @@ describe('useAppStore', () => {
     it('sets pending approval', () => {
       const approval: ApprovalInfo = {
         approval_id: 'ap-1',
-        tool_name: 'run_shell',
+        tool_name: 'execute_script',
         args: { command: 'ls' },
         reason: 'List files',
       };
@@ -107,7 +107,7 @@ describe('useAppStore', () => {
     it('clears pending approval', () => {
       useAppStore.getState().setPendingApproval({
         approval_id: 'ap-1',
-        tool_name: 'run_shell',
+        tool_name: 'execute_script',
         args: {},
         reason: '',
       });

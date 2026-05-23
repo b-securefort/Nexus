@@ -89,13 +89,13 @@ describe('ChatWindow', () => {
     useAppStore.setState({
       pendingApproval: {
         approval_id: 'ap-1',
-        tool_name: 'run_shell',
-        args: { command: 'ls' },
+        tool_name: 'execute_script',
+        args: { path: 'list.ps1' },
         reason: 'List files',
       },
     });
     render(<ChatWindow />);
-    expect(screen.getByText(/run_shell/)).toBeInTheDocument();
+    expect(screen.getByText(/execute_script/)).toBeInTheDocument();
     expect(screen.getByText(/Approve/i)).toBeInTheDocument();
   });
 
@@ -194,8 +194,8 @@ describe('ChatWindow', () => {
     useAppStore.setState({
       pendingApproval: {
         approval_id: 'ap-1',
-        tool_name: 'run_shell',
-        args: { command: 'ls' },
+        tool_name: 'execute_script',
+        args: { path: 'list.ps1' },
         reason: 'List files',
       },
     });

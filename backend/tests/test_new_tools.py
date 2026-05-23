@@ -1304,11 +1304,11 @@ class TestToolNeedsApproval:
         from app.agent.orchestrator import _tool_needs_approval
 
         az_cli = get_tool("az_cli")
-        shell = get_tool("run_shell")
+        script = get_tool("execute_script")
         kb = get_tool("read_kb_file")
 
         assert _tool_needs_approval(az_cli, {}) is True
-        assert _tool_needs_approval(shell, {}) is True
+        assert _tool_needs_approval(script, {}) is True
         assert _tool_needs_approval(kb, {}) is False
 
     def test_dynamic_az_rest_api(self):

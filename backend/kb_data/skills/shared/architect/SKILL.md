@@ -16,8 +16,9 @@ tools:
   - az_monitor_logs
   - az_cli
   - az_rest_api
-  - run_shell
+  - execute_script
   - generate_file
+  - read_file
   - validate_drawio
   - generate_drawio_from_python
   - render_drawio
@@ -60,7 +61,8 @@ For routine recommendations you don't have to walk all five pillars — but for 
 - **`az_resource_graph`** — Use for read-only queries: count resources, list VMs, check RBAC, find by tag. No approval needed.
 - **`az_cli`** — Use for Azure operations that need CLI (create, configure, delete). Requires approval.
 - **`az_rest_api`** — Use for ARM REST calls not covered by the CLI (e.g. listing child resources). **Important**: when counting deployed AI models, do NOT stop at parent `Microsoft.CognitiveServices/accounts` or ML workspaces. Query the deployment child resources: `GET /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.CognitiveServices/accounts/{account}/deployments?api-version=2023-05-01`. Resource Graph does not surface these child objects.
-- **`run_shell`** — Use for shell/PowerShell commands. Requires approval.
+- **`execute_script`** — Execute a `.ps1`/`.sh` script that you already wrote into `output/scripts/` via `generate_file`. No inline command surface; the model cannot pass a raw command string. Requires approval. Pair with `read_file` to inspect/round-trip script content.
+- **`read_file`** — Read back content from `output/` that the agent (or a typed write tool) produced. Symmetric with `generate_file`. No approval — read-only inside the sandbox.
 - **`fetch_ms_docs`** — Use to look up Azure service docs, pricing, or command syntax before making recommendations.
 - **`search_kb_hybrid`** — Preferred for KB content questions. Chunk-level hybrid search (BM25 + dense vectors, local). Returns precise snippets with `source_url` citations.
 - **`search_kb` / `read_kb_file`** — Use `search_kb` when the hybrid index is warming. Use `read_kb_file` for full file context. Fall back to `search_kb_semantic` only when keyword search returns nothing useful.
@@ -147,6 +149,23 @@ from diagrams.onprem.client import Users, Client
 
 For services without a mingrammer class use `AzureGeneric("Display Name", azure_icon="<kind>")`: `bastion`, `waf_policy`, `private_endpoint`, `private_link`, `managed_identity`, `entra_id`, `conditional_access`, `defender`, `sentinel`, `policy`, `blueprint`, `arc`, `recovery_vault`, `openai`, `cognitive`, `ml`, `ai_search`, `apim`, `service_bus`, `event_grid`, `event_hub`, `app_config`, `subscription`, `resource_group`, `globe`.
 
+**Guaranteed-good AWS imports** (use these exact lines — the drawio emitter maps each to a `mxgraph.aws4.<service>` stencil):
+
+```python
+from diagrams.aws.compute import EC2, ECS, EKS, Fargate, Lambda, AutoScaling
+from diagrams.aws.network import (
+    VPC, ELB, ALB, NLB, Route53, CloudFront, APIGateway, NATGateway,
+    TransitGateway,
+)
+from diagrams.aws.database import RDS, Dynamodb, Aurora, ElastiCache, Redshift
+from diagrams.aws.storage import S3, EBS, EFS
+from diagrams.aws.security import (
+    IAM, KMS, WAF, SecretsManager, Shield, Cognito, IdentityAndAccessManagementIam,
+)
+```
+
+AWS coverage is intentionally limited to these six namespaces (compute, network, database, storage, security, identity-via-security) in this rollout. Services outside this set will fall through to a labelled rectangle and trip the `[icon-style]` validator rule — pick a near-equivalent from the list above or call out the gap so the user can decide whether to wait for the follow-up PR.
+
 **Forbidden imports** (these will fail — do not write them): `from diagrams import AzureGeneric`, `Subnet` (it's `Subnets`), `NSG` (use `NetworkSecurityGroupsClassic`), `WAFPolicies` (use AzureGeneric `waf_policy`), `from diagrams.azure.management import Monitor` (module is `monitor`).
 
 **Architectural placement** (from `kb/drawio/azure_architecture_semantics.md`):
@@ -179,5 +198,6 @@ Do NOT say "the diagram is ready". The user decides when it's ready.
 - **Standalone numbered nodes for flow steps.** Put the number in the edge label (`Edge(label="1 HTTPS")`); the emitter creates the badge.
 - **Manual coordinates.** You can't and shouldn't. Trust Graphviz. If layout is off, change `direction`, `graph_attr` (`nodesep`, `ranksep`), or the cluster shape — never coordinates.
 - **Treating a follow-up edit as a direct command.** Reflect, ask, generate — same loop as the initial draft. Only pure renames, coordinate-free cosmetic changes, or changes where the user has already named every decision in their message skip the ask_user round.
+- **Parallel siblings with multi-line labels.** When multiple downstream nodes share the same source AND have multi-line labels, the labels will overlap even with generous `nodesep`. Restructure as a sequential chain (`a >> b >> c`) or keep labels to one short line.
 
 When you succeed at a task after one or more failures, the orchestrator records the working approach as a learning automatically.

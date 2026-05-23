@@ -365,7 +365,7 @@ def init_tools() -> None:
     config_mapping = {
         "search_kb_semantic": settings.TOOL_SEARCH_SEMANTIC_ENABLED,
         "ms_docs": settings.TOOL_MS_DOCS_ENABLED,
-        "run_shell": settings.TOOL_SHELL_ENABLED,
+        "execute_script": settings.TOOL_SHELL_ENABLED,
         "az_cli": settings.TOOL_AZ_CLI_ENABLED,
         "az_resource_graph": settings.TOOL_AZ_CLI_ENABLED,  # shares az_cli config
         "az_cost_query": settings.TOOL_AZ_COST_ENABLED,

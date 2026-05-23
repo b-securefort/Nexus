@@ -111,7 +111,8 @@ class TestFilters:
         tools = rbac.allowed_tools_for(_user("engineer"))
         assert tools is not None
         assert "az_cli" in tools
-        assert "run_shell" in tools
+        assert "execute_script" in tools
+        assert "read_file" in tools
         # Drawio specialist tools are architect-only
         assert "render_drawio" not in tools
         assert "generate_drawio_from_python" not in tools

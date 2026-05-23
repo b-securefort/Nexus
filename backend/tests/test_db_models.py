@@ -107,7 +107,7 @@ class TestPendingApproval:
             id=str(uuid.uuid4()),
             conversation_id=conv.id,
             user_oid="u1",
-            tool_name="run_shell",
+            tool_name="execute_script",
             tool_args_json='{"command":"ls"}',
             reason="List files",
         )

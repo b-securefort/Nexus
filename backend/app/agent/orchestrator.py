@@ -106,7 +106,7 @@ def _clear_lease(session: Session, conversation_id: int) -> None:
         logger.exception("Lease clear failed for conv=%s", conversation_id)
 
 # Tools whose errors should trigger automatic multi-strategy retry
-_COMMAND_TOOLS = {"az_cli", "run_shell", "az_resource_graph"}
+_COMMAND_TOOLS = {"az_cli", "execute_script", "az_resource_graph"}
 
 # Max consecutive failures on the same type of tool before giving up
 _MAX_RETRIES_PER_TOOL = 3
@@ -161,8 +161,9 @@ MAX_HISTORY_MESSAGES = 50
 _TOOL_RESULT_LIMITS = {
     "az_cli": 4_000,
     "az_resource_graph": 4_000,
-    "run_shell": 4_000,
+    "execute_script": 4_000,
     "read_kb_file": 6_000,
+    "read_file": 6_000,
     "search_kb_hybrid": 4_000,
 }
 _DRAWIO_TOOLS = {"render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell"}
@@ -567,7 +568,7 @@ def _compose_system_prompt(
         "5. **`az_cli`** — general Azure operations. Requires approval for mutations.\n"
         "6. **`az_rest_api`** — direct ARM REST calls. GET=no approval, mutations=approval.\n"
         "7. **`az_devops`** — Azure DevOps pipelines/PRs/builds. Read=no approval, mutations=approval.\n"
-        "8. **`run_shell`** — PowerShell/shell commands. Always requires approval.\n\n"
+        "8. **`execute_script`** — run a .ps1/.sh script that already exists under output/scripts/. Always requires approval. Write the script with `generate_file` first.\n\n"
         "Other tools:\n"
         "- **`network_test`** — DNS/port checks, NSG rules. No approval.\n"
         "- **`generate_file`** — Write files to output/ sandbox. No approval.\n"
@@ -905,9 +906,9 @@ def _build_docs_query(tool_name: str, func_args: dict, error_text: str) -> str:
             return f"az {' '.join(args[:3])} syntax parameters"
     elif tool_name == "az_resource_graph":
         return f"Azure Resource Graph KQL query syntax {func_args.get('query', '')[:80]}"
-    elif tool_name == "run_shell":
-        cmd = func_args.get("command", "")
-        return f"{cmd[:60]} syntax"
+    elif tool_name == "execute_script":
+        path = func_args.get("path", "")
+        return f"{path[:80]} script error"
     return f"Azure CLI {error_text[:60]}"
 
 
@@ -959,9 +960,9 @@ def _get_retry_strategy(failure_count: int, tool_name: str, func_args: dict, err
     elif failure_count == 2:
         # Strategy 2: Try a different command/approach entirely
         alt_tools = {
-            "az_cli": "For read queries, try `az_resource_graph` (KQL) — it's faster and needs no approval. For other operations, try `run_shell` with PowerShell Az modules (e.g. Get-AzResource, Get-AzVM). As last resort, use `az rest` for direct REST API calls.",
-            "az_resource_graph": "Try using `az_cli` with `az resource list` or similar commands. If that also fails, use `az rest` to call the Azure REST API directly.",
-            "run_shell": "Try using `az_cli` directly. For read queries, prefer `az_resource_graph` (KQL). As last resort, use `az rest` for direct REST API calls.",
+            "az_cli": "For read queries, try `az_resource_graph` (KQL) — it's faster and needs no approval. For ARM operations not exposed by az_cli, use `az_rest_api` (with `body_file` for large payloads).",
+            "az_resource_graph": "Try using `az_cli` with `az resource list` or similar commands. If that also fails, use `az_rest_api` to call the Azure REST API directly.",
+            "execute_script": "Don't retry the same script. Inspect the script with `read_file`, fix it with `generate_file` (overwrite=true), and re-run. For Azure-specific work, prefer `az_cli` / `az_rest_api` over generating a wrapper script.",
         }
         alt_hint = alt_tools.get(tool_name, "Try a different tool.")
         return (

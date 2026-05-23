@@ -167,9 +167,10 @@ swaps the agent's persona and scoped toolset. Personal skills live in the
 | `az_cli` | **Yes** | General Azure CLI commands |
 | `az_rest_api` | GET=No / mutations=Yes | Direct ARM REST calls |
 | `az_devops` | Read=No / mutations=Yes | ADO pipelines/PRs/builds |
-| `run_shell` | **Yes** | PowerShell / shell commands |
+| `execute_script` | **Yes** | Run a `.ps1`/`.sh` script that already exists under `output/scripts/`. Path-only — no inline command surface. |
 | `network_test` | No | DNS / TCP / ping diagnostics |
 | `generate_file` | No | Write artifacts (bicep, csv, etc.) to `output/` sandbox |
+| `read_file` | No | Read a file from the `output/` sandbox (symmetric with `generate_file`) |
 | `validate_drawio` / `render_drawio` / `patch_drawio_cell` | No | Diagram authoring + validation |
 | `generate_python_diagram` / `generate_drawio_from_python` | No | Diagram-as-code → drawio |
 | `web_fetch` | No | HTTP GET for documentation URLs |
@@ -691,6 +692,16 @@ Module-level `app/agent/circuit_breaker.py` with closed / open / half_open state
 
 Tool results over 2 KB (configurable threshold) are now routed through `_summarize_tool_result_with_llm()` before being fed back to the agent, instead of the previous head+tail split that could leave the model staring at half a JSON object or duplicate top-level keys. Error envelopes (`status == "error"`) skip the summariser path — the agent gets exact error text so retry strategy decisions stay faithful. On summariser failure / timeout / empty output, the old head+tail truncation is the fallback so a degraded LLM never breaks the chat.
 **Trade-off**: one extra Azure OpenAI call per oversized tool result and a small risk of summary loss-of-fidelity on novel formats; accepted because the head+tail split was a documented source of model confusion on JSON / drawio outputs and the new path preserves the *meaning* across both ends.
+
+### 2026-05-22 — Retire `run_shell`; replace with `execute_script` + `read_file` + `az_rest_api.body_file`
+
+**Replaces Phase 5 Track 5B's "sandbox `run_shell` in ACI" plan.** A 14-conversation audit of `run_shell` usage (47 invocations, the only field we have) found: ~25% of calls were users explicitly demanding "run a shell command" (test traffic, not real use), ~25% were the model bypassing dedicated Azure tools (`az` invoked through `run_shell` because the typed tool didn't expose a needed feature), ~25% were Nexus self-startup (already retired in spirit by §5 2026-05-15 "Removed deploy-backend etc. skills"), and the rest were `.ps1` execution from `output/scripts/`. The single most consequential cascade (conv 257, Logic App PATCH) failed seven times because `az_rest_api` had no way to take a request body from a file and there was no `read_file` symmetric with `generate_file`. Closing those two typed-tool gaps removes every legitimate driver of `run_shell`. The remaining script-execution surface is replaced by `execute_script(path)`, scoped to `output/scripts/`, shell inferred from extension (`.ps1` → PowerShell, `.sh` → bash), no inline command parameter, no `args` parameter (deferred — observed legitimate scripts were self-contained; add when ≥3 real conversations demand it).
+**Trade-off**: ACI sandbox dropped (saves operational surface — image build, network policy, cold-start latency); the deletion is hard to reverse but the new surfaces are strict subsets of what `run_shell` did, so any genuinely-needed shell use case must surface as a typed-tool gap that gets closed deliberately. The structural narrowing replaces a perimeter (sandbox) with structural impossibility (no command string to pass), which is the OWASP LLM06 "Excessive Agency" mitigation done at the interface rather than the runtime.
+
+### 2026-05-23 — AWS icon support in drawio diagrammer
+
+Adds AWS service mappings (~30 spanning `compute / network / database / storage / security / identity` mingrammer namespaces) to `_drawio_emitter.py`, with a new `_AWS_ICON_STYLE` template producing `shape=mxgraph.aws4.<service>` — the format `validate_drawio.py:125` already advertises but the emitter never produced. Architects draw weekly AWS diagrams manually today because `from diagrams.aws.*` imports fall through to the rectangle style and then block on `[icon-style]` validator violations; same PR adds a `prometheus-client` counter on diagram-tool mingrammer imports so the AWS-coverage follow-ups (`analytics / ml / devtools / business` namespaces) and GCP support (~30 services, quarterly use) are prioritized from real usage data within two sprints.
+**Trade-off**: mingrammer's AWS class names drift from AWS's actual icon catalog so some mappings are approximations and the Architect SKILL.md's "Guaranteed-good imports" section must list the curated subset. Rejected alternative — full AWS+GCP parity across ~130 mappings before merging — would leave AWS architects manually drawing for another quarter.
 
 ---
 

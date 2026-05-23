@@ -6,15 +6,15 @@ import type { ApprovalInfo } from '../types';
 
 const mockApproval: ApprovalInfo = {
   approval_id: 'ap-test-1',
-  tool_name: 'run_shell',
-  args: { command: 'ls -la', reason: 'List directory contents' },
+  tool_name: 'execute_script',
+  args: { path: 'list-resources.ps1', reason: 'List directory contents' },
   reason: 'Need to list directory contents',
 };
 
 describe('ApprovalCard', () => {
   it('renders tool name', () => {
     render(<ApprovalCard approval={mockApproval} onAction={() => {}} />);
-    expect(screen.getByText(/run_shell/)).toBeInTheDocument();
+    expect(screen.getByText(/execute_script/)).toBeInTheDocument();
   });
 
   it('renders reason', () => {
@@ -46,6 +46,6 @@ describe('ApprovalCard', () => {
 
   it('displays args as JSON', () => {
     render(<ApprovalCard approval={mockApproval} onAction={() => {}} />);
-    expect(screen.getByText(/ls -la/)).toBeInTheDocument();
+    expect(screen.getByText(/list-resources\.ps1/)).toBeInTheDocument();
   });
 });

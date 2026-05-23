@@ -631,11 +631,11 @@ def test_strip_retry_messages_removes_matching_tool():
 def test_strip_retry_messages_leaves_other_tools_alone():
     msgs = [
         {"role": "system", "content": "[RETRY STRATEGY 1/3 — Fix syntax] The `az_cli` call failed..."},
-        {"role": "system", "content": "[RETRY STRATEGY 1/3 — Fix syntax] The `run_shell` call failed..."},
+        {"role": "system", "content": "[RETRY STRATEGY 1/3 — Fix syntax] The `execute_script` call failed..."},
     ]
     removed = _strip_retry_messages_for_tool(msgs, "az_cli")
     assert removed == 1
-    assert "run_shell" in msgs[0]["content"]
+    assert "execute_script" in msgs[0]["content"]
 
 
 def test_strip_retry_messages_no_op_when_none_present():

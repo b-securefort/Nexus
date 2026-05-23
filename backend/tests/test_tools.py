@@ -22,12 +22,16 @@ init_tools()
 
 class TestToolRegistry:
     def test_init_tools_registers_all(self):
-        init_tools()
+        # init_tools() was already called at module top — calling it again
+        # would re-trigger the `from python_diagram import _DIAGRAM_IMPORTS`
+        # path and, when another test in the same session has incidentally
+        # cleared the prometheus registry, surface a flake. We assert against
+        # the registry that the single top-level init() produced.
         expected = {
             "read_kb_file", "search_kb", "search_kb_semantic", "search_kb_hybrid",
-            "fetch_ms_docs", "run_shell",
+            "fetch_ms_docs", "execute_script",
             "az_cli", "az_resource_graph", "az_cost_query", "az_monitor_logs",
-            "az_rest_api", "generate_file", "az_devops", "az_policy_check",
+            "az_rest_api", "generate_file", "read_file", "az_devops", "az_policy_check",
             "az_advisor", "network_test", "web_fetch", "render_drawio",
             "validate_drawio",
             "patch_drawio_cell", "ask_user",
@@ -78,9 +82,9 @@ class TestToolSchemas:
             assert "properties" in params
 
     def test_approval_tools_flagged(self):
-        for name in ("run_shell", "az_cli"):
+        for name in ("execute_script", "az_cli"):
             assert TOOL_REGISTRY[name].requires_approval is True
-        for name in ("read_kb_file", "search_kb", "search_kb_semantic", "fetch_ms_docs"):
+        for name in ("read_kb_file", "read_file", "search_kb", "search_kb_semantic", "fetch_ms_docs"):
             assert TOOL_REGISTRY[name].requires_approval is False
 
 
@@ -209,28 +213,125 @@ class TestFetchMsDocsTool:
         assert "Error" in result
 
 
-class TestRunShellTool:
-    def test_shell_executes_command(self):
-        tool = get_tool("run_shell")
-        result = tool.execute({"command": "echo hello", "reason": "test"}, _USER)
-        assert "hello" in result
+class TestExecuteScriptTool:
+    """Smoke tests for the path-only script runner that replaced run_shell."""
+
+    @staticmethod
+    def _write_script(name: str, body: str) -> None:
+        from pathlib import Path
+        scripts_dir = Path("output") / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / name).write_text(body, encoding="utf-8")
+
+    @staticmethod
+    def _cleanup(name: str) -> None:
+        from pathlib import Path
+        (Path("output") / "scripts" / name).unlink(missing_ok=True)
+
+    def test_path_required(self):
+        tool = get_tool("execute_script")
+        result = tool.execute({"reason": "test"}, _USER)
+        assert isinstance(result, str)
+        assert "path is required" in result
+
+    def test_path_traversal_blocked(self):
+        tool = get_tool("execute_script")
+        result = tool.execute({"path": "../../etc/passwd", "reason": "t"}, _USER)
+        assert "path traversal" in result or "escapes" in result
+
+    def test_unknown_extension_rejected(self):
+        tool = get_tool("execute_script")
+        # Create a .txt that exists so the extension check is the gate, not file-not-found.
+        self._write_script("not-a-script.txt", "hello")
+        try:
+            result = tool.execute({"path": "not-a-script.txt", "reason": "t"}, _USER)
+            assert "extension" in result
+        finally:
+            self._cleanup("not-a-script.txt")
+
+    def test_script_not_found(self):
+        tool = get_tool("execute_script")
+        result = tool.execute({"path": "does-not-exist.ps1", "reason": "t"}, _USER)
+        assert "not found" in result
+
+    def test_runs_real_script(self):
+        """End-to-end: write a tiny script then execute it. Uses .sh on POSIX
+        and .ps1 on Windows so each platform exercises a real interpreter."""
+        import sys
+        tool = get_tool("execute_script")
+        if sys.platform == "win32":
+            self._write_script("hello.ps1", "Write-Output 'hello-from-script'")
+            try:
+                result = tool.execute({"path": "hello.ps1", "reason": "t"}, _USER)
+            finally:
+                self._cleanup("hello.ps1")
+        else:
+            self._write_script("hello.sh", "#!/usr/bin/env bash\necho hello-from-script")
+            try:
+                result = tool.execute({"path": "hello.sh", "reason": "t"}, _USER)
+            finally:
+                self._cleanup("hello.sh")
+        assert "hello-from-script" in result
         assert "Exit code: 0" in result
 
-    def test_shell_timeout_capped(self):
-        tool = get_tool("run_shell")
-        # Timeout should be capped at 120
+    def test_timeout_string_does_not_crash(self):
+        tool = get_tool("execute_script")
         result = tool.execute(
-            {"command": "echo ok", "reason": "test", "timeout_seconds": 999}, _USER
+            {"path": "x.ps1", "reason": "t", "timeout_seconds": "abc"}, _USER
         )
-        assert "Exit code: 0" in result
+        assert isinstance(result, str)
+        assert "must be a positive integer" in result
 
-    def test_shell_bad_command(self):
-        tool = get_tool("run_shell")
-        result = tool.execute(
-            {"command": "nonexistent_command_xyz_123", "reason": "test"}, _USER
-        )
-        assert "Exit code:" in result
-        assert int(result.split("Exit code: ")[1].split("\n")[0]) != 0
+
+class TestReadFileTool:
+    """ReadFileTool — sandboxed to output/. Symmetric with generate_file."""
+
+    @staticmethod
+    def _write(name: str, body: str) -> None:
+        from pathlib import Path
+        (Path("output") / name).parent.mkdir(parents=True, exist_ok=True)
+        (Path("output") / name).write_text(body, encoding="utf-8")
+
+    @staticmethod
+    def _cleanup(name: str) -> None:
+        from pathlib import Path
+        (Path("output") / name).unlink(missing_ok=True)
+
+    def test_path_required(self):
+        tool = get_tool("read_file")
+        result = tool.execute({}, _USER)
+        assert "path is required" in result
+
+    def test_path_traversal_blocked(self):
+        tool = get_tool("read_file")
+        result = tool.execute({"path": "../app/main.py"}, _USER)
+        assert "path traversal" in result or "escapes" in result
+
+    def test_nonexistent_returns_error(self):
+        tool = get_tool("read_file")
+        result = tool.execute({"path": "definitely-missing-file.txt"}, _USER)
+        assert "not found" in result
+
+    def test_reads_written_file(self):
+        tool = get_tool("read_file")
+        self._write("read-file-smoke.json", '{"x": 1}')
+        try:
+            result = tool.execute({"path": "read-file-smoke.json"}, _USER)
+            assert '{"x": 1}' in result
+            assert "output/read-file-smoke.json" in result
+        finally:
+            self._cleanup("read-file-smoke.json")
+
+    def test_truncates_at_max_bytes(self):
+        tool = get_tool("read_file")
+        self._write("trunc.txt", "A" * 100)
+        try:
+            result = tool.execute({"path": "trunc.txt", "max_bytes": 10}, _USER)
+            # Header + 10 'A's
+            assert "showing first 10" in result
+            assert result.count("A") == 10
+        finally:
+            self._cleanup("trunc.txt")
 
 
 class TestAzCliTool:
@@ -244,122 +345,6 @@ class TestAzCliTool:
 # Cases below try to break each tool with malformed, hostile, or edge-case
 # input. They should all either return a clean "Error: ..." string OR run the
 # real command — never raise an unhandled exception or crash the process.
-
-
-class TestRunShellAdversarial:
-    """Adversarial inputs for run_shell. Every case must return a string;
-    none may raise.
-    """
-
-    def test_empty_command_runs_cleanly(self):
-        """R1: empty command — should execute as a no-op, not crash."""
-        tool = get_tool("run_shell")
-        result = tool.execute({"command": "", "reason": "test"}, _USER)
-        assert isinstance(result, str)
-        assert "Exit code:" in result
-
-    def test_command_is_none(self):
-        """R2: command=None — must not raise; must return a clean error."""
-        tool = get_tool("run_shell")
-        result = tool.execute({"command": None, "reason": "test"}, _USER)
-        assert isinstance(result, str)
-        assert "Error" in result
-
-    def test_missing_command_key(self):
-        """R3: command key missing — must not raise."""
-        tool = get_tool("run_shell")
-        result = tool.execute({"reason": "test"}, _USER)
-        assert isinstance(result, str)
-        # Empty default should be treated like empty command — runs no-op
-        # OR an explicit error. Either is fine; crash is not.
-        assert "Error" in result or "Exit code:" in result
-
-    def test_negative_timeout_does_not_crash(self):
-        """R4: negative timeout — subprocess.run raises ValueError on negative.
-        The tool must intercept and return a clean error."""
-        tool = get_tool("run_shell")
-        result = tool.execute(
-            {"command": "echo hi", "reason": "test", "timeout_seconds": -1},
-            _USER,
-        )
-        assert isinstance(result, str)
-        assert "Error" in result or "Exit code:" in result
-
-    def test_zero_timeout_does_not_crash(self):
-        """R5: zero timeout — same risk as negative."""
-        tool = get_tool("run_shell")
-        result = tool.execute(
-            {"command": "echo hi", "reason": "test", "timeout_seconds": 0},
-            _USER,
-        )
-        assert isinstance(result, str)
-        assert "Error" in result or "Exit code:" in result
-
-    def test_string_timeout_does_not_crash(self):
-        """R6: timeout_seconds as a string. min('abc', 120) raises TypeError —
-        the tool must coerce or reject, never propagate."""
-        tool = get_tool("run_shell")
-        result = tool.execute(
-            {"command": "echo hi", "reason": "test", "timeout_seconds": "abc"},
-            _USER,
-        )
-        assert isinstance(result, str)
-        assert "Error" in result or "Exit code:" in result
-
-    def test_actual_timeout_path(self):
-        """R7: command that runs longer than the timeout — must terminate
-        with a clean timeout error, not block forever."""
-        import sys
-        tool = get_tool("run_shell")
-        # Use PowerShell on Windows for cross-platform sleep.
-        if sys.platform == "win32":
-            args = {"command": "Start-Sleep -Seconds 5", "reason": "test",
-                    "shell": "powershell", "timeout_seconds": 2}
-        else:
-            args = {"command": "sleep 5", "reason": "test", "timeout_seconds": 2}
-        result = tool.execute(args, _USER)
-        assert isinstance(result, str)
-        assert "timed out" in result.lower() or "Exit code:" in result
-
-    def test_long_stdout_is_truncated(self):
-        """R8: stdout larger than the cap should be truncated with a marker."""
-        import sys
-        tool = get_tool("run_shell")
-        # Generate ~12KB of output. Cap is 8192.
-        if sys.platform == "win32":
-            cmd = "1..2000 | ForEach-Object { 'X' * 10 }"
-            args = {"command": cmd, "reason": "test", "shell": "powershell"}
-        else:
-            args = {"command": "yes X | head -c 12000", "reason": "test"}
-        result = tool.execute(args, _USER)
-        assert isinstance(result, str)
-        # If truncated, marker is present. If shell can't produce 12KB, that's
-        # still a pass (no crash).
-        assert "truncated" in result or len(result) <= 8500
-
-    def test_nonzero_exit_reported(self):
-        """R9: command that returns non-zero — exit code should appear."""
-        import sys
-        tool = get_tool("run_shell")
-        if sys.platform == "win32":
-            args = {"command": "exit 7", "reason": "test", "shell": "powershell"}
-        else:
-            args = {"command": "exit 7", "reason": "test"}
-        result = tool.execute(args, _USER)
-        assert isinstance(result, str)
-        assert "Exit code: 7" in result
-
-    def test_invalid_shell_enum(self):
-        """R10: shell value outside enum — must not crash; must run
-        deterministically (default behavior is acceptable)."""
-        tool = get_tool("run_shell")
-        result = tool.execute(
-            {"command": "echo hi", "reason": "test", "shell": "bash-haxor"},
-            _USER,
-        )
-        assert isinstance(result, str)
-        # Falls through to default shell — should still run echo or error cleanly
-        assert "Error" in result or "Exit code:" in result
 
 
 class TestAzCliAdversarial:

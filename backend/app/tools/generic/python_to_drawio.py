@@ -86,14 +86,59 @@ def _validate_ast(tree: ast.AST) -> str | None:
     return None
 
 
+# Direction-aware default graph_attr values. In Graphviz, `nodesep` separates
+# siblings along the rank axis (perpendicular to flow) and `ranksep` separates
+# layers along the flow axis. In TB layouts that means nodesep is horizontal
+# and ranksep is vertical; in LR they swap. The validator's _MIN_HORIZ_GAP=80
+# and _MIN_VERT_GAP=60 (validate_drawio.py) require >=80px in the horizontal
+# direction (where label TEXT spans) and >=60px in the vertical direction
+# (where icons stack), so the rank-perpendicular axis always needs the larger
+# value. Bumped values kick in above _NODE_COUNT_BUMP_THRESHOLD nodes.
+_NODE_COUNT_BUMP_THRESHOLD = 12
+_GRAPH_ATTR_DEFAULTS: dict[str, dict[str, tuple[str, str]]] = {
+    # direction: (small_<=12 nodes, large_>12 nodes) -> (nodesep, ranksep)
+    "TB": {"small": ("1.0", "0.8"), "large": ("1.5", "1.2")},
+    "BT": {"small": ("1.0", "0.8"), "large": ("1.5", "1.2")},
+    "LR": {"small": ("0.8", "1.0"), "large": ("1.2", "1.5")},
+    "RL": {"small": ("0.8", "1.0"), "large": ("1.2", "1.5")},
+}
+
+
+def _diagram_direction(call: ast.Call) -> str:
+    """Return the static `direction` kwarg on a Diagram() call, defaulting to
+    mingrammer's implicit "LR" when absent or non-constant."""
+    for kw in call.keywords:
+        if kw.arg == "direction" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            d = kw.value.value.upper()
+            if d in _GRAPH_ATTR_DEFAULTS:
+                return d
+            return "LR"
+    return "LR"
+
+
+def _count_body_calls(body: list[ast.stmt]) -> int:
+    """Count ast.Call sites inside the Diagram body. We count all calls (not
+    just Diagrams-Node ones) — false positives bias upward, which is safer for
+    the bump threshold."""
+    total = 0
+    for stmt in body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Call):
+                total += 1
+    return total
+
+
 class _DiagramKwargInjector(ast.NodeTransformer):
     """Force show=False on every Diagram() call so the script doesn't pop a
-    viewer or rely on the filename arg. The drawio emitter ignores
-    outformat/filename — only `name` (the title) and the body matter."""
+    viewer or rely on the filename arg, and inject direction-aware default
+    `graph_attr` values when the user did not pass any. The drawio emitter
+    ignores outformat/filename — only `name` (the title), the body, and the
+    layout-relevant kwargs matter."""
 
     def __init__(self) -> None:
         self.found = 0
         self.title: str | None = None
+        self.direction: str | None = None
 
     def visit_With(self, node: ast.With) -> ast.With:
         self.generic_visit(node)
@@ -102,9 +147,28 @@ class _DiagramKwargInjector(ast.NodeTransformer):
             if not (isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name) and ctx.func.id == "Diagram"):
                 continue
             self.found += 1
+            # Capture direction BEFORE we strip the kwargs.
+            direction = _diagram_direction(ctx)
+            if self.direction is None:
+                self.direction = direction
+            has_graph_attr = any(kw.arg == "graph_attr" for kw in ctx.keywords)
             # Strip show / filename / outformat — we control rendering.
             ctx.keywords = [kw for kw in ctx.keywords if kw.arg not in {"show", "filename", "outformat"}]
             ctx.keywords.append(ast.keyword(arg="show", value=ast.Constant(False)))
+            # Inject direction-aware graph_attr defaults only if the user
+            # didn't pass one. Bumped values kick in for diagrams with more
+            # than _NODE_COUNT_BUMP_THRESHOLD nodes inside the Diagram body.
+            if not has_graph_attr:
+                node_count = _count_body_calls(node.body)
+                size_bucket = "large" if node_count > _NODE_COUNT_BUMP_THRESHOLD else "small"
+                nodesep, ranksep = _GRAPH_ATTR_DEFAULTS[direction][size_bucket]
+                ctx.keywords.append(ast.keyword(
+                    arg="graph_attr",
+                    value=ast.Dict(
+                        keys=[ast.Constant("nodesep"), ast.Constant("ranksep")],
+                        values=[ast.Constant(nodesep), ast.Constant(ranksep)],
+                    ),
+                ))
             # Capture the title from the first positional arg, if any.
             if self.title is None and ctx.args:
                 first = ctx.args[0]

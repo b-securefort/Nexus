@@ -201,6 +201,51 @@ _MINGRAMMER_TO_AZURE2: dict[str, str] = {
     "onprem/client/client.png":              "img/lib/azure2/general/Globe.svg",
 }
 
+# Maps mingrammer AWS image paths to draw.io's `mxgraph.aws4.<service>` stencil
+# names. MVP coverage spans the six namespaces AWS architects use weekly:
+# compute, network, database, storage, security, identity. Names were
+# cross-checked against the drawio stencil catalog in
+# kb_data/kb/drawio/awsicons_drawio.txt — drawio uses short snake_case names
+# (e.g. `ecs`, `eks`, `s3`) rather than the long mingrammer class names.
+_MINGRAMMER_TO_AWS4: dict[str, str] = {
+    # compute
+    "aws/compute/ec2.png":                              "ec2",
+    "aws/compute/elastic-container-service.png":        "ecs",
+    "aws/compute/elastic-kubernetes-service.png":       "eks",
+    "aws/compute/fargate.png":                          "fargate",
+    "aws/compute/lambda.png":                           "lambda",
+    "aws/compute/application-auto-scaling.png":         "application_auto_scaling",
+    "aws/compute/auto-scaling.png":                     "auto_scaling",
+    # network
+    "aws/network/vpc.png":                              "vpc",
+    "aws/network/elastic-load-balancing.png":           "elastic_load_balancing",
+    "aws/network/elb-application-load-balancer.png":    "application_load_balancer",
+    "aws/network/elb-network-load-balancer.png":        "network_load_balancer",
+    "aws/network/route-53.png":                         "route_53",
+    "aws/network/cloudfront.png":                       "cloudfront",
+    "aws/network/api-gateway.png":                      "api_gateway",
+    "aws/network/nat-gateway.png":                      "nat_gateway",
+    # database
+    "aws/database/rds.png":                             "rds",
+    "aws/database/dynamodb.png":                        "dynamodb",
+    "aws/database/aurora.png":                          "aurora",
+    "aws/database/elasticache.png":                     "elasticache",
+    "aws/database/redshift.png":                        "redshift",
+    # storage
+    "aws/storage/simple-storage-service-s3.png":        "s3",
+    "aws/storage/elastic-block-store-ebs.png":          "elastic_block_store",
+    "aws/storage/elastic-file-system-efs.png":          "elastic_file_system",
+    # security
+    "aws/security/identity-and-access-management-iam.png": "identity_and_access_management",
+    "aws/security/key-management-service.png":          "key_management_service",
+    "aws/security/waf.png":                             "waf",
+    "aws/security/secrets-manager.png":                 "secrets_manager",
+    "aws/security/shield.png":                          "shield",
+    # identity — mingrammer ships these under aws.security (no aws.identity
+    # module), so the image path stays under aws/security/.
+    "aws/security/cognito.png":                         "cognito",
+}
+
 # Aliases for AzureGeneric(..., azure_icon="bastions"). Anything not in the
 # mingrammer catalog that the LLM wants to draw goes through here. Keys are
 # lowercase; both singular and plural forms are accepted where applicable.
@@ -322,6 +367,18 @@ def map_icon(image_path: str | None, azure_icon: str | None) -> str | None:
     return None
 
 
+def map_aws_icon(image_path: str | None) -> str | None:
+    """Return the `mxgraph.aws4.<service>` name for a mingrammer AWS image
+    path, or None if the path is not in the AWS coverage map."""
+    if not image_path:
+        return None
+    norm = image_path.replace("\\", "/")
+    m = re.search(r"resources/([^/]+/[^/]+/[^/]+\.png)$", norm)
+    if m:
+        return _MINGRAMMER_TO_AWS4.get(m.group(1))
+    return None
+
+
 # --- Style strings -------------------------------------------------------
 #
 # Container styles vary by depth and cluster kind. The detection is keyword-
@@ -331,6 +388,11 @@ _AZURE_ICON_STYLE = (
     "sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;"
     "fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;"
     "verticalAlign=top;align=center;html=1;shape=image;image={image};"
+)
+_AWS_ICON_STYLE = (
+    "sketch=0;outlineConnect=0;fontColor=#1A1A1A;gradientColor=none;"
+    "fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;"
+    "verticalAlign=top;align=center;html=1;shape=mxgraph.aws4.{service};"
 )
 _RECT_FALLBACK_STYLE = (
     "rounded=1;whiteSpace=wrap;html=1;fillColor=#F8F8F8;strokeColor=#666666;"
@@ -894,8 +956,11 @@ def emit_drawio(
         rx = n.abs_x - ox
         ry = n.abs_y - oy
         svg = map_icon(n.icon_path, n.azure_icon)
+        aws_service = map_aws_icon(n.icon_path) if not svg else None
         if svg:
             style = _AZURE_ICON_STYLE.format(image=svg)
+        elif aws_service:
+            style = _AWS_ICON_STYLE.format(service=aws_service)
         else:
             style = _RECT_FALLBACK_STYLE
         out.append(
@@ -914,6 +979,10 @@ def emit_drawio(
         eid = _safe_id(e.id)
         style = _EDGE_STYLE_DASHED if e.style_kind == "dashed" else _EDGE_STYLE
         # Extract numbered badge if the label starts with a digit followed by space.
+        # When a badge is split off, the visible edge label is the remaining text
+        # AFTER the number-token — otherwise drawio would render both the green
+        # badge AND the literal "1 user msg", which visually overlap on every
+        # numbered-flow diagram.
         label = e.label
         badge_value: str | None = None
         m = re.match(r"^\s*(\d+)\s+(.+)$", label)

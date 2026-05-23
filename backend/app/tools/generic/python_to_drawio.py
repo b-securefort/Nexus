@@ -27,7 +27,10 @@ from pathlib import Path
 from app.auth.models import User
 from app.tools.base import SUBPROCESS_FLAGS, Tool
 from app.tools.generic._drawio_emitter import pipeline as _pipeline
-from app.tools.generic.python_diagram import _subprocess_env  # reuse the Windows-PATH fixup
+from app.tools.generic.python_diagram import (
+    _DIAGRAM_IMPORTS,  # shared Counter — defined in python_diagram.py
+    _subprocess_env,  # reuse the Windows-PATH fixup
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,12 @@ def _validate_ast(tree: ast.AST) -> str | None:
             root = node.module.split(".")[0]
             if root not in _ALLOWED_IMPORT_ROOTS:
                 return f"forbidden import: 'from {node.module}'. Only `from diagrams...` imports are allowed."
+            parts = node.module.split(".", 2)
+            if len(parts) >= 2:
+                _DIAGRAM_IMPORTS.labels(
+                    tool="generate_drawio_from_python",
+                    namespace=parts[1],
+                ).inc()
         elif isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             return f"forbidden builtin: '{node.id}'"
         elif isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_DUNDERS:

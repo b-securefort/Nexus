@@ -19,10 +19,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+from prometheus_client import Counter
+
 from app.auth.models import User
 from app.tools.base import SUBPROCESS_FLAGS, Tool
 
 logger = logging.getLogger(__name__)
+
+# Shared Counter, re-exported and reused by `python_to_drawio.py`. The AWS
+# rollout intentionally covers only a subset of mingrammer's namespaces
+# (compute / network / database / storage / security / identity) — this
+# counter feeds the data we need to decide whether to ship analytics / ml /
+# devtools / business follow-ups and GCP parity from real usage data rather
+# than guesses.
+_DIAGRAM_IMPORTS = Counter(
+    "nexus_diagram_imports_total",
+    "Mingrammer namespace imports seen by the diagrammer's AST validator",
+    ["tool", "namespace"],
+)
 
 _OUTPUT_DIR = Path("output")
 _RENDER_TIMEOUT_S = 60
@@ -99,6 +113,12 @@ def _validate_ast(tree: ast.AST) -> str | None:
                     f"forbidden import: 'from {node.module}'. Only "
                     "`from diagrams...` imports are allowed."
                 )
+            parts = node.module.split(".", 2)
+            if len(parts) >= 2:
+                _DIAGRAM_IMPORTS.labels(
+                    tool="generate_python_diagram",
+                    namespace=parts[1],
+                ).inc()
         elif isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             return f"forbidden builtin: '{node.id}'"
         elif isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_DUNDERS:

@@ -239,12 +239,14 @@ def test_default_graph_attrs_skipped_when_user_passed_graph_attr():
 # ── telemetry counter ────────────────────────────────────────────────────
 
 
-def test_validate_ast_increments_diagram_imports_counter():
-    """Every `from diagrams.<namespace>...` import the validator walks
-    increments nexus_diagram_imports_total with the namespace label, so
-    /metrics surfaces AWS/Azure/GCP usage for coverage-prioritization."""
+def test_validate_ast_increments_diagram_imports_counter_with_subnamespace():
+    """`from diagrams.aws.compute import EC2` increments the counter under
+    `namespace="aws/compute"` — the sub-namespace granularity is what drives
+    the AWS coverage follow-up decision (analytics / ml / devtools / business)
+    and the GCP per-namespace priorities. `sum by (tool)` over the label
+    family recovers the cloud-level rollup."""
     before = _DIAGRAM_IMPORTS.labels(
-        tool="generate_drawio_from_python", namespace="aws"
+        tool="generate_drawio_from_python", namespace="aws/compute"
     )._value.get()
     src = (
         "from diagrams import Diagram\n"
@@ -254,9 +256,37 @@ def test_validate_ast_increments_diagram_imports_counter():
     )
     assert _validate_ast(ast.parse(src)) is None
     after = _DIAGRAM_IMPORTS.labels(
-        tool="generate_drawio_from_python", namespace="aws"
+        tool="generate_drawio_from_python", namespace="aws/compute"
     )._value.get()
     assert after - before == 1
+
+
+def test_validate_ast_increments_separate_subnamespaces_independently():
+    """A diagram script that pulls from two AWS sub-namespaces increments
+    two distinct label combinations so per-sub-namespace usage is visible
+    in /metrics (not collapsed into a single `namespace=aws` rollup)."""
+    src = (
+        "from diagrams import Diagram\n"
+        "from diagrams.aws.compute import EC2\n"
+        "from diagrams.aws.network import VPC\n"
+        "with Diagram('x'):\n"
+        "    EC2('w'); VPC('n')\n"
+    )
+    before_compute = _DIAGRAM_IMPORTS.labels(
+        tool="generate_drawio_from_python", namespace="aws/compute"
+    )._value.get()
+    before_network = _DIAGRAM_IMPORTS.labels(
+        tool="generate_drawio_from_python", namespace="aws/network"
+    )._value.get()
+    assert _validate_ast(ast.parse(src)) is None
+    after_compute = _DIAGRAM_IMPORTS.labels(
+        tool="generate_drawio_from_python", namespace="aws/compute"
+    )._value.get()
+    after_network = _DIAGRAM_IMPORTS.labels(
+        tool="generate_drawio_from_python", namespace="aws/network"
+    )._value.get()
+    assert after_compute - before_compute == 1
+    assert after_network - before_network == 1
 
 
 def test_validate_ast_does_not_increment_for_root_diagrams_import():

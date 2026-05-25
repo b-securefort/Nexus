@@ -149,22 +149,66 @@ from diagrams.onprem.client import Users, Client
 
 For services without a mingrammer class use `AzureGeneric("Display Name", azure_icon="<kind>")`: `bastion`, `waf_policy`, `private_endpoint`, `private_link`, `managed_identity`, `entra_id`, `conditional_access`, `defender`, `sentinel`, `policy`, `blueprint`, `arc`, `recovery_vault`, `openai`, `cognitive`, `ml`, `ai_search`, `apim`, `service_bus`, `event_grid`, `event_hub`, `app_config`, `subscription`, `resource_group`, `globe`.
 
-**Guaranteed-good AWS imports** (use these exact lines — the drawio emitter maps each to a `mxgraph.aws4.<service>` stencil):
+**Guaranteed-good AWS imports** (use these exact lines — the drawio emitter maps each to a `mxgraph.aws4.<service>` stencil with the correct AWS service-group color):
 
 ```python
-from diagrams.aws.compute import EC2, ECS, EKS, Fargate, Lambda, AutoScaling
+from diagrams.aws.compute import EC2, ECS, EKS, Fargate, Lambda, AutoScaling, Batch
 from diagrams.aws.network import (
     VPC, ELB, ALB, NLB, Route53, CloudFront, APIGateway, NATGateway,
-    TransitGateway,
+    TransitGateway, ClientVpn, SiteToSiteVpn, GlobalAccelerator, Privatelink,
 )
-from diagrams.aws.database import RDS, Dynamodb, Aurora, ElastiCache, Redshift
-from diagrams.aws.storage import S3, EBS, EFS
+from diagrams.aws.database import (
+    RDS, Dynamodb, Aurora, ElastiCache, Redshift, Neptune, Timestream,
+)
+from diagrams.aws.storage import S3, EBS, EFS, FSx, StorageGateway, Backup
 from diagrams.aws.security import (
     IAM, KMS, WAF, SecretsManager, Shield, Cognito, IdentityAndAccessManagementIam,
+    Guardduty, SecurityHub, Inspector, Macie, NetworkFirewall, FirewallManager,
+    CertificateManager,
 )
+from diagrams.aws.integration import (
+    Eventbridge, StepFunctions, MQ, Appsync,
+    SimpleNotificationServiceSns, SimpleQueueServiceSqs,
+)
+from diagrams.aws.analytics import (
+    Athena, Kinesis, KinesisDataFirehose, KinesisDataStreams, EMR, Glue,
+    Quicksight, AmazonOpensearchService, LakeFormation, ManagedStreamingForKafka,
+)
+from diagrams.aws.ml import (
+    Sagemaker, Bedrock, Comprehend, Rekognition, Polly, Lex,
+    Translate, Transcribe, Textract, Kendra,
+)
+from diagrams.aws.management import (
+    Cloudwatch, CloudwatchLogs, Cloudformation, Cloudtrail, Config,
+    Organizations, SystemsManager, ControlTower, TrustedAdvisor,
+    WellArchitectedTool, ServiceCatalog, AutoScaling as MgmtAutoScaling,
+)
+from diagrams.aws.devtools import (
+    Codepipeline, Codebuild, Codecommit, Codedeploy, Codeartifact,
+    CloudDevelopmentKit, XRay,
+)
+from diagrams.aws.iot import (
+    IotCore, IotGreengrass, IotEvents, IotAnalytics, IotSitewise, IotDeviceManagement,
+)
+from diagrams.aws.general import InternetGateway, User, Users
 ```
 
-AWS coverage is intentionally limited to these six namespaces (compute, network, database, storage, security, identity-via-security) in this rollout. Services outside this set will fall through to a labelled rectangle and trip the `[icon-style]` validator rule — pick a near-equivalent from the list above or call out the gap so the user can decide whether to wait for the follow-up PR.
+AWS coverage in this rollout matches the Azure depth — 12 namespaces, ~90 mapped services. A few mappings substitute the catalog's actual stencil names: `AmazonOpensearchService` and `ElasticsearchService` both render as the legacy `elasticsearch_service` shape (catalog has no clean `opensearch` root); `IotGreengrass` renders as `greengrass`; `DocumentDB` renders as the `_with_mongodb_compatibility` variant. Services outside the lists above (e.g. `aws.quantum`, `aws.satellite`, `aws.mobile`, and the long tail of analytics/management sub-products) fall through to a labelled rectangle and trip `[icon-style]` — pick a near-equivalent from the list or call out the gap.
+
+**AWS architectural placement** (parallel to the Azure table above; same network-plane / control-plane / PaaS-plane reasoning):
+
+| Resource | Where it lives |
+|---|---|
+| EC2 / EKS / ECS / Fargate / Lambda (in-VPC) | Inside the appropriate subnet cluster |
+| ALB / NLB / NATGateway / NetworkFirewall (NVA) | Inside the public or inspection subnet cluster |
+| TransitGateway | Inside its OWN subnet inside the **hub** VPC — not in any spoke; it's the cross-VPC fabric every spoke routes through |
+| RDS / Aurora / ElastiCache / Redshift (data tier, VPC-resident) | Inside a private data-subnet cluster of the consuming VPC |
+| DynamoDB / S3 / SecretsManager / KMS / SystemsManager Parameter Store | Top-level (PaaS / control plane) — accessed via VPC endpoint inside the consuming subnet if private |
+| Cognito / IAM / IdentityAndAccessManagementIam | Top-level (identity plane) — regional, never subnet-resident |
+| Route53 / CloudFront / WAF / Shield / APIGateway (regional) | Top-level "Edge plane" cluster — drawn before the hub VPC in LR diagrams |
+| Cloudwatch / CloudwatchLogs / Cloudtrail / Config | Inside a `Cluster("Observability")` at top level — never inside a VPC |
+| Codepipeline / Codebuild / Codecommit / Codedeploy | Top-level "DevTools plane" cluster — CI/CD operates outside the workload VPCs |
+| WAF / Shield as attached protections | Don't model as traffic hops — use a dashed `Edge(label="protects xyz")` from the protection to the protected resource |
 
 **Forbidden imports** (these will fail — do not write them): `from diagrams import AzureGeneric`, `Subnet` (it's `Subnets`), `NSG` (use `NetworkSecurityGroupsClassic`), `WAFPolicies` (use AzureGeneric `waf_policy`), `from diagrams.azure.management import Monitor` (module is `monitor`).
 

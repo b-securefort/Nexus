@@ -113,11 +113,24 @@ def _validate_ast(tree: ast.AST) -> str | None:
                     f"forbidden import: 'from {node.module}'. Only "
                     "`from diagrams...` imports are allowed."
                 )
+            # Label format mirrors python_to_drawio: "<cloud>" for bare
+            # `from diagrams.aws import X`, "<cloud>/<sub>" for nested
+            # `from diagrams.aws.compute import X`. Sub-namespace granularity
+            # is required to inform the AWS coverage follow-up (which of
+            # analytics / ml / devtools / business to ship next) and the
+            # GCP per-namespace priorities. `sum by (tool, cloud)` recovers
+            # the coarser cloud-only view at query time.
             parts = node.module.split(".", 2)
-            if len(parts) >= 2:
+            if len(parts) >= 3:
+                ns_label = f"{parts[1]}/{parts[2]}"
+            elif len(parts) == 2:
+                ns_label = parts[1]
+            else:
+                ns_label = None
+            if ns_label:
                 _DIAGRAM_IMPORTS.labels(
                     tool="generate_python_diagram",
-                    namespace=parts[1],
+                    namespace=ns_label,
                 ).inc()
         elif isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             return f"forbidden builtin: '{node.id}'"

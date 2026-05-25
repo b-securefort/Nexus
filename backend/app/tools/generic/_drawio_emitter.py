@@ -242,23 +242,119 @@ _MINGRAMMER_TO_AWS4: dict[str, str] = {
     "aws/security/waf.png":                             "waf",
     "aws/security/secrets-manager.png":                 "secrets_manager",
     "aws/security/shield.png":                          "shield",
+    "aws/security/guardduty.png":                       "guardduty",
+    "aws/security/security-hub.png":                    "security_hub",
+    "aws/security/inspector.png":                       "inspector",
+    "aws/security/macie.png":                           "macie",
+    "aws/security/network-firewall.png":                "network_firewall",
+    "aws/security/firewall-manager.png":                "firewall_manager",
+    "aws/security/certificate-manager.png":             "certificate_manager",
     # identity — mingrammer ships these under aws.security (no aws.identity
     # module), so the image path stays under aws/security/.
     "aws/security/cognito.png":                         "cognito",
+    # integration
+    "aws/integration/eventbridge.png":                  "eventbridge",
+    "aws/integration/step-functions.png":               "step_functions",
+    "aws/integration/mq.png":                           "mq",
+    "aws/integration/appsync.png":                      "appsync",
+    "aws/integration/simple-notification-service-sns.png": "sns",
+    "aws/integration/simple-queue-service-sqs.png":     "sqs",
+    "aws/integration/application-integration.png":      "application_integration",
+    # analytics
+    "aws/analytics/athena.png":                         "athena",
+    "aws/analytics/kinesis.png":                        "kinesis",
+    "aws/analytics/kinesis-data-firehose.png":          "kinesis_data_firehose",
+    "aws/analytics/kinesis-data-streams.png":           "kinesis_data_streams",
+    "aws/analytics/emr.png":                            "emr",
+    "aws/analytics/glue.png":                           "glue",
+    "aws/analytics/quicksight.png":                     "quicksight",
+    # OpenSearch and Elasticsearch share the legacy `elasticsearch_service`
+    # stencil; the catalog has no clean `opensearch` root, only sub-variants.
+    "aws/analytics/amazon-opensearch-service.png":      "elasticsearch_service",
+    "aws/analytics/elasticsearch-service.png":          "elasticsearch_service",
+    "aws/analytics/lake-formation.png":                 "lake_formation",
+    "aws/analytics/managed-streaming-for-kafka.png":    "managed_streaming_for_kafka",
+    # machine learning
+    "aws/ml/sagemaker.png":                             "sagemaker",
+    "aws/ml/bedrock.png":                               "bedrock",
+    "aws/ml/comprehend.png":                            "comprehend",
+    "aws/ml/rekognition.png":                           "rekognition",
+    "aws/ml/polly.png":                                 "polly",
+    "aws/ml/lex.png":                                   "lex",
+    "aws/ml/translate.png":                             "translate",
+    "aws/ml/transcribe.png":                            "transcribe",
+    "aws/ml/textract.png":                              "textract",
+    "aws/ml/kendra.png":                                "kendra",
+    # management / observability / governance
+    "aws/management/cloudwatch.png":                    "cloudwatch",
+    "aws/management/cloudwatch-logs.png":               "cloudwatch_logs",
+    "aws/management/cloudformation.png":                "cloudformation",
+    "aws/management/cloudtrail.png":                    "cloudtrail",
+    "aws/management/config.png":                        "config",
+    "aws/management/organizations.png":                 "organizations",
+    "aws/management/systems-manager.png":               "systems_manager",
+    "aws/management/control-tower.png":                 "control_tower",
+    "aws/management/trusted-advisor.png":               "trusted_advisor",
+    "aws/management/well-architected-tool.png":         "well_architected_tool",
+    "aws/management/service-catalog.png":               "service_catalog",
+    "aws/management/auto-scaling.png":                  "autoscaling",
+    # developer tools — parallel to azure.devops
+    "aws/devtools/codepipeline.png":                    "codepipeline",
+    "aws/devtools/codebuild.png":                       "codebuild",
+    "aws/devtools/codecommit.png":                      "codecommit",
+    "aws/devtools/codedeploy.png":                      "codedeploy",
+    "aws/devtools/codeartifact.png":                    "codeartifact",
+    "aws/devtools/cloud-development-kit.png":           "cloud_development_kit",
+    "aws/devtools/x-ray.png":                           "xray",
+    # iot — IotGreengrass maps to drawio's `greengrass` (no `iot_` prefix in catalog)
+    "aws/iot/iot-core.png":                             "iot_core",
+    "aws/iot/iot-greengrass.png":                       "greengrass",
+    "aws/iot/iot-events.png":                           "iot_events",
+    "aws/iot/iot-analytics.png":                        "iot_analytics",
+    "aws/iot/iot-sitewise.png":                         "iot_sitewise",
+    "aws/iot/iot-device-management.png":                "iot_device_management",
+    # general
+    "aws/general/internet-gateway.png":                 "internet_gateway",
+    "aws/general/user.png":                             "user",
+    "aws/general/users.png":                            "users",
+    # additional compute
+    "aws/compute/batch.png":                            "batch",
+    # additional network
+    "aws/network/client-vpn.png":                       "client_vpn",
+    "aws/network/site-to-site-vpn.png":                 "site_to_site_vpn",
+    "aws/network/global-accelerator.png":               "global_accelerator",
+    "aws/network/privatelink.png":                      "privatelink",
+    # additional database
+    "aws/database/neptune.png":                         "neptune",
+    "aws/database/documentdb-mongodb-compatibility.png": "documentdb_with_mongodb_compatibility",
+    "aws/database/timestream.png":                      "timestream",
+    # additional storage
+    "aws/storage/fsx.png":                              "fsx",
+    "aws/storage/storage-gateway.png":                  "storage_gateway",
+    "aws/storage/backup.png":                           "backup",
 }
 
 # Per-AWS-service-group fill color. AWS4 stencils render as a colored tile
 # with a white icon embedded inside — without a fillColor, the icon is
 # invisible against the default white background (proven by a headless-render
-# smoke test). Colors below match the official AWS architecture-icon palette
-# (REFERENCE.md and Microsoft's AWS+drawio guidance):
-#   compute=orange, network=purple, database=red, storage=green, security=red.
+# smoke test). Colors follow AWS's official architecture-icon palette:
+#   compute=orange, network=purple, database=red, storage=green,
+#   security=red-pink, analytics=purple, ml=teal,
+#   integration & management & iot=magenta, devtools=plum,
+#   general=neutral grey.
 _AWS_GROUP_FILL: dict[str, str] = {
-    "compute":  "#ED7100",
-    "network":  "#8C4FFF",
-    "database": "#C7131F",
-    "storage":  "#7AA116",
-    "security": "#DD344C",
+    "compute":     "#ED7100",
+    "network":     "#8C4FFF",
+    "database":    "#C7131F",
+    "storage":     "#7AA116",
+    "security":    "#DD344C",
+    "analytics":   "#8C4FFF",
+    "ml":          "#01A88D",
+    "integration": "#E7157B",
+    "management":  "#E7157B",
+    "iot":         "#E7157B",
+    "devtools":    "#C925D1",
+    "general":     "#7D8998",
 }
 
 # Aliases for AzureGeneric(..., azure_icon="bastions"). Anything not in the
@@ -416,11 +512,19 @@ _AZURE_ICON_STYLE = (
     "fillColor=#FFFFFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;"
     "verticalAlign=top;align=center;html=1;shape=image;image={image};"
 )
+# AWS4 wrapper-stencil style. `shape=mxgraph.aws4.resourceIcon` renders a
+# rounded colored tile (background = `fillColor`); the embedded `resIcon`
+# stencil draws the service mark in white on top of it. This matches AWS's
+# official "resource icon" visual convention (colored tile, white icon),
+# inverting the earlier flat-icon look (colored icon on transparent tile)
+# which left empty whitespace around services and read as washed-out at
+# small zooms. The validator's `has_vendor_icon` check (`shape=mxgraph.aws4.`
+# substring) still passes because `resourceIcon` is itself an aws4 shape.
 _AWS_ICON_STYLE = (
     "sketch=0;outlineConnect=0;gradientColor=none;dashed=0;"
     "verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;"
-    "fontColor=#1A1A1A;fillColor={fill};strokeColor=#ffffff;"
-    "shape=mxgraph.aws4.{service};"
+    "fontColor=#232F3E;fillColor={fill};strokeColor=#ffffff;"
+    "shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.{service};"
 )
 _RECT_FALLBACK_STYLE = (
     "rounded=1;whiteSpace=wrap;html=1;fillColor=#F8F8F8;strokeColor=#666666;"
@@ -1043,22 +1147,42 @@ def emit_drawio(
             # which Graphviz puts at the midpoint). This is the Microsoft-
             # reference convention: the numbered step lives next to where
             # the step originates, not on top of the label text.
+            #
+            # When a text label survives the badge extraction, the validator's
+            # badge-vs-label-render-zone check (50px horizontal, 40px vertical
+            # around the edge midpoint, see validate_drawio._hint_badge_edge_
+            # label_collision) reliably flags short edges with the default
+            # t=0.30 + 20px perpendicular nudge. Tighten the placement for
+            # those: push the badge further toward the source (smaller t) AND
+            # increase the perpendicular nudge past the 40px threshold so the
+            # badge clears the label render zone on at least one axis.
             bx: int
             by: int
             if e.spline_start and e.spline_end:
                 sx, sy = e.spline_start
                 ex, ey = e.spline_end
-                t = 0.30
-                cx = sx + (ex - sx) * t
-                cy = sy + (ey - sy) * t
-                # Nudge the badge above a horizontal edge or to the side of
-                # a vertical edge so it doesn't sit on top of the line.
                 dx = ex - sx
                 dy = ey - sy
-                if abs(dx) >= abs(dy):
-                    cy -= 20  # horizontal edge — lift badge above the line
+                span = (dx * dx + dy * dy) ** 0.5
+                has_remaining_label = bool(label.strip())
+                # Short labeled edges trigger the tighter placement; longer
+                # edges and label-free badges keep the original heuristic so
+                # we don't move every existing badge to a slightly different
+                # spot for no reason.
+                if has_remaining_label and span < 240:
+                    t = 0.18
+                    perp_horiz = 42
+                    perp_vert = 46
                 else:
-                    cx -= 24  # vertical edge — push badge to the left
+                    t = 0.30
+                    perp_horiz = 20
+                    perp_vert = 24
+                cx = sx + dx * t
+                cy = sy + dy * t
+                if abs(dx) >= abs(dy):
+                    cy -= perp_horiz  # horizontal edge — lift badge above the line
+                else:
+                    cx -= perp_vert  # vertical edge — push badge to the left
                 bx = int(cx - 13)
                 by = int(cy - 13)
             elif e.label_pos is not None:

@@ -74,11 +74,24 @@ def _validate_ast(tree: ast.AST) -> str | None:
             root = node.module.split(".")[0]
             if root not in _ALLOWED_IMPORT_ROOTS:
                 return f"forbidden import: 'from {node.module}'. Only `from diagrams...` imports are allowed."
+            # Label format: "<cloud>" for bare `from diagrams.aws import X`,
+            # "<cloud>/<sub>" for `from diagrams.aws.compute import X`. The
+            # sub-namespace granularity is what drives the AWS coverage
+            # follow-up decision (analytics / ml / devtools / business) and
+            # the GCP per-namespace priorities — without it we'd only know
+            # the cloud-level rollup. `sum by (tool, cloud)` recovers the
+            # coarser view from any label-aware Prometheus query.
             parts = node.module.split(".", 2)
-            if len(parts) >= 2:
+            if len(parts) >= 3:
+                ns_label = f"{parts[1]}/{parts[2]}"
+            elif len(parts) == 2:
+                ns_label = parts[1]
+            else:
+                ns_label = None
+            if ns_label:
                 _DIAGRAM_IMPORTS.labels(
                     tool="generate_drawio_from_python",
-                    namespace=parts[1],
+                    namespace=ns_label,
                 ).inc()
         elif isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             return f"forbidden builtin: '{node.id}'"

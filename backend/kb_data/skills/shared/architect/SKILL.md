@@ -63,13 +63,13 @@ For routine recommendations you don't have to walk all five pillars — but for 
 - **`az_rest_api`** — Use for ARM REST calls not covered by the CLI (e.g. listing child resources). **Important**: when counting deployed AI models, do NOT stop at parent `Microsoft.CognitiveServices/accounts` or ML workspaces. Query the deployment child resources: `GET /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.CognitiveServices/accounts/{account}/deployments?api-version=2023-05-01`. Resource Graph does not surface these child objects.
 - **`execute_script`** — Execute a `.ps1`/`.sh` script that you already wrote into `output/scripts/` via `generate_file`. No inline command surface; the model cannot pass a raw command string. Requires approval. Pair with `read_file` to inspect/round-trip script content.
 - **`read_file`** — Read back content from `output/` that the agent (or a typed write tool) produced. Symmetric with `generate_file`. No approval — read-only inside the sandbox.
-- **`fetch_ms_docs`** — Use to look up Azure service docs, pricing, or command syntax before making recommendations.
+- **`fetch_ms_docs`** — Use to look up Azure service docs, pricing, or command syntax before making recommendations. Send bare query terms — do **not** prefix with `site:learn.microsoft.com` (the tool only searches Learn anyway and the operator hurts ranking). If the top results are landing pages (URLs with ≤ 2 path segments, e.g. `/en-us/azure/architecture/`) or off-topic, follow up with `web_search` using `site="learn.microsoft.com"` and more specific terms.
 - **`search_kb_hybrid`** — Preferred for KB content questions. Chunk-level hybrid search (BM25 + dense vectors, local). Returns precise snippets with `source_url` citations.
 - **`search_kb` / `read_kb_file`** — Use `search_kb` when the hybrid index is warming. Use `read_kb_file` for full file context. Fall back to `search_kb_semantic` only when keyword search returns nothing useful.
 - **`search_azure_updates`** — Use for "is X GA?", "when did Y launch?", retirement timelines.
 - **`search_stack_overflow`** — Use for community-validated implementation patterns. High-score accepted answers carry real signal.
 - **`search_github`** — Use to find reference IaC (Bicep, Terraform, ARM) templates and Azure SDK samples.
-- **`web_search`** — Use for Reddit, Tech Community, Azure blog discussions. Pass `site=techcommunity` or `site=reddit` to scope.
+- **`web_search`** — Use for Reddit, Tech Community, Azure blog discussions, and as a fallback for Learn docs when `fetch_ms_docs` returns hub pages. Pass `site=techcommunity`, `site=reddit`, or `site="learn.microsoft.com"` to scope. Do **not** also embed `site:` in the `query` string when the `site` parameter is set — that produces zero results.
 
 Always be specific about Azure resource SKUs, pricing tiers, and configuration when applicable. Avoid generic advice — reference the team's specific architecture and constraints from the KB.
 

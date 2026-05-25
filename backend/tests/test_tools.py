@@ -212,6 +212,75 @@ class TestFetchMsDocsTool:
         result = tool.execute({"query": ""}, _USER)
         assert "Error" in result
 
+    @patch("app.tools.generic.ms_docs.httpx.Client")
+    def test_strips_site_operator_from_query(self, mock_client_cls):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"results": []}
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        tool = get_tool("fetch_ms_docs")
+        tool.execute({"query": "site:learn.microsoft.com Get-AzDisk subscriptions"}, _USER)
+
+        _, kwargs = mock_client.get.call_args
+        assert "site:" not in kwargs["params"]["search"].lower()
+        assert "Get-AzDisk" in kwargs["params"]["search"]
+
+    @patch("app.tools.generic.ms_docs.httpx.Client")
+    def test_articles_ranked_above_landing_pages(self, mock_client_cls):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": [
+                {
+                    "title": "Azure Architecture Center",
+                    "url": "https://learn.microsoft.com/en-us/azure/architecture/",
+                    "description": "Landing",
+                },
+                {
+                    "title": "Tutorial: Private Endpoint for Azure SQL",
+                    "url": "https://learn.microsoft.com/en-us/azure/private-link/tutorial-private-endpoint-sql-portal",
+                    "description": "Article",
+                },
+                {
+                    "title": "Microsoft Intune documentation",
+                    "url": "https://learn.microsoft.com/en-us/intune/",
+                    "description": "Landing",
+                },
+            ]
+        }
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        tool = get_tool("fetch_ms_docs")
+        parsed = json.loads(tool.execute({"query": "azure private endpoint"}, _USER))
+        assert parsed[0]["title"].startswith("Tutorial")
+        # Landing pages are still returned, just demoted.
+        assert any("Architecture Center" in r["title"] for r in parsed)
+
+    @patch("app.tools.generic.ms_docs.httpx.Client")
+    def test_passes_scope_azure(self, mock_client_cls):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"results": []}
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        tool = get_tool("fetch_ms_docs")
+        tool.execute({"query": "vnet peering"}, _USER)
+        _, kwargs = mock_client.get.call_args
+        assert kwargs["params"].get("scope") == "Azure"
+
 
 class TestExecuteScriptTool:
     """Smoke tests for the path-only script runner that replaced run_shell."""
@@ -1204,43 +1273,70 @@ class TestWebSearchTool:
         assert "reddit" in SITE_SHORTCUTS
         assert "techcommunity" in SITE_SHORTCUTS
 
-    @patch("app.tools.generic.web_search.httpx.Client")
-    def test_parses_ddg_results(self, mock_client_cls):
-        html = """
-        <html><body>
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freddit.com%2Fr%2FAzure%2Fcomments%2F123">
-          Azure Private Endpoint discussion
-        </a>
-        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freddit.com%2Fr%2FAzure%2Fcomments%2F123">
-          People discussing private endpoints on Azure
-        </a>
-        </body></html>
-        """
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = html
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.post.return_value = mock_resp
-        mock_client_cls.return_value = mock_client
+    @patch("app.tools.generic.web_search.DDGS")
+    def test_parses_ddg_results(self, mock_ddgs_cls):
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
+        mock_ddgs.text.return_value = iter([
+            {
+                "title": "Azure Private Endpoint discussion",
+                "href": "https://reddit.com/r/Azure/comments/123",
+                "body": "People discussing private endpoints on Azure",
+            }
+        ])
+        mock_ddgs_cls.return_value = mock_ddgs
 
         tool = get_tool("web_search")
         result = json.loads(tool.execute({"query": "azure private endpoint", "site": "reddit"}, _USER))
         assert "results" in result
         assert result["results"][0]["url"] == "https://reddit.com/r/Azure/comments/123"
+        assert result["results"][0]["snippet"] == "People discussing private endpoints on Azure"
 
-    @patch("app.tools.generic.web_search.httpx.Client")
-    def test_no_results_returns_empty_list(self, mock_client_cls):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "<html><body>No results.</body></html>"
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.post.return_value = mock_resp
-        mock_client_cls.return_value = mock_client
+    @patch("app.tools.generic.web_search.DDGS")
+    def test_no_results_returns_empty_list(self, mock_ddgs_cls):
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
+        mock_ddgs.text.return_value = iter([])
+        mock_ddgs_cls.return_value = mock_ddgs
 
         tool = get_tool("web_search")
         result = json.loads(tool.execute({"query": "very obscure query xyz"}, _USER))
         assert result["results"] == []
+
+    @patch("app.tools.generic.web_search.DDGS")
+    def test_query_with_site_operator_ignores_site_param(self, mock_ddgs_cls):
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
+        mock_ddgs.text.return_value = iter([])
+        mock_ddgs_cls.return_value = mock_ddgs
+
+        tool = get_tool("web_search")
+        tool.execute(
+            {
+                "query": "site:azure.microsoft.com/en-us/updates/ ga feature",
+                "site": "azureblog",
+            },
+            _USER,
+        )
+        sent_q = mock_ddgs.text.call_args.args[0]
+        # Only one site: clause survives; the param is dropped to avoid double-scoping.
+        assert sent_q.lower().count("site:") == 1
+
+    @patch("app.tools.generic.web_search.DDGS")
+    def test_site_with_path_splits_into_domain_and_keyword(self, mock_ddgs_cls):
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
+        mock_ddgs.text.return_value = iter([])
+        mock_ddgs_cls.return_value = mock_ddgs
+
+        tool = get_tool("web_search")
+        tool.execute({"query": "new vm sku", "site": "azureblog"}, _USER)
+        sent_q = mock_ddgs.text.call_args.args[0]
+        # azureblog -> azure.microsoft.com/blog; path becomes a keyword, domain becomes site:
+        assert "site:azure.microsoft.com" in sent_q
+        assert "blog" in sent_q
+        assert "site:azure.microsoft.com/blog" not in sent_q

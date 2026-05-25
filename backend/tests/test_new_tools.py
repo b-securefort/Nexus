@@ -1288,6 +1288,50 @@ class TestWebFetchTool:
         assert "<style>" not in text
         assert "<h1>" not in text
 
+    def test_trafilatura_strips_nav_and_banner_chrome(self):
+        """A page with nav + banner + real content: only content survives."""
+        tool = get_tool("web_fetch")
+        html = """
+        <html>
+          <head><title>Doc</title></head>
+          <body>
+            <nav>
+              <a href="/">Home</a> | <a href="/skip">Skip to main content</a>
+              | Upgrade to Microsoft Edge to take advantage of the latest features
+            </nav>
+            <header>Cookie banner: we use cookies to improve your experience. Accept | Decline</header>
+            <main>
+              <article>
+                <h1>How Private Endpoints Work</h1>
+                <p>An Azure Private Endpoint is a network interface that uses a
+                private IP address from your virtual network. It connects you privately
+                and securely to a service powered by Azure Private Link, eliminating
+                public internet exposure for that traffic path.</p>
+                <p>Private endpoints support several Azure services including Storage,
+                SQL Database, Cosmos DB, and Key Vault. Each endpoint is bound to a
+                subnet and consumes one private IP from that subnet's address space.</p>
+              </article>
+            </main>
+            <footer>Copyright 2026 Contoso. All rights reserved. Privacy | Terms</footer>
+          </body>
+        </html>
+        """
+        text = tool._extract_text(html)
+        assert "Private Endpoint" in text
+        assert "virtual network" in text
+        # Chrome should be gone.
+        assert "Skip to main content" not in text
+        assert "Upgrade to Microsoft Edge" not in text
+        assert "Cookie banner" not in text
+        assert "Copyright 2026" not in text
+
+    def test_extract_falls_back_when_trafilatura_returns_nothing(self):
+        """If trafilatura can't extract (returns None/empty), regex fallback runs."""
+        tool = get_tool("web_fetch")
+        with patch("app.tools.generic.web_fetch.trafilatura.extract", return_value=None):
+            text = tool._extract_text("<html><body><p>Fallback path text.</p></body></html>")
+        assert "Fallback path text" in text
+
     def test_requires_no_approval(self):
         tool = get_tool("web_fetch")
         assert tool.requires_approval is False

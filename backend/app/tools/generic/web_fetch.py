@@ -9,6 +9,7 @@ import re
 import socket
 
 import httpx
+import trafilatura
 
 from app.auth.models import User
 from app.tools.base import Tool
@@ -174,16 +175,32 @@ class WebFetchTool(Tool):
             return f"Error: {str(e)}"
 
     def _extract_text(self, html: str) -> str:
-        """Extract readable text from HTML — basic tag stripping."""
-        # Remove script and style blocks
+        """Extract readable text from HTML.
+
+        Tries trafilatura first — it drops nav/header/footer/banner chrome
+        that regex tag-stripping can't distinguish from real content. Falls
+        back to the legacy regex stripper if trafilatura returns nothing
+        (some pages are too JS-heavy or non-article for its heuristics).
+        """
+        try:
+            extracted = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=True,
+                favor_recall=True,
+            )
+            if extracted and extracted.strip():
+                return extracted
+        except Exception as e:
+            logger.warning("trafilatura extract failed, falling back to regex: %s", e)
+        return self._extract_text_fallback(html)
+
+    def _extract_text_fallback(self, html: str) -> str:
+        """Regex tag-stripper. Last resort when trafilatura can't extract."""
         text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove HTML tags
         text = re.sub(r'<[^>]+>', ' ', text)
-        # Decode common entities
         text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ').replace('&quot;', '"')
-        # Collapse whitespace
         text = re.sub(r'\s+', ' ', text).strip()
-        # Re-add some structure by splitting on sentence boundaries
         text = re.sub(r'\. ', '.\n', text)
         return text

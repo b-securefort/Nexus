@@ -45,7 +45,9 @@ from app.kb.indexer import get_index_summary
 from app.skills.models import Skill
 from app.tools.base import (
     AzureToolBase,
+    TOOL_CALLS,
     Tool,
+    classify_tool_outcome,
     resolve_tools,
     set_arm_token,
     set_skill_name,
@@ -1191,7 +1193,9 @@ def _execute_tool_streaming(
         full_result = "".join(chunk_sink)
     
     duration = time.time() - start_time
-    
+    outcome = classify_tool_outcome(full_result)
+    TOOL_CALLS.labels(tool=tool.name, outcome=outcome).inc()
+
     # Structured Telemetry
     telemetry = {
         "event": "tool_execution",
@@ -1199,9 +1203,10 @@ def _execute_tool_streaming(
         "args_len": len(json.dumps(func_args)),
         "duration_sec": round(duration, 3),
         "result_len": len(full_result),
+        "outcome": outcome,
     }
     logger.info("TELEMETRY: %s", json.dumps(telemetry))
-    
+
     return full_result
 
 

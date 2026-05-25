@@ -99,6 +99,53 @@ def test_missing_vendor_icon_flagged(tmp_path):
     assert "[icon-style]" in report
 
 
+def test_small_empty_subnet_recognised_as_container(tmp_path):
+    # 180x100 (well below the 300px threshold) and no children — old code would
+    # flag it as a resource-sized vertex without an icon. New name-based check
+    # treats it as a container based on the "Subnet" keyword in its label.
+    cells = """
+    <mxCell id="snet1" value="Subnet: Workload"
+      style="rounded=0;whiteSpace=wrap;html=1;dashed=1;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="180" height="100" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "small-subnet.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "PASSED" in report
+    assert "1 containers" in report
+
+
+def test_small_empty_vnet_recognised_as_container(tmp_path):
+    cells = """
+    <mxCell id="vnet1" value="Hub VNet"
+      style="rounded=0;whiteSpace=wrap;html=1;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="200" height="120" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "small-vnet.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "PASSED" in report
+    assert "1 containers" in report
+
+
+def test_small_unnamed_box_still_flagged_as_resource(tmp_path):
+    # Sanity check: an undersized vertex with no container-like name and no
+    # icon should still be flagged — we only relax the rule for named placeholders.
+    cells = """
+    <mxCell id="x" value="Azure Firewall"
+      style="rounded=1;whiteSpace=wrap;html=1;"
+      vertex="1" parent="1">
+      <mxGeometry x="100" y="100" width="180" height="70" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "small-resource.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "FAILED" in report
+    assert "[icon-style]" in report
+
+
 def test_observability_inside_vnet_flagged(tmp_path):
     cells = """
     <mxCell id="vnet" value="Hub VNet"

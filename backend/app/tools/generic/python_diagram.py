@@ -185,6 +185,45 @@ def _looks_like_graphviz_missing(stderr: str) -> bool:
     )
 
 
+# Common mingrammer class-name hallucinations. Keyed by (module, name) the model
+# wrote; value is a suggestion the tool surfaces when that ImportError fires.
+# Sourced from agent_learnings id=46. Add to this table when new ones recur.
+_MINGRAMMER_NAME_FIXES: dict[tuple[str, str], str] = {
+    ("diagrams.azure.network", "Subnet"):
+        "Use `Subnets` (plural) — `from diagrams.azure.network import Subnets`.",
+    ("diagrams.azure.network", "NSG"):
+        "Use `NetworkSecurityGroupsClassic` — "
+        "`from diagrams.azure.network import NetworkSecurityGroupsClassic`.",
+    ("diagrams.azure.management", "Monitor"):
+        "Monitor lives in its own submodule — "
+        "`from diagrams.azure.monitor import Monitor`.",
+    ("diagrams.azure.security", "WAFPolicies"):
+        "No such class. Use the generic icon shim: "
+        "`AzureGeneric(\"WAF Policy\", azure_icon=\"waf_policy\")` "
+        "(AzureGeneric is injected by the tool — do not import it).",
+    ("diagrams", "AzureGeneric"):
+        "AzureGeneric is injected automatically by this tool — remove the import "
+        "and just call `AzureGeneric(\"Label\", azure_icon=\"<kind>\")` directly.",
+}
+
+# stderr line emitted by CPython for missing names in `from X import Y`.
+_IMPORT_ERROR_RE = re.compile(
+    r"ImportError:\s*cannot import name ['\"](?P<name>[A-Za-z_][\w]*)['\"] "
+    r"from ['\"](?P<module>[\w.]+)['\"]"
+)
+
+
+def _suggest_mingrammer_fix(stderr: str) -> str | None:
+    """If stderr is an ImportError from a known-bad mingrammer name, return a
+    one-line suggestion pointing at the correct class. Otherwise None.
+    """
+    match = _IMPORT_ERROR_RE.search(stderr)
+    if not match:
+        return None
+    key = (match.group("module"), match.group("name"))
+    return _MINGRAMMER_NAME_FIXES.get(key)
+
+
 class GeneratePythonDiagramTool(Tool):
     name = "generate_python_diagram"
     description = (
@@ -308,6 +347,15 @@ class GeneratePythonDiagramTool(Tool):
                     "  brew install graphviz              (macOS)\n"
                     "  apt-get install graphviz           (Debian/Ubuntu)\n"
                     "Then ensure `dot` is on PATH and retry."
+                )
+            hint = _suggest_mingrammer_fix(stderr)
+            if hint:
+                return (
+                    f"Error: Python script failed (exit {result.returncode}) — "
+                    f"bad mingrammer import.\n"
+                    f"{hint}\n"
+                    f"stderr (last 500 chars): {stderr[-500:]}\n"
+                    f"Source kept at: output/{stem}.py"
                 )
             return (
                 f"Error: Python script failed (exit {result.returncode}).\n"

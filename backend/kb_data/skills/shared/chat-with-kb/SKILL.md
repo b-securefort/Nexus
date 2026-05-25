@@ -58,7 +58,7 @@ For everything that is NOT a diagram request: when the user asks you to check, l
 | Check team KB documentation | `search_kb_hybrid` (preferred); fall back to `search_kb` if hybrid index is warming |
 | Look up Azure service docs / command syntax | `fetch_ms_docs` |
 | "Is X GA?", "When did Y release?" | `search_azure_updates` |
-| Community answers with vote scores | `search_stack_overflow` |
+| Specific error message / unusual symptom MS docs don't cover | `search_stack_overflow` (high-score accepted answers) |
 | IaC templates, Bicep/Terraform samples | `search_github` |
 | Reddit, Tech Community, Azure blogs | `web_search` (site shortcuts: `reddit`, `techcommunity`, `azureblog`, `devblog`) |
 | Cost / Monitor logs / Advisor / Policy | `az_cost_query`, `az_monitor_logs`, `az_advisor`, `az_policy_check` |

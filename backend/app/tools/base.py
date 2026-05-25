@@ -2,14 +2,18 @@
 Tool base class and registry.
 """
 
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import Generator
+
+from prometheus_client import Counter
 
 from app.auth.models import User
 from app.config import get_settings
@@ -291,6 +295,57 @@ class AzureToolBase(Tool):
         except Exception as e:
             logger.error("%s error: %s", label, str(e), exc_info=True)
             return f"Error: {str(e)}"
+
+
+# Tool-outcome telemetry. Lets us spot tool-quality regressions without
+# scraping the messages table by hand (`success/empty/error` ratios per tool).
+# The orchestrator increments this once per tool invocation; tool implementations
+# do not call it directly so the outcome classification stays in one place.
+TOOL_CALLS = Counter(
+    "nexus_tool_calls_total",
+    "Tool invocations grouped by outcome",
+    ["tool", "outcome"],
+)
+
+# Result-string sniff threshold for "empty" classification. Tools that return a
+# JSON envelope with an empty `data`/`results`/`items`/`value` array OR a plain
+# response shorter than this (after error-prefix strip) count as empty.
+_EMPTY_RESULT_MAX_LEN = 30
+_EMPTY_JSON_RE = re.compile(
+    r'"(?:data|results|items|value)"\s*:\s*\[\s*\]'
+)
+
+
+def classify_tool_outcome(result: str) -> str:
+    """Classify a tool result string as 'success', 'empty', or 'error'.
+
+    Used for the `nexus_tool_calls_total` metric. The taxonomy is deliberately
+    coarse — finer breakdowns belong in the logger telemetry block.
+    """
+    if not isinstance(result, str):
+        return "success"
+    s = result.strip()
+    if not s:
+        return "empty"
+    # Match plain "Error: ..." prefix and JSON envelope { "status": "error", ... }
+    if s.lower().startswith("error"):
+        return "error"
+    try:
+        parsed = json.loads(s)
+    except (ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        status = parsed.get("status")
+        if isinstance(status, str) and status.lower() == "error":
+            return "error"
+    # Empty-array envelopes (search tools returning no hits)
+    if _EMPTY_JSON_RE.search(s):
+        return "empty"
+    if isinstance(parsed, list) and len(parsed) == 0:
+        return "empty"
+    if len(s) <= _EMPTY_RESULT_MAX_LEN:
+        return "empty"
+    return "success"
 
 
 # Global tool registry

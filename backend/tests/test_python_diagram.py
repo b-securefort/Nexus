@@ -16,6 +16,7 @@ from app.tools.generic.python_diagram import (
     GeneratePythonDiagramTool,
     _DiagramKwargInjector,
     _subprocess_env,
+    _suggest_mingrammer_fix,
     _validate_ast,
 )
 
@@ -202,3 +203,34 @@ def test_tool_rejects_when_no_diagram_block():
     )
     # AST validator catches this before the subprocess fires.
     assert "Diagram" in out
+
+
+# ── _suggest_mingrammer_fix ────────────────────────────────────────────────
+
+
+def test_mingrammer_fix_suggests_subnets_plural():
+    stderr = (
+        'Traceback (most recent call last):\n'
+        '  File "x.py", line 2, in <module>\n'
+        '    from diagrams.azure.network import Subnet\n'
+        "ImportError: cannot import name 'Subnet' from 'diagrams.azure.network' (/x/y)"
+    )
+    hint = _suggest_mingrammer_fix(stderr)
+    assert hint is not None and "Subnets" in hint
+
+
+def test_mingrammer_fix_suggests_nsg_classic():
+    stderr = "ImportError: cannot import name 'NSG' from 'diagrams.azure.network' (/x)"
+    hint = _suggest_mingrammer_fix(stderr)
+    assert hint is not None and "NetworkSecurityGroupsClassic" in hint
+
+
+def test_mingrammer_fix_redirects_monitor_to_its_submodule():
+    stderr = "ImportError: cannot import name 'Monitor' from 'diagrams.azure.management' (/x)"
+    hint = _suggest_mingrammer_fix(stderr)
+    assert hint is not None and "diagrams.azure.monitor" in hint
+
+
+def test_mingrammer_fix_returns_none_for_unrelated_errors():
+    assert _suggest_mingrammer_fix("RuntimeError: graphviz failed") is None
+    assert _suggest_mingrammer_fix("ImportError: cannot import name 'X' from 'foo.bar'") is None

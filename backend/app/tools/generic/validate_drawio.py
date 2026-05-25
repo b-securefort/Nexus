@@ -36,6 +36,16 @@ _OBSERVABILITY_KEYWORDS = (
     "application insights", "cloudwatch", "cloudtrail",
 )
 _VNET_KEYWORDS = ("vnet", "virtual network", "vpc", "subnet")
+# Labels that name a network container. Used to recognise empty/small subnet
+# placeholders as containers even when they fall below _CONTAINER_MIN_DIM and
+# have no children — without this, an empty subnet box gets flagged as a
+# resource-sized vertex with no icon. See agent_learnings id=23 / id=38.
+_CONTAINER_NAME_KEYWORDS = (
+    "vnet", "virtual network", "vpc",
+    "subnet", "snet",
+    "zone", "tier", "region", "availability zone",
+    "resource group",
+)
 
 # Architectural-correctness keywords used by hint checks.
 # These resources are control-plane / PaaS — they should NOT be drawn inside a VNet.
@@ -88,7 +98,16 @@ class _Cell:
             return False
         if self.has_vertex_children:
             return True
-        return self.w >= _CONTAINER_MIN_DIM or self.h >= _CONTAINER_MIN_DIM
+        if self.w >= _CONTAINER_MIN_DIM or self.h >= _CONTAINER_MIN_DIM:
+            return True
+        # Empty/small placeholders named like network containers (subnets, vnets,
+        # zones) are containers even when they don't yet hold a child vertex.
+        # Without this, an empty subnet placeholder gets treated as a
+        # resource-sized vertex and fails the icon-style + overlap checks.
+        v = self.value.lower()
+        if v and not self.has_vendor_icon and any(kw in v for kw in _CONTAINER_NAME_KEYWORDS):
+            return True
+        return False
 
     @property
     def is_decoration(self) -> bool:

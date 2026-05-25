@@ -7,10 +7,11 @@ from unittest.mock import patch, MagicMock
 from app.auth.models import User
 from app.tools.base import (
     TOOL_REGISTRY,
+    classify_tool_outcome,
     get_tool,
+    init_tools,
     list_tools,
     resolve_tools,
-    init_tools,
 )
 
 _USER = User(oid="test-user", email="test@test.com", display_name="Test")
@@ -86,6 +87,47 @@ class TestToolSchemas:
             assert TOOL_REGISTRY[name].requires_approval is True
         for name in ("read_kb_file", "read_file", "search_kb", "search_kb_semantic", "fetch_ms_docs"):
             assert TOOL_REGISTRY[name].requires_approval is False
+
+
+class TestClassifyToolOutcome:
+    """The orchestrator labels every tool call on `nexus_tool_calls_total`
+    using these rules — verify the taxonomy stays stable."""
+
+    def test_plain_error_prefix_is_error(self):
+        assert classify_tool_outcome("Error: query is required") == "error"
+        assert classify_tool_outcome("ERROR something bad") == "error"
+
+    def test_json_envelope_error_status_is_error(self):
+        assert classify_tool_outcome(
+            json.dumps({"status": "error", "tool": "search_github", "data": "401"})
+        ) == "error"
+
+    def test_empty_string_is_empty(self):
+        assert classify_tool_outcome("") == "empty"
+        assert classify_tool_outcome("   ") == "empty"
+
+    def test_empty_data_envelope_is_empty(self):
+        assert classify_tool_outcome(
+            json.dumps({"status": "success", "tool": "search_github", "data": []})
+        ) == "empty"
+        # Also for "results" / "items" / "value" keys
+        assert classify_tool_outcome('{"results": []}') == "empty"
+        assert classify_tool_outcome('{"items": []}') == "empty"
+        assert classify_tool_outcome('{"value": []}') == "empty"
+
+    def test_empty_top_level_array_is_empty(self):
+        assert classify_tool_outcome("[]") == "empty"
+
+    def test_short_result_is_empty(self):
+        assert classify_tool_outcome("ok") == "empty"
+
+    def test_real_payload_is_success(self):
+        payload = json.dumps([{"name": "Azure/bicep", "url": "https://github.com/Azure/bicep", "stars": 3200}])
+        assert classify_tool_outcome(payload) == "success"
+
+    def test_long_plain_text_is_success(self):
+        # Result from KB read or doc fetch is plain text, not JSON.
+        assert classify_tool_outcome("# Hub-spoke topology\n\n" + "x" * 500) == "success"
 
 
 class TestReadKBFileTool:
@@ -1217,6 +1259,36 @@ class TestSearchGithubTool:
         tool = get_tool("search_github")
         result = tool.execute({"query": "azure"}, _USER)
         assert "rate limit" in result.lower()
+
+    @patch("app.config.get_settings")
+    @patch("app.tools.generic.search_github.httpx.Client")
+    def test_401_with_token_retries_unauthenticated(self, mock_client_cls, mock_settings):
+        mock_settings.return_value = MagicMock(GITHUB_TOKEN="bogus-expired-token")
+
+        unauth_resp = MagicMock()
+        unauth_resp.status_code = 200
+        unauth_resp.json.return_value = {
+            "items": [{
+                "full_name": "Azure/bicep", "html_url": "https://github.com/Azure/bicep",
+                "description": "x", "stargazers_count": 1, "language": "Bicep", "topics": [],
+            }]
+        }
+        auth_resp = MagicMock()
+        auth_resp.status_code = 401
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = [auth_resp, unauth_resp]
+        mock_client_cls.return_value = mock_client
+
+        tool = get_tool("search_github")
+        result = json.loads(tool.execute({"query": "bicep"}, _USER))
+        assert result[0]["name"] == "Azure/bicep"
+        # Confirm retry happened and used no Authorization header
+        assert mock_client.get.call_count == 2
+        retry_headers = mock_client.get.call_args_list[1].kwargs["headers"]
+        assert "Authorization" not in retry_headers
 
 
 class TestSearchAzureUpdatesTool:

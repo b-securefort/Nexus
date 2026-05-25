@@ -84,6 +84,14 @@ class SearchGithubTool(Tool):
                     f"{_API_BASE}/search/{search_type}",
                     params=params,
                 )
+                if resp.status_code == 401 and "Authorization" in headers:
+                    logger.warning("GITHUB_TOKEN rejected (401); retrying unauthenticated")
+                    retry_headers = {k: v for k, v in headers.items() if k != "Authorization"}
+                    resp = client.get(
+                        f"{_API_BASE}/search/{search_type}",
+                        params=params,
+                        headers=retry_headers,
+                    )
                 resp.raise_for_status()
                 data = resp.json()
 

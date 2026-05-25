@@ -48,6 +48,21 @@ class Settings(BaseSettings):
     KB_RRF_K: int = 60
     KB_RESULT_LIMIT: int = 5
 
+    # Re-ranker (Phase 2b). When enabled, search_kb_hybrid runs an LLM-judge
+    # over the top RRF candidates so the final confidence comes from a
+    # query-vs-chunk relevance judgement rather than raw vector distance.
+    # Disable to save the extra LLM call when latency matters more than
+    # ranking quality.
+    KB_RERANK_ENABLED: bool = True
+    KB_RERANK_TOP_K: int = 10              # how many RRF candidates to rerank
+    KB_RERANK_HIGH_THRESHOLD: float = 0.70  # rerank_score >= this -> "high" confidence
+    KB_RERANK_MEDIUM_THRESHOLD: float = 0.40  # rerank_score >= this -> "medium" confidence
+
+    # Diversity cap: max chunks from the same file in the final top-K.
+    # Stops cross-cutting queries returning 3-4 chunks from one big doc when
+    # 2 other docs also have relevant content. Set to 0 to disable.
+    KB_DIVERSITY_MAX_PER_FILE: int = 2
+
     # KB ingestion (Phase 2a, pilot)
     INGEST_ADO_WIKI_ENABLED: bool = False
     INGEST_ADO_WIKI_ORG: str = ""

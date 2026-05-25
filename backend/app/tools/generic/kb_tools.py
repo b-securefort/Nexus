@@ -307,9 +307,11 @@ class SearchKBHybridTool(Tool):
 
         # Import here so startup is unaffected if embedder config is missing
         from app.kb.embedder import embed_query_for_search
-        from app.kb.vector_store import chunk_count, hybrid_search
+        from app.kb.vector_store import chunk_count, hybrid_search, diversify_by_file
         from app.kb.reindex import status as reindex_status
+        from app.kb.reranker import rerank_hits
         from app.db.engine import get_engine
+        from app.config import get_settings
 
         engine = get_engine()
         with engine.connect() as conn:
@@ -336,7 +338,20 @@ class SearchKBHybridTool(Tool):
                     "note": f"Embedding unavailable ({e}). Showing keyword fallback results.",
                 })
 
-            hits = hybrid_search(conn, query, query_vec, limit=limit)
+            # Fetch enough candidates to give the reranker some room to reorder.
+            settings = get_settings()
+            fetch_limit = max(limit, settings.KB_RERANK_TOP_K) if settings.KB_RERANK_ENABLED else limit
+            hits = hybrid_search(conn, query, query_vec, limit=fetch_limit)
+
+        # Re-rank with an LLM judge so the confidence signal comes from a
+        # calibrated relevance score rather than corpus-specific vector
+        # geometry. Falls back silently to RRF order on any error.
+        hits = rerank_hits(query, hits)
+
+        # Cap chunks-per-file so cross-cutting queries don't return three
+        # chunks from one big doc when two other docs are also relevant.
+        # Preserves the rerank ordering — best chunk per file still wins.
+        hits = diversify_by_file(hits, limit=limit, max_per_file=settings.KB_DIVERSITY_MAX_PER_FILE)
 
         rs = reindex_status()
         results = [
@@ -346,6 +361,7 @@ class SearchKBHybridTool(Tool):
                 "snippet": h.snippet,
                 "source_url": h.source_url,
                 "score": round(h.score, 4),
+                "rerank_score": round(h.rerank_score, 3) if h.rerank_score is not None else None,
                 "confidence": h.confidence,
             }
             for h in hits

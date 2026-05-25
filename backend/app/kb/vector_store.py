@@ -173,12 +173,18 @@ class SearchHit:
     kb_path: str
     chunk_idx: int
     heading: str
-    snippet: str          # first 400 chars of chunk text
+    snippet: str          # first 400 chars of chunk text (for display/preview)
+    text: str             # full chunk text — passed to the reranker so the
+                          # judge sees the whole chunk, not just the preview.
+                          # Critical for chunks where the relevant sentence
+                          # is past the first 400 chars (e.g. an H2 section
+                          # whose key line sits at the end).
     source_url: str | None
     score: float          # RRF score
     sources_hit: int      # 1 if found by one list, 2 if found by both BM25 and vec
     vec_distance: float | None  # cosine distance from vec0, None if not in vec top-K
     confidence: str       # "high" | "medium" | "low" — see _confidence_label()
+    rerank_score: float | None = None  # LLM-judge 0.0-1.0 relevance; None if rerank skipped/failed
 
 
 # Cosine-distance ceiling above which a vec-only hit is treated as the
@@ -189,6 +195,77 @@ class SearchHit:
 # adjustment when a substantially different KB is indexed; see
 # IdeasTodo/kb-hybrid-search-improvements.md item #8.
 _VEC_DISTANCE_OOD = 1.15
+
+
+def diversify_by_file(hits: list["SearchHit"], limit: int, max_per_file: int) -> list["SearchHit"]:
+    """Greedy selection from `hits` enforcing a per-file cap.
+
+    Preserves the input ordering (which is rerank_score-descending after
+    rerank, or RRF-descending otherwise) so the best chunk per file wins.
+    Returns up to `limit` hits. If max_per_file <= 0, returns `hits[:limit]`
+    unchanged.
+
+    Tail behaviour: once every file has hit the cap, additional chunks are
+    appended in original order — diversity is a soft preference, not a hard
+    truncation. (We'd rather return 5 results with some repeats than 3
+    results.)
+    """
+    if max_per_file <= 0 or len(hits) <= limit:
+        return hits[:limit]
+
+    selected: list[SearchHit] = []
+    per_file: dict[str, int] = {}
+    overflow: list[SearchHit] = []
+
+    for hit in hits:
+        if per_file.get(hit.kb_path, 0) < max_per_file:
+            selected.append(hit)
+            per_file[hit.kb_path] = per_file.get(hit.kb_path, 0) + 1
+            if len(selected) >= limit:
+                return selected
+        else:
+            overflow.append(hit)
+
+    # Pad with overflow to honour `limit` even if diversity exhausted slots.
+    for hit in overflow:
+        if len(selected) >= limit:
+            break
+        selected.append(hit)
+
+    return selected
+
+
+_PROCEDURAL_CUE_WORDS: frozenset[str] = frozenset({
+    "exact", "example", "code", "command", "syntax", "step", "snippet",
+})
+_PROCEDURAL_CUE_PHRASES: tuple[str, ...] = (
+    "how to", "step by step", "step-by-step",
+)
+_PROCEDURAL_PATH_PREFIXES: tuple[str, ...] = ("kb/recipes/", "kb/runbooks/")
+_PROCEDURAL_PATHS_EXACT: frozenset[str] = frozenset({"kb/drawio/patterns.md"})
+_PROCEDURAL_BOOST: float = 1.0 / 120   # ~0.0083, about half an RRF rank step at k=60
+
+
+def _is_procedural_query(query: str) -> bool:
+    """True if the query asks for a concrete, runnable answer (command, code,
+    exact name) rather than a conceptual overview. Used to gate the
+    procedural-doc boost so we don't penalise conceptual queries."""
+    q = query.lower()
+    if any(w in q.split() for w in _PROCEDURAL_CUE_WORDS):
+        return True
+    return any(p in q for p in _PROCEDURAL_CUE_PHRASES)
+
+
+def _is_procedural_hit(hit: "SearchHit") -> bool:
+    """True if the hit comes from a procedural doc — runbook, recipe, or
+    pattern-library doc — or its chunk contains a fenced code block."""
+    if any(hit.kb_path.startswith(p) for p in _PROCEDURAL_PATH_PREFIXES):
+        return True
+    if hit.kb_path in _PROCEDURAL_PATHS_EXACT:
+        return True
+    if "```" in (hit.text or ""):
+        return True
+    return False
 
 
 def _confidence_label(score: float, sources_hit: int, vec_distance: float | None) -> str:
@@ -283,11 +360,23 @@ def hybrid_search(
             chunk_idx=chunk_idx,
             heading=heading,
             snippet=chunk_text[:400],
+            text=chunk_text,
             source_url=source_url,
             score=score,
             sources_hit=sources_hit,
             vec_distance=vec_distance,
             confidence=_confidence_label(score, sources_hit, vec_distance),
         ))
+
+    # Procedural-doc boost. For queries that ask for a concrete answer
+    # (command, exact name, code), lift recipe/runbook/code-containing
+    # chunks slightly so they're more likely to make it into the rerank
+    # window. The boost is small enough that conceptual queries are
+    # unaffected, and the LLM judge still has the final say on ordering.
+    if _is_procedural_query(query):
+        for hit in hits:
+            if _is_procedural_hit(hit):
+                hit.score += _PROCEDURAL_BOOST
+
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits

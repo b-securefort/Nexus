@@ -76,22 +76,55 @@ _ACRONYM_MAP: dict[str, list[str]] = {
 _MAX_TERMS = 6
 
 
+def _build_reverse_map() -> list[tuple[str, list[str]]]:
+    """Build [(phrase, [abbreviations])] from the forward map.
+
+    A phrase like "key vault" maps back to ["kv"]; "managed identity" maps
+    back to ["msi", "mi"]. Sorted by phrase length descending so longer
+    phrases match first when scanning a query (avoids "managed identity"
+    being shadowed by a shorter substring match).
+    """
+    reverse: dict[str, list[str]] = {}
+    for abbr, phrases in _ACRONYM_MAP.items():
+        for phrase in phrases:
+            reverse.setdefault(phrase.lower(), []).append(abbr)
+    return sorted(reverse.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+
+_REVERSE_MAP: list[tuple[str, list[str]]] = _build_reverse_map()
+
+
 def expand_query(query: str) -> list[str]:
     """Return [query, *expansions], deduped, capped at _MAX_TERMS.
 
-    Each token in the query is looked up independently.  The original
-    query always comes first so BM25 can still match it verbatim.
+    Bidirectional:
+      - abbreviation tokens ('aad') expand to their full phrases ('entra id', ...)
+      - full phrases ('key vault') expand to their abbreviation(s) ('kv')
+
+    The original query always comes first so BM25 can still match it verbatim.
     """
-    tokens = query.lower().split()
-    seen: set[str] = {query.lower()}
+    query_lower = query.lower()
+    seen: set[str] = {query_lower}
     result: list[str] = [query]
 
-    for token in tokens:
+    # Forward pass: tokens -> phrases
+    for token in query_lower.split():
         if token in _ACRONYM_MAP:
             for expansion in _ACRONYM_MAP[token]:
                 if expansion not in seen:
                     seen.add(expansion)
                     result.append(expansion)
+                    if len(result) >= _MAX_TERMS:
+                        return result
+
+    # Reverse pass: phrases in the query -> abbreviations.
+    # Useful when KB docs sometimes use abbreviations the user didn't type.
+    for phrase, abbrs in _REVERSE_MAP:
+        if phrase in query_lower:
+            for abbr in abbrs:
+                if abbr not in seen:
+                    seen.add(abbr)
+                    result.append(abbr)
                     if len(result) >= _MAX_TERMS:
                         return result
 

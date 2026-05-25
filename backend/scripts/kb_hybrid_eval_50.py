@@ -42,10 +42,12 @@ for _name in ("sqlalchemy", "sqlalchemy.engine", "sqlalchemy.engine.Engine", "sq
 from app.kb import indexer
 from app.kb.service import get_kb_service
 from app.kb.embedder import embed_query_for_search
-from app.kb.vector_store import chunk_count, hybrid_search
+from app.kb.vector_store import chunk_count, hybrid_search, diversify_by_file
+from app.kb.reranker import rerank_hits
 from app.kb.acronyms import expand_query
 from app.db.engine import get_engine
 from app.db.sqlite_vec_loader import hybrid_disabled, disabled_reason
+from app.config import get_settings
 
 
 # ---------------------------------------------------------------------------
@@ -282,10 +284,22 @@ def _kw_score(query, entry):
     return score
 
 
-def run_hybrid(query: str, limit: int = 5) -> HybridResult:
+@dataclass
+class HybridResult2:
+    paths: list[str]
+    top_score: float
+    raw_hits: list
+    embed_ms: float
+    search_ms: float
+    rerank_ms: float
+
+
+def run_hybrid(query: str, limit: int = 5) -> "HybridResult2":
     if not query.strip():
-        # Treat empty as the tool does — search would error / return nothing meaningful
-        return HybridResult(paths=[], top_score=0.0, raw_hits=[], embed_ms=0.0, search_ms=0.0)
+        return HybridResult2(paths=[], top_score=0.0, raw_hits=[], embed_ms=0.0, search_ms=0.0, rerank_ms=0.0)
+    settings = get_settings()
+    fetch_limit = max(limit * 3, settings.KB_RERANK_TOP_K) if settings.KB_RERANK_ENABLED else limit * 3
+
     engine = get_engine()
     with engine.connect() as conn:
         start_e = time.perf_counter()
@@ -293,8 +307,16 @@ def run_hybrid(query: str, limit: int = 5) -> HybridResult:
         embed_ms = (time.perf_counter() - start_e) * 1000
 
         start_s = time.perf_counter()
-        hits = hybrid_search(conn, query, qvec, limit=limit * 3)
+        hits = hybrid_search(conn, query, qvec, limit=fetch_limit)
         search_ms = (time.perf_counter() - start_s) * 1000
+
+    start_r = time.perf_counter()
+    hits = rerank_hits(query, hits)
+    rerank_ms = (time.perf_counter() - start_r) * 1000
+
+    # Apply the same diversity cap as the production tool so recall metrics
+    # reflect what the agent actually sees.
+    hits = diversify_by_file(hits, limit=limit, max_per_file=settings.KB_DIVERSITY_MAX_PER_FILE)
 
     seen, paths = set(), []
     for h in hits:
@@ -305,7 +327,10 @@ def run_hybrid(query: str, limit: int = 5) -> HybridResult:
             break
 
     top_score = hits[0].score if hits else 0.0
-    return HybridResult(paths=paths, top_score=top_score, raw_hits=hits, embed_ms=embed_ms, search_ms=search_ms)
+    return HybridResult2(
+        paths=paths, top_score=top_score, raw_hits=hits[:limit],
+        embed_ms=embed_ms, search_ms=search_ms, rerank_ms=rerank_ms,
+    )
 
 
 def rank_of(target_paths: list[str], actual_paths: list[str]) -> int | None:
@@ -324,14 +349,14 @@ def _trim(s: str, n: int = 28) -> str:
 # ---------------------------------------------------------------------------
 
 def print_row_table(rows: list[dict]) -> None:
-    print(f"{'probe':<32} {'cat':<13} {'kw r':<5} {'hy r':<5} {'score':<8} {'conf':<7} {'src':<4} {'vdist':<7} {'top file':<28}")
+    print(f"{'probe':<32} {'cat':<13} {'kw r':<5} {'hy r':<5} {'rrf':<7} {'rerank':<7} {'conf':<7} {'top file':<28}")
     print("-" * 116)
     for r in rows:
         kw_r = str(r["kw_rank"]) if r["kw_rank"] is not None else "-"
         hy_r = str(r["hy_rank"]) if r["hy_rank"] is not None else "-"
         top = _trim(r["hy_top_path"] or "(empty)", 26)
-        vd = f"{r['hy_top_vec_distance']:.3f}" if r['hy_top_vec_distance'] is not None else "-"
-        print(f"{_trim(r['name'], 30):<32} {r['category']:<13} {kw_r:<5} {hy_r:<5} {r['hy_score']:<8.4f} {r['hy_top_confidence'] or '-':<7} {r['hy_top_sources_hit']:<4} {vd:<7} {top:<28}")
+        rk = f"{r['hy_top_rerank_score']:.3f}" if r.get('hy_top_rerank_score') is not None else "-"
+        print(f"{_trim(r['name'], 30):<32} {r['category']:<13} {kw_r:<5} {hy_r:<5} {r['hy_score']:<7.4f} {rk:<7} {r['hy_top_confidence'] or '-':<7} {top:<28}")
 
 
 def summarise(rows: list[dict]) -> None:
@@ -402,12 +427,30 @@ def score_distribution(rows: list[dict]) -> None:
     print(f"    out-of-KB queries:     {conf_breakdown(ood_rows)}")
     print(f"    edge / degenerate:     {conf_breakdown(edge_rows)}")
 
+    # Rerank score distribution
+    print("\n  Rerank score (LLM-judge 0.0-1.0):")
+    tp_rerank = sorted(r["hy_top_rerank_score"] for r in tp_rows if r.get("hy_top_rerank_score") is not None)
+    ood_rerank = sorted(r["hy_top_rerank_score"] for r in ood_rows if r.get("hy_top_rerank_score") is not None)
+    if tp_rerank:
+        print(f"    true positives:  n={len(tp_rerank)}  min={tp_rerank[0]:.2f}  median={tp_rerank[len(tp_rerank)//2]:.2f}  max={tp_rerank[-1]:.2f}")
+    if ood_rerank:
+        print(f"    out-of-KB:       n={len(ood_rerank)}  min={ood_rerank[0]:.2f}  median={ood_rerank[len(ood_rerank)//2]:.2f}  max={ood_rerank[-1]:.2f}")
+        if tp_rerank:
+            margin = tp_rerank[0] - ood_rerank[-1]
+            print(f"    TP-min vs OOD-max margin: {margin:+.2f}  (positive = clean separation)")
+
     # Did the low_confidence_only envelope flag fire for the right queries?
     low_only_ood = sum(1 for r in ood_rows if r["all_low_confidence"])
     low_only_tp  = sum(1 for r in tp_rows if r["all_low_confidence"])
     print(f"\n  envelope flag 'low_confidence_only=true' fired on:")
     print(f"    out-of-KB queries:  {low_only_ood}/{len(ood_rows)}  (want: high)")
     print(f"    true positives:     {low_only_tp}/{len(tp_rows)}  (want: 0 — would be a false silence)")
+
+    # Latency averages
+    avg_embed = sum(r["embed_ms"] for r in rows) / len(rows)
+    avg_search = sum(r["search_ms"] for r in rows) / len(rows)
+    avg_rerank = sum(r["rerank_ms"] for r in rows) / len(rows)
+    print(f"\n  latency averages (per query): embed={avg_embed:.0f}ms  search={avg_search:.1f}ms  rerank={avg_rerank:.0f}ms  total={avg_embed+avg_search+avg_rerank:.0f}ms")
 
 
 def failure_analysis(rows: list[dict]) -> None:
@@ -457,6 +500,8 @@ def main() -> int:
         kw_rank = rank_of(probe.expected_paths, kw.paths) if probe.expected_paths else None
         hy_rank = rank_of(probe.expected_paths, hy.paths) if probe.expected_paths else None
         h0 = hy.raw_hits[0] if hy.raw_hits else None
+        # How many distinct files are in the top-5? Measures diversity.
+        unique_files = len({h.kb_path for h in hy.raw_hits[:5]})
         rows.append({
             "name": probe.name,
             "query": probe.query,
@@ -475,9 +520,12 @@ def main() -> int:
             "hy_top_confidence": h0.confidence if h0 else "",
             "hy_top_sources_hit": h0.sources_hit if h0 else 0,
             "hy_top_vec_distance": h0.vec_distance if h0 else None,
+            "hy_top_rerank_score": h0.rerank_score if h0 else None,
             "all_low_confidence": bool(hy.raw_hits) and all(h.confidence == "low" for h in hy.raw_hits[:5]),
+            "unique_files_top5": unique_files,
             "embed_ms": hy.embed_ms,
             "search_ms": hy.search_ms,
+            "rerank_ms": hy.rerank_ms,
             "kw_ms": kw.elapsed_ms,
         })
         progress = "+" if (probe.expected_paths and hy_rank == 1) else ("." if hy.raw_hits else "?")

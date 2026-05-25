@@ -145,34 +145,50 @@ class TestBuildFtsQuery:
 # ── RRF ─────────────────────────────────────────────────────────────────────
 
 class TestRRF:
+    # `_rrf` now returns (ranked_list, sources_by_rid, distance_by_rid).
+    # Dense input is list[tuple[rowid, vec_distance]] — distance threaded through
+    # so callers can build a confidence signal.
+
     def test_item_in_both_lists_scores_higher(self):
         bm25 = [1, 2, 3]
-        dense = [2, 4, 5]
-        result = dict(_rrf(bm25, dense, k=60))
-        # rowid 2 appears in both — should score higher than 1 or 4
+        dense = [(2, 0.1), (4, 0.2), (5, 0.3)]
+        ranked, sources, _ = _rrf(bm25, dense, k=60)
+        result = dict(ranked)
         assert result[2] > result[1]
         assert result[2] > result[4]
+        assert sources[2] == 2
+        assert sources[1] == 1
+        assert sources[4] == 1
 
     def test_result_sorted_descending(self):
-        result = _rrf([1, 2, 3], [3, 2, 1], k=60)
-        scores = [s for _, s in result]
+        ranked, _, _ = _rrf([1, 2, 3], [(3, 0.1), (2, 0.2), (1, 0.3)], k=60)
+        scores = [s for _, s in ranked]
         assert scores == sorted(scores, reverse=True)
 
     def test_empty_bm25(self):
-        result = dict(_rrf([], [10, 20, 30], k=60))
+        ranked, sources, distances = _rrf([], [(10, 0.1), (20, 0.2), (30, 0.3)], k=60)
+        result = dict(ranked)
         assert len(result) == 3
         assert result[10] > result[20] > result[30]
+        assert all(s == 1 for s in sources.values())
+        assert distances == {10: 0.1, 20: 0.2, 30: 0.3}
 
     def test_empty_dense(self):
-        result = dict(_rrf([10, 20], [], k=60))
+        ranked, sources, distances = _rrf([10, 20], [], k=60)
+        result = dict(ranked)
         assert result[10] > result[20]
+        assert distances == {}
+        assert all(s == 1 for s in sources.values())
 
     def test_both_empty_returns_empty(self):
-        assert _rrf([], [], k=60) == []
+        ranked, sources, distances = _rrf([], [], k=60)
+        assert ranked == []
+        assert sources == {}
+        assert distances == {}
 
     def test_k_parameter_affects_scores(self):
-        r_low = dict(_rrf([1, 2], [1, 2], k=1))
-        r_high = dict(_rrf([1, 2], [1, 2], k=100))
+        r_low = dict(_rrf([1, 2], [(1, 0.1), (2, 0.2)], k=1)[0])
+        r_high = dict(_rrf([1, 2], [(1, 0.1), (2, 0.2)], k=100)[0])
         # With lower k, top-rank items get disproportionately higher scores
         ratio_low = r_low[1] / r_low[2]
         ratio_high = r_high[1] / r_high[2]

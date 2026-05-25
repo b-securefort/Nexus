@@ -306,7 +306,7 @@ class SearchKBHybridTool(Tool):
         limit = min(int(args.get("limit", 5)), 20)
 
         # Import here so startup is unaffected if embedder config is missing
-        from app.kb.embedder import embed_query
+        from app.kb.embedder import embed_query_for_search
         from app.kb.vector_store import chunk_count, hybrid_search
         from app.kb.reindex import status as reindex_status
         from app.db.engine import get_engine
@@ -326,7 +326,7 @@ class SearchKBHybridTool(Tool):
                 })
 
             try:
-                query_vec = embed_query(query)
+                query_vec = embed_query_for_search(query)
             except Exception as e:
                 logger.warning("Embedding failed for hybrid search (%s), falling back to keyword", e)
                 kb = get_kb_service()
@@ -346,11 +346,23 @@ class SearchKBHybridTool(Tool):
                 "snippet": h.snippet,
                 "source_url": h.source_url,
                 "score": round(h.score, 4),
+                "confidence": h.confidence,
             }
             for h in hits
         ]
 
         envelope: dict = {"results": results}
+
+        # If no hit clears the medium-confidence bar, signal that to the agent
+        # so it can say "I don't see a documented answer" instead of returning
+        # what is effectively a random nearest-neighbour chunk.
+        if hits and all(h.confidence == "low" for h in hits):
+            envelope["low_confidence_only"] = True
+            envelope["note"] = (
+                "No high- or medium-confidence matches. The KB likely does not "
+                "cover this query. Returned chunks are the nearest neighbours "
+                "but may be irrelevant — treat with caution."
+            )
 
         # Surface a warming note only while indexing is in progress
         if rs.get("state") == "running":

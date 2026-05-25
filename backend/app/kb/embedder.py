@@ -68,3 +68,22 @@ def embed_texts(texts: Sequence[str]) -> list[np.ndarray]:
 def embed_query(query: str) -> np.ndarray:
     """Embed a single search query. Returns a L2-normalised array."""
     return embed_texts([query])[0]
+
+
+def embed_query_for_search(query: str) -> np.ndarray:
+    """Embed a search query with acronym expansion applied.
+
+    Short acronym queries ('AAD identity setup') under-anchor a vector
+    embedding — there isn't enough surface area for the model to find the
+    target concept. Feeding the BM25-expanded phrase list into the embedder
+    too widens the semantic surface so the vector half can hit the same
+    docs BM25 already hits via expansion. No-op for queries with no
+    acronyms (expand_query returns just the original).
+    """
+    from app.kb.acronyms import expand_query
+    expanded = expand_query(query)
+    if len(expanded) <= 1:
+        return embed_query(query)
+    # Join with ". " so the embedding model treats them as related phrases
+    # in one passage, not a single concatenated noun phrase.
+    return embed_query(". ".join(expanded))

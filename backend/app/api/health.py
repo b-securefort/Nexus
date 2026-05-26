@@ -7,17 +7,24 @@ from fastapi import APIRouter
 from app.agent.circuit_breaker import get_status_dict as cb_status
 from app.kb.git_sync import get_last_sync
 from app.db.engine import get_engine
+from app.phases import phase_status
 
 router = APIRouter()
 
 
 @router.get("/healthz")
 async def healthz():
-    """Liveness probe — always returns OK if the app is running."""
+    """Liveness probe — always returns OK if the app is running.
+
+    `phase` reports the current NEXUS_PHASE and per-gate enabled state — see
+    app/phases.py. Useful for confirming which features are unlocked in a
+    given deployment without grepping config.
+    """
     return {
         "status": "ok",
         "kb_last_sync": get_last_sync(),
         "aoai_circuit_breaker": cb_status(),
+        "phase": phase_status(),
     }
 
 

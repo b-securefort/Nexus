@@ -370,6 +370,8 @@ def list_tools() -> list[Tool]:
 
 def resolve_tools(tool_names: list[str]) -> list[Tool]:
     """Resolve a list of tool names to Tool instances, filtering disabled ones."""
+    from app.phases import is_tool_enabled
+
     settings = get_settings()
     tools = []
     for name in tool_names:
@@ -379,6 +381,12 @@ def resolve_tools(tool_names: list[str]) -> list[Tool]:
             continue
         if not tool.enabled_by_config:
             logger.warning("Tool %s is disabled by config, skipping", name)
+            continue
+        if not is_tool_enabled(name):
+            # Phase-gated off at the current NEXUS_PHASE — see app/phases.py.
+            logger.debug(
+                "Tool %s gated off at current NEXUS_PHASE, skipping", name
+            )
             continue
         tools.append(tool)
     return tools

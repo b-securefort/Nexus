@@ -11,6 +11,7 @@ from app.auth.models import User
 from app.auth.rbac import allowed_skills_for, allowed_tools_for
 from app.db.engine import get_session
 from app.deps import current_user
+from app.phases import is_enabled
 from app.skills.personal import (
     create_personal_skill,
     delete_personal_skill,
@@ -20,6 +21,17 @@ from app.skills.personal import (
 )
 from app.skills.shared import get_shared_skills
 from app.tools.base import list_tools, TOOL_REGISTRY
+
+
+def require_personal_skills_phase() -> None:
+    """Phase gate dependency for /api/skills/personal endpoints.
+
+    See app/phases.py — feature_personal_skills unlocks at Phase 3. Returns
+    404 (rather than 403) when gated off so the endpoint looks like it
+    simply doesn't exist to the frontend.
+    """
+    if not is_enabled("feature_personal_skills"):
+        raise HTTPException(status_code=404, detail="Not Found")
 
 logger = logging.getLogger(__name__)
 
@@ -154,19 +166,20 @@ async def list_skills(user: User = Depends(current_user)):
             )
         )
 
-    # Personal skills
-    with get_session() as session:
-        for skill in list_personal_skills(session, user.oid):
-            results.append(
-                SkillResponse(
-                    id=skill.id,
-                    name=skill.name,
-                    display_name=skill.display_name,
-                    description=skill.description,
-                    tools=skill.tools,
-                    source=skill.source,
+    # Personal skills — Phase 3 feature (see app/phases.py)
+    if is_enabled("feature_personal_skills"):
+        with get_session() as session:
+            for skill in list_personal_skills(session, user.oid):
+                results.append(
+                    SkillResponse(
+                        id=skill.id,
+                        name=skill.name,
+                        display_name=skill.display_name,
+                        description=skill.description,
+                        tools=skill.tools,
+                        source=skill.source,
+                    )
                 )
-            )
 
     return results
 
@@ -187,7 +200,11 @@ async def list_available_tools(user: User = Depends(current_user)):
 
 
 @router.get("/skills/personal/{name}", response_model=SkillDetailResponse)
-async def get_personal_skill_detail(name: str, user: User = Depends(current_user)):
+async def get_personal_skill_detail(
+    name: str,
+    user: User = Depends(current_user),
+    _phase: None = Depends(require_personal_skills_phase),
+):
     """Fetch one personal skill for editing."""
     with get_session() as session:
         skill = get_personal_skill(session, user.oid, name)
@@ -223,7 +240,11 @@ def _enforce_tool_access(user: User, tools: list[str] | None) -> None:
 
 
 @router.post("/skills/personal", response_model=SkillResponse, status_code=201)
-async def create_skill(body: CreateSkillRequest, user: User = Depends(current_user)):
+async def create_skill(
+    body: CreateSkillRequest,
+    user: User = Depends(current_user),
+    _phase: None = Depends(require_personal_skills_phase),
+):
     """Create a new personal skill."""
     _enforce_tool_access(user, body.tools)
     with get_session() as session:
@@ -252,7 +273,12 @@ async def create_skill(body: CreateSkillRequest, user: User = Depends(current_us
 
 
 @router.put("/skills/personal/{name}", response_model=SkillResponse)
-async def update_skill(name: str, body: UpdateSkillRequest, user: User = Depends(current_user)):
+async def update_skill(
+    name: str,
+    body: UpdateSkillRequest,
+    user: User = Depends(current_user),
+    _phase: None = Depends(require_personal_skills_phase),
+):
     """Update an existing personal skill."""
     _enforce_tool_access(user, body.tools)
     with get_session() as session:
@@ -278,7 +304,11 @@ async def update_skill(name: str, body: UpdateSkillRequest, user: User = Depends
 
 
 @router.delete("/skills/personal/{name}")
-async def delete_skill(name: str, user: User = Depends(current_user)):
+async def delete_skill(
+    name: str,
+    user: User = Depends(current_user),
+    _phase: None = Depends(require_personal_skills_phase),
+):
     """Soft delete a personal skill."""
     with get_session() as session:
         deleted = delete_personal_skill(session, user.oid, name)

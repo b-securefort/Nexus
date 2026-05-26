@@ -408,6 +408,19 @@ async def lifespan(app: FastAPI):
     load_index()
     load_shared_skills()
 
+    # Phase-gate audit — log current phase + which gates are on/off, and
+    # WARN loudly if any gate is past its review_by date. See app/phases.py
+    # and gatesreadme.md for the removal playbook.
+    from app.phases import PHASE_GATES, format_startup_banner, overdue_gates
+    logger.info(format_startup_banner())
+    for gate_name in overdue_gates():
+        gate = PHASE_GATES[gate_name]
+        logger.warning(
+            "Phase gate '%s' is past review_by (%s) and currently ACTIVE — "
+            "removal criteria: %s. See gatesreadme.md.",
+            gate_name, gate.review_by.isoformat(), gate.removal_criteria,
+        )
+
     # Drift check: warn at startup if any shared skill's `tools:` allowlist
     # references a name not in TOOL_REGISTRY. Catches phantoms (like the
     # `diagram_gen` typo found in 2026-05-19 sanity testing) BEFORE a user

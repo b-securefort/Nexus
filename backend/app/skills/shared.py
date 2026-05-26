@@ -28,12 +28,22 @@ def load_shared_skills() -> dict[str, Skill]:
 
     new_cache: dict[str, Skill] = {}
 
+    from app.phases import is_skill_enabled
+
     for skill_dir in sorted(skills_dir.iterdir()):
         if not skill_dir.is_dir():
             continue
 
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.exists():
+            continue
+
+        if not is_skill_enabled(skill_dir.name):
+            # Phase-gated off at the current NEXUS_PHASE — see app/phases.py.
+            logger.info(
+                "Shared skill '%s' gated off at current NEXUS_PHASE, skipping",
+                skill_dir.name,
+            )
             continue
 
         try:

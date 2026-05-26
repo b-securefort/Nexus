@@ -114,6 +114,20 @@ class Settings(BaseSettings):
     APP_LOG_LEVEL: str = "INFO"
     APP_CORS_ORIGINS: str = "http://localhost:5173"
 
+    # ── Phase gating (see app/phases.py and gatesreadme.md) ────────────────
+    # Temporary phased-rollout control. Higher number = more features unlocked.
+    # At full rollout this setting + the entire app/phases.py module + every
+    # is_enabled() / is_tool_enabled() / is_skill_enabled() call-site wrapper
+    # are deleted together. See gatesreadme.md for the removal playbook.
+    #
+    # Phase 0 — KB + docs only (read-only knowledge buddy)
+    # Phase 1 — adds az_resource_graph (read-only Azure)
+    # Phase 2 — adds az_cli + execute_script (approval-gated) + chat-with-kb skill
+    # Phase 3 — adds personal skills + architect + drawio-diagrammer skills
+    #
+    # Default of 1 ships P0+P1 to a fresh deployment with no NEXUS_PHASE set.
+    NEXUS_PHASE: int = 1
+
     # Auth bypass (dev only)
     DEV_AUTH_BYPASS: bool = False
 

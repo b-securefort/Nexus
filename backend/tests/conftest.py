@@ -17,6 +17,10 @@ os.environ["AZURE_OPENAI_API_KEY"] = "test-key"
 os.environ["ENTRA_TENANT_ID"] = "test-tenant"
 os.environ["ENTRA_API_CLIENT_ID"] = "test-client"
 os.environ["ENTRA_API_AUDIENCE"] = "api://test-client"
+# Tests run with all phases unlocked so existing test fixtures keep working.
+# The phase-gating system itself is exercised by tests/test_phase_gates.py,
+# which overrides this via monkeypatch as needed.
+os.environ["NEXUS_PHASE"] = "3"
 
 
 @pytest.fixture(autouse=True)

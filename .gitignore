@@ -41,3 +41,9 @@ backend/models/
 # Generated diagram/script artifacts — runtime sandbox, never commit
 backend/output/*
 !backend/output/.gitkeep
+
+# Phase-gate removal playbook — local-only reference for the operator.
+# The gating system itself (app/phases.py + tests/test_phase_gates.py) IS
+# checked in; only this human-facing playbook stays personal so it can be
+# carried across machines / repos as your own working notes.
+gatesreadme.md

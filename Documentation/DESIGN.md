@@ -708,6 +708,11 @@ Adds AWS service mappings (~90 services spanning `compute / network / database /
 Added `nexus_tool_calls_total{tool, outcome}` (incremented once per tool dispatch in `orchestrator.py`) plus `classify_tool_outcome()` in `app/tools/base.py`. Outcome is one of three labels: `success`, `empty` (empty string / short result / empty-data JSON envelope), `error` ("Error:" prefix or `status == "error"` envelope). The taxonomy is deliberately coarse so the immediate question — "is this tool quietly failing?" — is answerable from one PromQL query without a join, replacing one-off DB archaeology of the `messages` table.
 **Trade-off**: the coarse labels lose detail (rate-limit vs auth-fail vs server-error all collapse to `error`); accepted because finer taxonomies become hard-to-change public API once dashboards reference them. The classification rules — 30-char short-result threshold and the empty-array regex over `data|results|items|value` keys — are a snapshot of how today's tools shape their results; if a future tool returns large blobs that are still semantically empty, refine `_EMPTY_RESULT_MAX_LEN` and the regex in lockstep.
 
+### 2026-05-25 — LLM-judge reranker for `search_kb_hybrid`
+
+**Replaces the ~~2026-05-15 "Conditional cross-encoder reranking"~~ decision.** That struck-through entry left a conditional trigger ("if retrieval quality proves insufficient at larger corpus scale, a reranker can be added then") which fired once `kb_hybrid_eval_50.py` made mid-rank relevance gaps measurable. `app/kb/reranker.py` calibrates each top-K RRF candidate to a 0.0–1.0 relevance score via one Azure OpenAI chat call, sorts the judged segment, and tags each hit with a `confidence` tier (high/medium/low) from configurable thresholds. Chose LLM-judge over the originally-planned `bge-reranker-base` cross-encoder because it reuses the existing Azure OpenAI deployment (no new 279 MB model file, no ONNX runtime), and the calibrated 0.0–1.0 score transfers across corpora — unlike raw cosine distance, which is corpus-dependent.
+**Trade-off**: one additional Azure OpenAI completion call per `search_kb_hybrid` invocation (~200 output tokens) and rerank availability is now gated on Azure OpenAI — accepted because the call participates in the §5 2026-05-21 circuit breaker, falls back to RRF order on any parse/API failure, and can be disabled via `KB_RERANK_ENABLED=false`.
+
 ---
 
 ## 6. Operations
@@ -823,17 +828,21 @@ indexing.
   add Tesseract path when first scanned PDF appears.
 - **Retire cloud `search_kb_semantic`**: after the local path is validated
   on real ingested content with a golden-set comparison.
-- **DSPy refactor** (Phase 3): clean up ad-hoc `chat.completions.create`
-  calls into typed `dspy.Signature` modules — and use the same primitives
-  to fix recurring tool-call constraint violations the prompt alone hasn't
-  held. Partial implementation is fine but should be **deliberately scoped**:
-  see [IdeasTodo/dspy-coverage-tracker.md](../IdeasTodo/dspy-coverage-tracker.md)
-  for the live checklist of distinct use cases, the interim fix in place for
-  each (some have none, some have load-bearing workarounds in code today),
-  and the retire-criteria for removing those interim fixes once a given
-  DSPy capability lands. As of 2026-05-20 the tracker covers four rows:
-  compaction summarizer, query expansion, `generate_drawio_from_python`
-  codegen constraints, and the orchestrator's narration-instead-of-action
-  loop branch.
+- **DSPy refactor** *(evaluated 2026-05-25, deferred)*: walked through five
+  candidate use cases (compaction summarizer, query expansion, drawio codegen,
+  narration nudge, hybrid LLM-judge rerank) and concluded none currently earn
+  the framework cost. Reasoning: no demonstrated user pain on the existing
+  LLM-call sites; framework-creep risk parallel to the §5 2026-04-22
+  LangChain/LangGraph rejection; compiled-artefact opacity breaks `git diff` /
+  `git blame` as review tools; re-compile drift on model/chunker changes has
+  no auto-detection. The unique DSPy value (`BootstrapFewShot` auto-mining of
+  few-shot examples) is overkill for single-step request-response LLM calls
+  where hand-picked few-shots in the prompt capture most of the gain.
+  **Re-evaluation trigger:** revisit when Nexus is in production with
+  significant scenario coverage AND a specific LLM-call site has produced
+  documented user pain that prompt iteration + hand-picked few-shots cannot
+  fix, OR a new multi-step LLM pipeline emerges where joint optimisation
+  beats per-step tuning. The deferral summary lives at
+  [IdeasTodo/dspy-coverage-tracker.md](../IdeasTodo/dspy-coverage-tracker.md).
 - **Full corpus ingestion** (1000 wiki + 100 PDF): same code as the pilot,
   just turn on more wiki spaces / longer link lists.

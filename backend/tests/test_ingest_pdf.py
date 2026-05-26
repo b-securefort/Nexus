@@ -64,9 +64,7 @@ def test_pdf_to_markdown_with_text(tmp_path):
 
 def _fake_settings(**kwargs):
     s = MagicMock()
-    s.INGEST_ADO_WIKI_ORG = ""
-    s.INGEST_ADO_WIKI_PROJECT = ""
-    s.INGEST_ADO_WIKI_NAME = ""
+    s.INGEST_ADO_WIKI_SOURCES = []
     s.KB_REPO_PAT = ""
     s.INGEST_PDF_LIST_WIKI_PATH = ""
     for k, v in kwargs.items():
@@ -177,7 +175,7 @@ def test_runner_all_disabled(tmp_path):
 
     mock_settings = MagicMock()
     mock_settings.KB_REPO_LOCAL_PATH = str(tmp_path)
-    mock_settings.INGEST_ADO_WIKI_ENABLED = False
+    mock_settings.INGEST_ADO_WIKI_SOURCES = []
     mock_settings.INGEST_PDF_LIST_ENABLED = False
 
     with patch("app.kb.ingest.runner.get_settings", return_value=mock_settings):
@@ -187,12 +185,19 @@ def test_runner_all_disabled(tmp_path):
 
 
 def test_runner_ado_wiki_source_called(tmp_path):
-    """When ADO wiki is enabled, ingest_ado_wiki is called."""
+    """Each configured ADO wiki source is ingested with its own label key."""
+    from app.config import AdoWikiSource
     from app.kb.ingest.runner import run_all_sources
 
+    src = AdoWikiSource(
+        label="platform",
+        org="https://dev.azure.com/myorg",
+        project="Platform",
+        wiki="Platform.wiki",
+    )
     mock_settings = MagicMock()
     mock_settings.KB_REPO_LOCAL_PATH = str(tmp_path)
-    mock_settings.INGEST_ADO_WIKI_ENABLED = True
+    mock_settings.INGEST_ADO_WIKI_SOURCES = [src]
     mock_settings.INGEST_PDF_LIST_ENABLED = False
 
     with (
@@ -201,31 +206,74 @@ def test_runner_ado_wiki_source_called(tmp_path):
     ):
         results = run_all_sources()
 
-    assert results.get("ado_wiki") == 5
+    assert results.get("ado_wiki:platform") == 5
     mock_ingest.assert_called_once()
 
 
-def test_runner_source_error_does_not_abort(tmp_path):
-    """An exception in one source is caught; runner returns 0 for that source."""
+def test_runner_per_source_isolation(tmp_path):
+    """If wiki A fails, wiki B still runs; both label keys appear in results."""
+    from app.config import AdoWikiSource
     from app.kb.ingest.runner import run_all_sources
 
+    src_a = AdoWikiSource(
+        label="broken",
+        org="https://dev.azure.com/myorg",
+        project="A",
+        wiki="A.wiki",
+    )
+    src_b = AdoWikiSource(
+        label="working",
+        org="https://dev.azure.com/myorg",
+        project="B",
+        wiki="B.wiki",
+    )
     mock_settings = MagicMock()
     mock_settings.KB_REPO_LOCAL_PATH = str(tmp_path)
-    mock_settings.INGEST_ADO_WIKI_ENABLED = True
-    mock_settings.INGEST_PDF_LIST_ENABLED = True
+    mock_settings.INGEST_ADO_WIKI_SOURCES = [src_a, src_b]
+    mock_settings.INGEST_PDF_LIST_ENABLED = False
 
-    def bad_wiki(*a, **kw):
-        raise RuntimeError("ADO down")
-
-    def ok_pdf(*a, **kw):
-        return 3
+    def fake_ingest(kb_root, source, settings):
+        if source.label == "broken":
+            raise RuntimeError("ADO down")
+        return 7
 
     with (
         patch("app.kb.ingest.runner.get_settings", return_value=mock_settings),
-        patch("app.kb.ingest.ado_wiki.ingest_ado_wiki", side_effect=bad_wiki),
-        patch("app.kb.ingest.pdf_fetcher.ingest_pdfs", return_value=3),
+        patch("app.kb.ingest.ado_wiki.ingest_ado_wiki", side_effect=fake_ingest),
     ):
         results = run_all_sources()
 
-    # ado_wiki failed → 0; pdf might or might not run depending on import path
-    assert results.get("ado_wiki") == 0
+    assert results.get("ado_wiki:broken") == 0
+    assert results.get("ado_wiki:working") == 7
+
+
+def test_runner_status_snapshot_includes_per_source(tmp_path):
+    """get_source_status returns one entry per attempted source, with error list."""
+    from app.config import AdoWikiSource
+    from app.kb.ingest.runner import run_all_sources, get_source_status
+
+    src = AdoWikiSource(
+        label="oops",
+        org="https://dev.azure.com/myorg",
+        project="X",
+        wiki="X.wiki",
+    )
+    mock_settings = MagicMock()
+    mock_settings.KB_REPO_LOCAL_PATH = str(tmp_path)
+    mock_settings.INGEST_ADO_WIKI_SOURCES = [src]
+    mock_settings.INGEST_PDF_LIST_ENABLED = False
+
+    def fake_ingest(kb_root, source, settings):
+        raise RuntimeError("connection refused")
+
+    with (
+        patch("app.kb.ingest.runner.get_settings", return_value=mock_settings),
+        patch("app.kb.ingest.ado_wiki.ingest_ado_wiki", side_effect=fake_ingest),
+    ):
+        run_all_sources()
+
+    snap = get_source_status()
+    assert "ado_wiki:oops" in snap
+    assert snap["ado_wiki:oops"]["label"] == "oops"
+    assert snap["ado_wiki:oops"]["pages_synced"] == 0
+    assert any("connection refused" in e for e in snap["ado_wiki:oops"]["errors"])

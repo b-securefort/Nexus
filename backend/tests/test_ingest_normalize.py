@@ -117,6 +117,114 @@ def test_write_document_extra_front_matter(tmp_path):
     assert 'custom_key: "custom_val"' in dest.read_text(encoding="utf-8")
 
 
+def test_write_document_source_instance_subdir(tmp_path):
+    """source_instance adds a subdirectory under <source>/ and a front-matter field."""
+    dest = write_document(
+        kb_root=tmp_path,
+        source="ado_wiki",
+        source_instance="platform",
+        title="Page",
+        body="Content.",
+        source_url="https://dev.azure.com/myorg/Platform/_wiki/wikis/Platform.wiki?pagePath=/Page",
+    )
+    assert dest.parent == tmp_path / "kb" / "ado_wiki" / "platform"
+    text = dest.read_text(encoding="utf-8")
+    assert 'source: "ado_wiki"' in text
+    assert 'source_instance: "platform"' in text
+
+
+def test_write_document_no_source_instance_no_subdir(tmp_path):
+    """Backwards-compatible behaviour: no source_instance = no subdir, no field."""
+    dest = write_document(
+        kb_root=tmp_path,
+        source="pdf_web",
+        title="Doc",
+        body="Body",
+    )
+    assert dest.parent == tmp_path / "kb" / "pdf_web"
+    assert 'source_instance' not in dest.read_text(encoding="utf-8")
+
+
+# ── _source_meta.json sentinel (label-rebind defence) ─────────────────────────
+
+def test_sentinel_written_on_first_ingest(tmp_path):
+    from app.config import AdoWikiSource
+    from app.kb.ingest.ado_wiki import _check_sentinel
+
+    src = AdoWikiSource(
+        label="platform",
+        org="https://dev.azure.com/myorg",
+        project="Platform",
+        wiki="Platform.wiki",
+    )
+    label_dir = tmp_path / "kb" / "ado_wiki" / "platform"
+    _check_sentinel(label_dir, src)
+    sentinel = label_dir / "_source_meta.json"
+    assert sentinel.exists()
+    import json
+    data = json.loads(sentinel.read_text(encoding="utf-8"))
+    assert data["org"] == "https://dev.azure.com/myorg"
+    assert data["project"] == "Platform"
+    assert data["wiki"] == "Platform.wiki"
+    assert data["label"] == "platform"
+
+
+def test_sentinel_matching_triple_passes(tmp_path):
+    from app.config import AdoWikiSource
+    from app.kb.ingest.ado_wiki import _check_sentinel
+
+    src = AdoWikiSource(
+        label="platform",
+        org="https://dev.azure.com/myorg",
+        project="Platform",
+        wiki="Platform.wiki",
+    )
+    label_dir = tmp_path / "kb" / "ado_wiki" / "platform"
+    _check_sentinel(label_dir, src)  # first call writes sentinel
+    _check_sentinel(label_dir, src)  # second call must pass (no rebind)
+
+
+def test_sentinel_rebind_raises(tmp_path):
+    from app.config import AdoWikiSource
+    from app.kb.ingest.ado_wiki import _check_sentinel, LabelRebindError
+
+    src_v1 = AdoWikiSource(
+        label="platform",
+        org="https://dev.azure.com/myorg",
+        project="Platform",
+        wiki="Platform.wiki",
+    )
+    src_v2 = AdoWikiSource(
+        label="platform",  # same label
+        org="https://dev.azure.com/myorg",
+        project="DataPlatform",  # but pointing at a different project
+        wiki="DataPlatform.wiki",
+    )
+    label_dir = tmp_path / "kb" / "ado_wiki" / "platform"
+    _check_sentinel(label_dir, src_v1)
+
+    with pytest.raises(LabelRebindError, match="previously bound"):
+        _check_sentinel(label_dir, src_v2)
+
+
+def test_sentinel_corrupt_raises(tmp_path):
+    from app.config import AdoWikiSource
+    from app.kb.ingest.ado_wiki import _check_sentinel, LabelRebindError
+
+    src = AdoWikiSource(
+        label="platform",
+        org="https://dev.azure.com/myorg",
+        project="Platform",
+        wiki="Platform.wiki",
+    )
+    label_dir = tmp_path / "kb" / "ado_wiki" / "platform"
+    label_dir.mkdir(parents=True)
+    (label_dir / "_source_meta.json").write_text("not json", encoding="utf-8")
+
+    with pytest.raises(LabelRebindError, match="unreadable"):
+        _check_sentinel(label_dir, src)
+
+
 # ── strip_front_matter ────────────────────────────────────────────────────────
 
 def test_strip_front_matter_basic():

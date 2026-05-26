@@ -60,30 +60,40 @@ class TestExpandQuery:
 
 class TestStripFrontmatter:
     def test_no_frontmatter(self):
-        body, url = _strip_frontmatter("# Title\nContent")
+        body, url, inst = _strip_frontmatter("# Title\nContent")
         assert body == "# Title\nContent"
         assert url is None
+        assert inst is None
 
     def test_strips_frontmatter(self):
         content = "---\ntitle: Foo\n---\n# Title\nContent"
-        body, url = _strip_frontmatter(content)
+        body, url, inst = _strip_frontmatter(content)
         assert body.startswith("# Title")
         assert "title: Foo" not in body
 
     def test_extracts_source_url(self):
         content = "---\nsource_url: https://example.com/doc\n---\n# Title"
-        _, url = _strip_frontmatter(content)
+        _, url, _inst = _strip_frontmatter(content)
         assert url == "https://example.com/doc"
 
     def test_source_url_with_quotes(self):
         content = '---\nsource_url: "https://example.com/doc"\n---\n# Title'
-        _, url = _strip_frontmatter(content)
+        _, url, _inst = _strip_frontmatter(content)
         assert url == "https://example.com/doc"
 
     def test_no_source_url_in_frontmatter(self):
         content = "---\ntitle: Foo\nauthor: Bar\n---\n# Title"
-        _, url = _strip_frontmatter(content)
+        _, url, _inst = _strip_frontmatter(content)
         assert url is None
+
+    def test_extracts_source_instance(self):
+        content = '---\nsource_instance: "platform"\n---\n# Title'
+        _, _url, inst = _strip_frontmatter(content)
+        assert inst == "platform"
+
+    def test_source_instance_none_without_frontmatter(self):
+        _, _url, inst = _strip_frontmatter("# Title\nContent")
+        assert inst is None
 
 
 # ─── chunker — basic splitting ───────────────────────────────────────────────
@@ -139,6 +149,15 @@ class TestChunkMarkdown:
     def test_source_url_none_without_frontmatter(self):
         chunks = chunk_markdown("kb/test.md", SIMPLE_DOC)
         assert all(c.source_url is None for c in chunks)
+
+    def test_source_instance_from_frontmatter(self):
+        doc = '---\nsource: "ado_wiki"\nsource_instance: "platform"\n---\n# Doc\n## Sec\nContent.'
+        chunks = chunk_markdown("kb/ado_wiki/platform/doc.md", doc)
+        assert all(c.source_instance == "platform" for c in chunks)
+
+    def test_source_instance_none_for_hand_authored(self):
+        chunks = chunk_markdown("kb/test.md", SIMPLE_DOC)
+        assert all(c.source_instance is None for c in chunks)
 
     def test_doc_with_no_h2_is_single_chunk(self):
         doc = "# Title\n\nJust a flat document with no subsections.\n"

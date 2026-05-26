@@ -713,6 +713,11 @@ Added `nexus_tool_calls_total{tool, outcome}` (incremented once per tool dispatc
 **Replaces the ~~2026-05-15 "Conditional cross-encoder reranking"~~ decision.** That struck-through entry left a conditional trigger ("if retrieval quality proves insufficient at larger corpus scale, a reranker can be added then") which fired once `kb_hybrid_eval_50.py` made mid-rank relevance gaps measurable. `app/kb/reranker.py` calibrates each top-K RRF candidate to a 0.0–1.0 relevance score via one Azure OpenAI chat call, sorts the judged segment, and tags each hit with a `confidence` tier (high/medium/low) from configurable thresholds. Chose LLM-judge over the originally-planned `bge-reranker-base` cross-encoder because it reuses the existing Azure OpenAI deployment (no new 279 MB model file, no ONNX runtime), and the calibrated 0.0–1.0 score transfers across corpora — unlike raw cosine distance, which is corpus-dependent.
 **Trade-off**: one additional Azure OpenAI completion call per `search_kb_hybrid` invocation (~200 output tokens) and rerank availability is now gated on Azure OpenAI — accepted because the call participates in the §5 2026-05-21 circuit breaker, falls back to RRF order on any parse/API failure, and can be disabled via `KB_RERANK_ENABLED=false`.
 
+### 2026-05-26 — Multi-wiki ADO ingestion via `INGEST_ADO_WIKI_SOURCES` list
+
+Replaces the four scalar `INGEST_ADO_WIKI_*` env vars (deleted outright, no deprecation, because no other deployment has them set yet) with a JSON list of `{label, org, project, wiki}` records; each source ingests into `kb_data/kb/ado_wiki/<label>/` and tags chunks with a new `source_instance` column on `kb_chunks`. The `label` is a stable user-chosen identifier (regex `^[a-z][a-z0-9-]{1,39}$`, unique across sources), never derived from the ADO project name — because ADO renames would otherwise silently orphan every chunk in the renamed source. A `_source_meta.json` sentinel in each label directory pins the `(org, project, wiki)` triple so accidental label rebinds at deploy time fail loudly instead of silently swapping content. The reindexer's existing `_gc()` orphan-sweep (delete from `kb_chunks_vec` then `kb_chunks` where `kb_path` no longer exists on disk) handles deleted pages going forward; cutover from the single-wiki path is a one-time idempotent legacy DELETE gated on the `source_instance` column-add, dropping flat `kb/ado_wiki/<page>.md` chunks while leaving hand-authored and PDF content untouched.
+**Trade-off**: rejected the "aggregate N wikis into one KB git repo via an external job" path (cleaner, zero Nexus code) because the Nexus team would own the aggregator with no operational appetite for a second service; rejected per-source PATs as YAGNI for the one-org-one-team case but left the additive upgrade path documented.
+
 ---
 
 ## 6. Operations
@@ -801,6 +806,28 @@ the deployment — when you change `AZURE_OPENAI_DEPLOYMENT` in `.env`, update
 this setting in the same edit. Wrong value just mis-scales the indicator (the
 backend never enforces it as a hard cap), so a deploy that forgets the update
 will look like it's using less context than it actually is.
+
+### ADO wiki source labels — convention and immutability
+
+Each entry in `INGEST_ADO_WIKI_SOURCES` carries a stable user-chosen
+`label` (regex `^[a-z][a-z0-9-]{1,39}$`, unique across the list). The
+label is Nexus's internal identity for that source instance — it names
+the on-disk subdirectory `kb_data/kb/ado_wiki/<label>/`, the
+`source_instance` column on every chunk, and the `_source_meta.json`
+sentinel that pins the `(org, project, wiki)` triple bound to it.
+
+**Convention**: the label is a slug of the ADO project name. If a project
+hosts multiple wikis (project wiki + N code wikis), append a stable
+disambiguator (e.g. `-docs`, `-code`). The label is your identity choice,
+not a derivation — Nexus does not enforce the convention.
+
+**Immutability**: once a deployment is live with `label: "platform"`, you
+cannot change it without a manual reindex. The sentinel file detects
+accidental label rebinds (`label: "platform"` pointing at a different
+`(org, project, wiki)` triple than last sync) and aborts that source's
+ingestion with an actionable error rather than silently swapping
+content. If a rebind is intentional, delete the corresponding label
+directory under `kb_data/kb/ado_wiki/` and let the next sync repopulate.
 
 ### Concurrency assumption
 Currently single-process (one uvicorn worker). The KB re-indexer uses an

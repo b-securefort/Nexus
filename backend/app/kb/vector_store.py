@@ -141,10 +141,10 @@ def upsert_file_chunks(
                 """
                 INSERT INTO kb_chunks
                   (kb_path, chunk_idx, heading, text, content_hash,
-                   file_mtime, source_url, embed_model, created_at)
+                   file_mtime, source_url, source_instance, embed_model, created_at)
                 VALUES
                   (:kb_path, :chunk_idx, :heading, :text, :content_hash,
-                   :file_mtime, :source_url, :embed_model, :created_at)
+                   :file_mtime, :source_url, :source_instance, :embed_model, :created_at)
                 """
             ),
             {
@@ -155,6 +155,7 @@ def upsert_file_chunks(
                 "content_hash": content_hash,
                 "file_mtime": file_mtime,
                 "source_url": chunk.source_url,
+                "source_instance": chunk.source_instance,
                 "embed_model": embed_model,
                 "created_at": now,
             },

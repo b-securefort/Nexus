@@ -48,6 +48,7 @@ def _make_engine(with_vec: bool = False):
                 content_hash TEXT NOT NULL,
                 file_mtime REAL NOT NULL,
                 source_url TEXT,
+                source_instance TEXT,
                 embed_model TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )

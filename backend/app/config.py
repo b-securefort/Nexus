@@ -3,9 +3,41 @@ Backend configuration via pydantic-settings.
 All config is driven by environment variables.
 """
 
+import json
+import re
+
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import BaseModel, field_validator
 from typing import Optional
+
+
+_LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{1,39}$")
+
+
+class AdoWikiSource(BaseModel):
+    """One configured ADO wiki ingestion source. See DESIGN.md §5
+    2026-05-26 "Multi-wiki ADO ingestion".
+
+    `label` is a stable user-chosen identifier (not derived from `project`)
+    that names the on-disk subdirectory kb_data/kb/ado_wiki/<label>/ and the
+    `source_instance` column on every chunk. Convention: slug of the ADO
+    project name, your choice, never changes — Nexus does not enforce the
+    convention but does enforce the regex and uniqueness.
+    """
+    label: str
+    org: str
+    project: str
+    wiki: str
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, v: str) -> str:
+        if not _LABEL_RE.match(v):
+            raise ValueError(
+                f"label {v!r} must match {_LABEL_RE.pattern} "
+                "(lowercase letter, then 1-39 of [a-z0-9-])"
+            )
+        return v
 
 
 class Settings(BaseSettings):
@@ -63,11 +95,14 @@ class Settings(BaseSettings):
     # 2 other docs also have relevant content. Set to 0 to disable.
     KB_DIVERSITY_MAX_PER_FILE: int = 2
 
-    # KB ingestion (Phase 2a, pilot)
-    INGEST_ADO_WIKI_ENABLED: bool = False
-    INGEST_ADO_WIKI_ORG: str = ""
-    INGEST_ADO_WIKI_PROJECT: str = ""
-    INGEST_ADO_WIKI_NAME: str = ""
+    # KB ingestion (Phase 2a)
+    # ADO wiki ingestion is list-driven — empty list means disabled. Each
+    # entry is a JSON object with {label, org, project, wiki}; see the
+    # AdoWikiSource model above for field validation. Authentication for all
+    # sources uses the global KB_REPO_PAT (org-level Wiki(read) scope).
+    # Format in .env:
+    #   INGEST_ADO_WIKI_SOURCES='[{"label":"platform","org":"https://dev.azure.com/myorg","project":"Platform","wiki":"Platform.wiki"}]'
+    INGEST_ADO_WIKI_SOURCES: list[AdoWikiSource] = []
     INGEST_PDF_LIST_ENABLED: bool = False
     INGEST_PDF_LIST_WIKI_PATH: str = ""
 
@@ -166,6 +201,38 @@ class Settings(BaseSettings):
         """DEV_AUTH_BYPASS must be rejected if APP_ENV != dev."""
         if v and info.data.get("APP_ENV") != "dev":
             raise ValueError("DEV_AUTH_BYPASS=true is only allowed when APP_ENV=dev")
+        return v
+
+    @field_validator("INGEST_ADO_WIKI_SOURCES", mode="before")
+    @classmethod
+    def parse_sources_json(cls, v):
+        """Accept a JSON string from .env or a list/dict from python code."""
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"INGEST_ADO_WIKI_SOURCES must be valid JSON: {e}"
+                )
+        return v
+
+    @field_validator("INGEST_ADO_WIKI_SOURCES", mode="after")
+    @classmethod
+    def validate_sources_uniqueness(cls, v: list[AdoWikiSource]) -> list[AdoWikiSource]:
+        """Reject duplicate labels or duplicate (org, project, wiki) triples."""
+        labels = [s.label for s in v]
+        if len(set(labels)) != len(labels):
+            dupes = sorted({l for l in labels if labels.count(l) > 1})
+            raise ValueError(f"Duplicate ADO wiki labels: {dupes}")
+        triples = [(s.org.rstrip("/"), s.project, s.wiki) for s in v]
+        if len(set(triples)) != len(triples):
+            raise ValueError(
+                "Two source records point at the same (org, project, wiki) — "
+                "pick one label and delete the other"
+            )
         return v
 
     @property

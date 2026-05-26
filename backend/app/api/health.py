@@ -53,9 +53,19 @@ async def readyz():
 
 @router.get("/api/kb/index/status")
 async def kb_index_status():
-    """Return the current KB hybrid-retrieval index status."""
+    """Return the current KB hybrid-retrieval index status.
+
+    Top-level rollup (state, indexed_files, total_files, started_at,
+    completed_at, errors) is the reindexer's view. The ``sources`` array
+    is the ingestion runner's view — one entry per configured KB source
+    instance with its last-sync time, page count, and any errors.
+    """
     from app.kb.reindex import status
-    return status()
+    from app.kb.ingest.runner import get_source_status
+
+    payload = status()
+    payload["sources"] = list(get_source_status().values())
+    return payload
 
 
 @router.post("/api/kb/index/rebuild", status_code=202)

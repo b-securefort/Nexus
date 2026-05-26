@@ -118,6 +118,46 @@ def _apply_lightweight_migrations(engine):
         # need raw DDL here.
         _ensure_kb_virtual_tables(conn)
 
+        # Multi-wiki ADO ingestion (DESIGN.md §5 2026-05-26). On the first
+        # boot after this change, add the source_instance column AND drop
+        # legacy single-wiki chunks (identified by the flat
+        # kb/ado_wiki/<page>.md path that the new layout no longer uses —
+        # new layout is kb/ado_wiki/<label>/<page>.md). The cleanup is
+        # gated by the column-add path so it runs exactly once: subsequent
+        # boots find the column present and skip the whole block.
+        try:
+            conn.execute(sqlalchemy.text("SELECT source_instance FROM kb_chunks LIMIT 0"))
+        except Exception:
+            logger.info("Adding source_instance column to kb_chunks table")
+            conn.execute(sqlalchemy.text(
+                "ALTER TABLE kb_chunks ADD COLUMN source_instance TEXT"
+            ))
+            try:
+                legacy_ids = [r[0] for r in conn.execute(sqlalchemy.text(
+                    "SELECT id FROM kb_chunks "
+                    "WHERE kb_path LIKE 'kb/ado_wiki/%' "
+                    "  AND kb_path NOT LIKE 'kb/ado_wiki/%/%'"
+                )).fetchall()]
+                if legacy_ids:
+                    placeholders = ",".join(str(int(i)) for i in legacy_ids)
+                    # vec0 has no triggers — delete it explicitly before kb_chunks
+                    # (FTS5 trigger handles kb_chunks_fts on the kb_chunks delete).
+                    conn.execute(sqlalchemy.text(
+                        f"DELETE FROM kb_chunks_vec WHERE rowid IN ({placeholders})"
+                    ))
+                    conn.execute(sqlalchemy.text(
+                        f"DELETE FROM kb_chunks WHERE id IN ({placeholders})"
+                    ))
+                    logger.info(
+                        "Dropped %d legacy ado_wiki chunks during multi-source cutover",
+                        len(legacy_ids),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Legacy ado_wiki cleanup skipped: %s", str(e).split("\n")[0]
+                )
+            conn.commit()
+
         # Agent learnings vec0 companion (procedural + semantic memory).
         # The regular `agent_learnings` table is created by SQLModel; the
         # vec0 virtual table holds embeddings used for top-K retrieval.

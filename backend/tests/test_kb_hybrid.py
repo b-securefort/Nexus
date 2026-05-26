@@ -73,6 +73,7 @@ def _build_test_engine():
                 content_hash TEXT NOT NULL,
                 file_mtime REAL NOT NULL,
                 source_url TEXT,
+                source_instance TEXT,
                 embed_model TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )

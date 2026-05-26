@@ -58,36 +58,15 @@ def _extract_links(text: str) -> list[tuple[str, str]]:
 
 
 def _fetch_link_list(wiki_path: str, settings) -> str:
-    """Fetch the link-list page content from the ADO wiki.
+    """Read the PDF link-list page from a local file path.
 
-    Falls back to treating INGEST_PDF_LIST_WIKI_PATH as a local file path if
-    the ADO wiki credentials are not configured — useful for offline testing.
+    Historical note: this used to fall back to fetching the page from an
+    ADO wiki using the single-wiki ingest env vars. After the 2026-05-26
+    multi-source refactor those env vars are gone (there's no longer a
+    single wiki to derive from), so PDF ingestion now only reads a local
+    file. If wiki-hosted link lists are needed later, add an explicit
+    source-label reference to one of the configured ADO wiki sources.
     """
-    import base64
-
-    org = settings.INGEST_ADO_WIKI_ORG.rstrip("/")
-    project = settings.INGEST_ADO_WIKI_PROJECT
-    wiki_name = settings.INGEST_ADO_WIKI_NAME
-    pat = settings.KB_REPO_PAT
-
-    # If ADO credentials are available, fetch from the wiki
-    if org and project and wiki_name and pat:
-        headers = {
-            "Authorization": "Basic "
-            + base64.b64encode(f":{pat}".encode()).decode()
-        }
-        url = (
-            f"{org}/{project}/_apis/wiki/wikis/{wiki_name}/pages"
-            f"?api-version=7.1&path={wiki_path}&includeContent=true"
-        )
-        try:
-            resp = httpx.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            return resp.json().get("content", "")
-        except Exception as e:
-            logger.warning("Could not fetch link-list page from ADO wiki: %s", e)
-
-    # Fallback: treat wiki_path as a local filesystem path
     local = Path(wiki_path)
     if local.exists():
         return local.read_text(encoding="utf-8")

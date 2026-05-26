@@ -127,6 +127,10 @@ class KBChunk(SQLModel, table=True):
     content_hash: str = Field(nullable=False)  # sha256 of source file content
     file_mtime: float = Field(nullable=False)
     source_url: Optional[str] = Field(default=None)  # from ingested front-matter
+    # Disambiguates one configured wiki from another when an ingestion-source-type
+    # (e.g. ado_wiki) has multiple instances. Required-by-convention for
+    # source='ado_wiki' rows; NULL on hand-authored / PDF content.
+    source_instance: Optional[str] = Field(default=None, index=True)
     embed_model: str = Field(nullable=False)  # e.g. "bge-small-en-v1.5"
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
 

@@ -28,6 +28,10 @@ from app.config import get_settings
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 # Matches source_url inside front-matter
 _SOURCE_URL_RE = re.compile(r"^source_url:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
+# Matches source_instance inside front-matter (label of a multi-source ingest)
+_SOURCE_INSTANCE_RE = re.compile(
+    r"^source_instance:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE
+)
 # Heading patterns
 _H1_RE = re.compile(r"^#\s+(.+)", re.MULTILINE)
 _H2_RE = re.compile(r"^##\s+(.+)", re.MULTILINE)
@@ -45,19 +49,24 @@ class Chunk:
     heading: str      # "Doc Title > Section > Subsection"
     text: str
     source_url: str | None = None
+    source_instance: str | None = None
 
 
-def _strip_frontmatter(content: str) -> tuple[str, str | None]:
-    """Remove YAML front-matter and return (body, source_url)."""
+def _strip_frontmatter(content: str) -> tuple[str, str | None, str | None]:
+    """Remove YAML front-matter and return (body, source_url, source_instance)."""
     source_url: str | None = None
+    source_instance: str | None = None
     m = _FRONTMATTER_RE.match(content)
     if m:
         fm_block = m.group(0)
         url_m = _SOURCE_URL_RE.search(fm_block)
         if url_m:
             source_url = url_m.group(1).strip()
+        inst_m = _SOURCE_INSTANCE_RE.search(fm_block)
+        if inst_m:
+            source_instance = inst_m.group(1).strip()
         content = content[m.end():]
-    return content.lstrip("\n"), source_url
+    return content.lstrip("\n"), source_url, source_instance
 
 
 def _heading_breadcrumb(h1: str, h2: str, h3: str) -> str:
@@ -128,7 +137,7 @@ def chunk_markdown(kb_path: str, content: str) -> list[Chunk]:
     max_chars = settings.KB_CHUNK_MAX_CHARS
     overlap_chars = int(max_chars * settings.KB_CHUNK_OVERLAP_FRACTION)
 
-    body, source_url = _strip_frontmatter(content)
+    body, source_url, source_instance = _strip_frontmatter(content)
 
     # Extract document title from first H1 (or filename)
     h1_m = _H1_RE.search(body)
@@ -195,6 +204,7 @@ def chunk_markdown(kb_path: str, content: str) -> list[Chunk]:
                 heading=heading,
                 text=block_text,
                 source_url=source_url,
+                source_instance=source_instance,
             ))
             chunk_idx += 1
         else:
@@ -209,6 +219,7 @@ def chunk_markdown(kb_path: str, content: str) -> list[Chunk]:
                     heading=heading,
                     text=seg,
                     source_url=source_url,
+                    source_instance=source_instance,
                 ))
                 chunk_idx += 1
 

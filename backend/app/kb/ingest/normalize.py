@@ -33,9 +33,11 @@ def write_document(
     body: str,
     source_url: str = "",
     original_path: str = "",
+    source_instance: str | None = None,
     extra_front_matter: dict | None = None,
 ) -> Path:
-    """Write a normalised markdown document under ``kb_root/kb/<source>/``.
+    """Write a normalised markdown document under ``kb_root/kb/<source>/``
+    (or ``kb_root/kb/<source>/<source_instance>/`` when source_instance is set).
 
     The file is only (re)written if the body content has changed, so repeated
     ingest runs are cheap and do not disturb mtime on unchanged files.
@@ -45,6 +47,8 @@ def write_document(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     slug = slugify(title)
     dest_dir = kb_root / "kb" / source
+    if source_instance:
+        dest_dir = dest_dir / source_instance
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{slug}.md"
 
@@ -52,6 +56,8 @@ def write_document(
         "---",
         f'source: "{source}"',
     ]
+    if source_instance:
+        front_matter_lines.append(f'source_instance: "{source_instance}"')
     if source_url:
         front_matter_lines.append(f'source_url: "{source_url}"')
     if original_path:

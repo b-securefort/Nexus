@@ -49,8 +49,8 @@ try {
   $pubFetch = (git remote get-url origin).Trim()
   $pubPush  = (git remote get-url --push origin).Trim()
   if ($pubFetch -notmatch 'github\.com')   { throw "$PublicDirName fetch URL is not GitHub: $pubFetch" }
-  if ($pubPush  -notmatch '^DISABLED')     { throw "$PublicDirName push URL is not DISABLED (got: $pubPush). Refusing — see setup-mirror.ps1." }
-  Write-Host "  [OK] $PublicDirName: fetch=GitHub, push=DISABLED"
+  if ($pubPush  -notmatch '^DISABLED')     { throw "$PublicDirName push URL is not DISABLED (got: $pubPush). Refusing - see setup-mirror.ps1." }
+  Write-Host "  [OK] ${PublicDirName}: fetch=GitHub, push=DISABLED"
 } finally { Pop-Location }
 
 Push-Location $adoPath
@@ -59,14 +59,14 @@ try {
   foreach ($r in $remotes) {
     $url = (git remote get-url $r).Trim()
     if ($url -match 'github\.com') {
-      throw "$AdoDirName has a GitHub URL on remote '$r' ($url). Refusing — this clone must be ADO-only."
+      throw "$AdoDirName has a GitHub URL on remote '$r' ($url). Refusing - this clone must be ADO-only."
     }
   }
   $adoOrigin = (git remote get-url origin).Trim()
   if ($adoOrigin -notmatch 'dev\.azure\.com|visualstudio\.com') {
     throw "$AdoDirName origin does not look like ADO: $adoOrigin"
   }
-  Write-Host "  [OK] $AdoDirName: origin=ADO only, no GitHub URLs"
+  Write-Host "  [OK] ${AdoDirName}: origin=ADO only, no GitHub URLs"
 } finally { Pop-Location }
 
 if (-not $NoConfirm) {
@@ -112,7 +112,7 @@ try {
   $afterSha = (git rev-parse HEAD).Trim()
 
   if ($beforeSha -eq $afterSha) {
-    Write-Host "  No new commits — $UpstreamBranchName already matches GitHub/$BranchName." -ForegroundColor Green
+    Write-Host "  No new commits - $UpstreamBranchName already matches GitHub/$BranchName." -ForegroundColor Green
     Write-Host "  Skipping push and PR creation."
     git checkout $BranchName
     Remove-Item -Force $bundlePath

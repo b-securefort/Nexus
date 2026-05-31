@@ -5,6 +5,7 @@ Agent orchestrator — main agent loop with tool calling and approval gating.
 import asyncio
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -412,6 +413,21 @@ def _arm_token_error_payload(tool_name: str, status: str) -> str:
     return msg
 
 
+def _is_deployed_environment() -> bool:
+    """True if Nexus is running on a hosted platform where the frontend is
+    expected to supply per-user identity via the X-ARM-Token passthrough.
+
+    Detected via `CONTAINER_APP_NAME`, which Azure Container Apps injects into
+    every replica's environment. Local dev (env var unset) falls through to
+    the server's `az login` session for Azure tools — DESIGN §2 Auth, §5
+    2026-06-01. URL-based detection was rejected: every request-carried signal
+    (Host, Origin, peer IP) is either client-spoofable from the internet or
+    reports localhost behind the Container Apps ingress controller, inverting
+    the intent.
+    """
+    return bool(os.environ.get("CONTAINER_APP_NAME", "").strip())
+
+
 def _prefetch_safe_calls(
     tool_calls: list[dict], tools: list[Tool], user: User
 ) -> dict[str, tuple[asyncio.Task, list[str]]]:
@@ -454,7 +470,14 @@ def _prefetch_safe_calls(
                 user.arm_token,
                 refresh_threshold_seconds=_ARM_REFRESH_THRESHOLD_SECONDS,
             )
-            if status_ in ("missing", "expired"):
+            # "missing" only blocks in deployed environments where the frontend
+            # supplies the ARM token. Locally (no Container Apps env var) the
+            # call falls through to the server's `az login` session (DESIGN §2
+            # Auth, §5 2026-06-01) and is safe to prefetch.
+            block_statuses = (
+                ("missing", "expired") if _is_deployed_environment() else ("expired",)
+            )
+            if status_ in block_statuses:
                 continue  # serial loop will emit the refresh SSE event
         chunks: list[str] = []
         task = asyncio.create_task(
@@ -1562,7 +1585,17 @@ async def handle_chat(
                         effective_token,
                         refresh_threshold_seconds=_ARM_REFRESH_THRESHOLD_SECONDS,
                     )
-                    if status_ in ("missing", "expired", "near_expiry"):
+                    # "missing" means no user ARM token was ever attached. In
+                    # deployed environments (Container Apps) a missing token is
+                    # a hard stop: Azure tools must run as the signed-in user,
+                    # never the server identity. Locally we fall through to the
+                    # developer's `az login` session (DESIGN §2 Auth, §5
+                    # 2026-06-01). "expired"/"near_expiry" always refresh —
+                    # they can only arise when a token was actually present.
+                    refresh_statuses = ("expired", "near_expiry")
+                    if _is_deployed_environment():
+                        refresh_statuses = ("missing",) + refresh_statuses
+                    if status_ in refresh_statuses:
                         arm_short_circuit_status = status_
                         yield sse_token_refresh_required(
                             conversation_id=conversation.id,

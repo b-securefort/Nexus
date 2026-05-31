@@ -192,9 +192,16 @@ chat turn, setting a `ContextVar` that `AzureToolBase._run_az()` and
 Result: all Azure tool calls (`az_cli`, `az_resource_graph`, `az_cost_query`,
 `az_monitor_logs`, `az_rest_api`, `az_advisor`, `az_policy_check`, `az_devops`,
 `network_test`) run as the signed-in user, not the server identity.
-If the token is absent (user hasn't consented the ARM scope yet, or
-`DEV_AUTH_BYPASS=true`), tools fall back to whatever credentials are in the
-server's `az` CLI session — no error, just no user identity.
+If the token is absent, behaviour depends on the environment (see §5
+2026-06-01). The orchestrator probes for `CONTAINER_APP_NAME` — set by Azure
+Container Apps in every replica — to detect a deployed environment. When
+running locally (env var unset) tools fall back to whatever credentials are in
+the server's local `az` CLI session — no error, just no user identity. When
+deployed (env var set) a missing token is a **hard stop**: the B3 pre-flight
+short-circuits the Azure tool call and tells the user to sign in, rather than
+silently running as the server identity. Expired / near-expiry tokens always
+drive the `token_refresh_required` MSAL silent-refresh flow regardless of
+environment.
 
 ### Frontend
 **Files**: [frontend/src/](../frontend/src/)
@@ -717,6 +724,14 @@ Added `nexus_tool_calls_total{tool, outcome}` (incremented once per tool dispatc
 
 Replaces the four scalar `INGEST_ADO_WIKI_*` env vars (deleted outright, no deprecation, because no other deployment has them set yet) with a JSON list of `{label, org, project, wiki}` records; each source ingests into `kb_data/kb/ado_wiki/<label>/` and tags chunks with a new `source_instance` column on `kb_chunks`. The `label` is a stable user-chosen identifier (regex `^[a-z][a-z0-9-]{1,39}$`, unique across sources), never derived from the ADO project name — because ADO renames would otherwise silently orphan every chunk in the renamed source. A `_source_meta.json` sentinel in each label directory pins the `(org, project, wiki)` triple so accidental label rebinds at deploy time fail loudly instead of silently swapping content. The reindexer's existing `_gc()` orphan-sweep (delete from `kb_chunks_vec` then `kb_chunks` where `kb_path` no longer exists on disk) handles deleted pages going forward; cutover from the single-wiki path is a one-time idempotent legacy DELETE gated on the `source_instance` column-add, dropping flat `kb/ado_wiki/<page>.md` chunks while leaving hand-authored and PDF content untouched.
 **Trade-off**: rejected the "aggregate N wikis into one KB git repo via an external job" path (cleaner, zero Nexus code) because the Nexus team would own the aggregator with no operational appetite for a second service; rejected per-source PATs as YAGNI for the one-org-one-team case but left the additive upgrade path documented.
+
+### 2026-05-27 — ARM token mandatory under real auth; az fallback dev-only
+
+**Refines the 2026-05-21 "ARM token preflight" decision and restores the 2026-05-15 graceful-degradation promise for dev.** The B3 pre-flight treated a `missing` ARM token as a hard short-circuit in every environment, which broke local `DEV_AUTH_BYPASS=true` runs — `dev-user` never carries a token, so every Azure tool told the user to "sign in from the frontend" instead of falling through to the developer's local `az login` session. Now `missing` is gated on `DEV_AUTH_BYPASS`: under bypass it falls through to the local/server `az` session; under any real-auth deployment (production included) it stays a hard stop. `expired` / `near_expiry` remain unconditional — they can only occur when a token was actually present. **Trade-off**: production users must consent the ARM `user_impersonation` scope before any Azure tool works (no silent server-identity fallback), accepted because running Azure commands as the server identity rather than the signed-in user is exactly the privilege ambiguity the 2026-05-15 passthrough decision exists to remove.
+
+### 2026-06-01 — ARM gate keys off platform env var, not config flag
+
+**Refines the 2026-05-27 "ARM token mandatory" decision.** The `DEV_AUTH_BYPASS` predicate was unspoofable but still a per-deployment config knob; the hosting platform already tells us we're deployed. The ARM missing-token hard-stop now triggers when `CONTAINER_APP_NAME` is set (Azure Container Apps injects this in every replica) and falls through to the local `az login` session otherwise. URL-based detection (`Host` header, peer IP) was considered and rejected: every signal a request carries is either client-spoofable from the internet or, behind the Container Apps ingress controller, reports localhost from inside the container — inverting the intent. **Trade-off**: the gate is now coupled to one specific hosting platform — `_is_deployed_environment()` is the single edit point if Nexus ever moves off Container Apps. `DEV_AUTH_BYPASS` survives unchanged for its other job (bypassing Entra JWT validation for `dev-user`).
 
 ---
 

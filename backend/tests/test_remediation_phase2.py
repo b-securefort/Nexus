@@ -87,6 +87,30 @@ class TestArmErrorPayload:
         assert "az_resource_graph" in msg
 
 
+class TestDeployedEnvironmentDetection:
+    """§5 2026-06-01 — ARM gate keys off CONTAINER_APP_NAME, not config flag.
+
+    The helper decides whether a missing ARM token is a hard stop (deployed)
+    or falls through to the server's local `az login` session (local dev).
+    """
+
+    def test_unset_env_var_is_local(self, monkeypatch):
+        monkeypatch.delenv("CONTAINER_APP_NAME", raising=False)
+        assert orch._is_deployed_environment() is False
+
+    def test_empty_env_var_is_local(self, monkeypatch):
+        monkeypatch.setenv("CONTAINER_APP_NAME", "")
+        assert orch._is_deployed_environment() is False
+
+    def test_whitespace_only_env_var_is_local(self, monkeypatch):
+        monkeypatch.setenv("CONTAINER_APP_NAME", "   ")
+        assert orch._is_deployed_environment() is False
+
+    def test_set_env_var_is_deployed(self, monkeypatch):
+        monkeypatch.setenv("CONTAINER_APP_NAME", "nexus-backend")
+        assert orch._is_deployed_environment() is True
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # B4 — per-user tool call history
 # ─────────────────────────────────────────────────────────────────────────────

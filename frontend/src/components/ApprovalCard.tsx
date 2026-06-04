@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { ShieldAlert, Check, X, Clock } from "lucide-react";
-import type { ApprovalInfo } from "../types";
+import { ShieldAlert, Check, X, Clock, ShieldCheck, AlertTriangle, OctagonAlert, Loader2, Info } from "lucide-react";
+import type { ApprovalInfo, RiskLevel } from "../types";
 
 interface Props {
   approval: ApprovalInfo;
@@ -25,8 +25,18 @@ function formatCommand(toolName: string, args: Record<string, unknown>): string 
     .join("\n");
 }
 
+// Visual treatment per advisory risk tier. `pending` is the in-flight state
+// while the review LLM runs — Allow stays disabled until it resolves.
+const RISK_UI: Record<RiskLevel, { label: string; Icon: typeof Check; className: string }> = {
+  pending: { label: "Assessing risk…", Icon: Loader2, className: "text-base-400" },
+  safe: { label: "Safe to run", Icon: ShieldCheck, className: "text-green-400" },
+  caution: { label: "Review before running", Icon: AlertTriangle, className: "text-yellow-400" },
+  destructive: { label: "Destructive — review carefully", Icon: OctagonAlert, className: "text-red-400" },
+};
+
 export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props) {
   const [remaining, setRemaining] = useState(timeoutSeconds);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -44,6 +54,22 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
 
+  const risk: RiskLevel | null = approval.risk_level ?? null;
+  const isAssessing = risk === "pending";
+  const isDestructive = risk === "destructive";
+  // Advisory only: the verdict never blocks execution, it only gates the UI so
+  // the user can't approve a destructive command before its risk is shown.
+  const allowDisabled = remaining === 0 || isAssessing;
+  const riskUi = risk ? RISK_UI[risk] : null;
+
+  const handleApproveClick = () => {
+    if (isDestructive && !confirming) {
+      setConfirming(true);
+      return;
+    }
+    onAction("approve");
+  };
+
   return (
     <div className="bg-amber-950/30 border border-amber-700/30 rounded-xl p-5 space-y-3.5">
       {/* Header */}
@@ -56,17 +82,25 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         </span>
       </div>
 
+      {/* Risk badge (advisory) */}
+      {riskUi && (
+        <div className={`flex items-center gap-2 ${riskUi.className}`}>
+          <riskUi.Icon className={`w-4 h-4 ${isAssessing ? "animate-spin" : ""}`} />
+          <span className="text-sm font-medium">{riskUi.label}</span>
+        </div>
+      )}
+
       {/* Tool name */}
       <div>
         <span className="text-base-400 text-sm">Tool: </span>
         <span className="font-mono text-sm text-amber-300">{approval.tool_name}</span>
       </div>
 
-      {/* Reason */}
-      {approval.reason && (
+      {/* What this command does (review LLM description) */}
+      {approval.risk_description && (
         <div>
-          <span className="text-base-400 text-sm">Reason: </span>
-          <span className="text-base-200 text-sm">{approval.reason}</span>
+          <span className="text-base-400 text-sm">What it does: </span>
+          <span className="text-base-200 text-sm">{approval.risk_description}</span>
         </div>
       )}
 
@@ -78,25 +112,43 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         </pre>
       </div>
 
+      {/* Double-confirm prompt for destructive commands */}
+      {confirming && (
+        <div className="flex items-center gap-2 text-red-300 text-sm">
+          <OctagonAlert className="w-4 h-4 shrink-0" />
+          <span>This is flagged as destructive. Run it anyway?</span>
+        </div>
+      )}
+
       {/* Buttons */}
       <div className="flex gap-3 pt-1">
         <button
-          onClick={() => onAction("approve")}
-          disabled={remaining === 0}
-          className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
+          onClick={handleApproveClick}
+          disabled={allowDisabled}
+          className={`flex items-center gap-2 ${
+            confirming ? "bg-red-700 hover:bg-red-600" : "bg-green-700 hover:bg-green-600"
+          } disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium`}
         >
           <Check className="w-4 h-4" />
-          Approve
+          {confirming ? "Yes, run it" : "Approve"}
         </button>
         <button
-          onClick={() => onAction("deny")}
+          onClick={() => (confirming ? setConfirming(false) : onAction("deny"))}
           disabled={remaining === 0}
           className="flex items-center gap-2 bg-red-800 hover:bg-red-700 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
         >
           <X className="w-4 h-4" />
-          Deny
+          {confirming ? "Cancel" : "Deny"}
         </button>
       </div>
+
+      {/* AI-generated disclaimer */}
+      {riskUi && !isAssessing && (
+        <div className="flex items-center gap-1.5 text-xs text-base-500 pt-0.5">
+          <Info className="w-3 h-3 shrink-0" />
+          <span>Risk assessment is AI-generated and may be inaccurate.</span>
+        </div>
+      )}
     </div>
   );
 }

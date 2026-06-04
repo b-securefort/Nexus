@@ -19,12 +19,19 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Generator
 
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool
+from app.tools.base import (
+    SUBPROCESS_FLAGS,
+    Tool,
+    get_conversation_id,
+    register_process,
+    unregister_process,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +257,16 @@ class ExecuteScriptTool(Tool):
         cmd = _build_cmd(script_path)
         env = _shell_env()
 
+        # Launch in its own process group so the Stop / disconnect path can kill
+        # the whole tree (pwsh → az → python). On POSIX `start_new_session=True`
+        # gives a killable group for os.killpg; on Windows taskkill /T walks the
+        # PID tree, so no extra flag is needed. See DESIGN.md §5 2026-06-04.
+        popen_kwargs = dict(SUBPROCESS_FLAGS)
+        if sys.platform != "win32":
+            popen_kwargs["start_new_session"] = True
+
+        conv_id = get_conversation_id()
+        proc = None
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -259,8 +276,12 @@ class ExecuteScriptTool(Tool):
                 text=True,
                 cwd=str(_WORK_DIR),
                 env=env,
-                **SUBPROCESS_FLAGS,
+                **popen_kwargs,
             )
+            # Register for the kill switch. If the turn is stopped, the
+            # orchestrator kills this tree; the read loop below then hits EOF and
+            # this thread unwinds.
+            register_process(conv_id, proc)
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []
 
@@ -303,3 +324,6 @@ class ExecuteScriptTool(Tool):
             err = f"Error: {e}"
             yield err
             return err
+        finally:
+            if proc is not None:
+                unregister_process(conv_id, proc)

@@ -1,4 +1,4 @@
-# Team Architect Assistant — v1 Specification (Nexus)
+# Platform Team Assistant — v1 Specification (Nexus)
 
 **Version:** 1.0
 **Target audience:** AI coding assistants (Claude Code, ChatGPT) and human developers implementing this system.

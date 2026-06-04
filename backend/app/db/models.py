@@ -100,8 +100,13 @@ class PendingApproval(SQLModel, table=True):
     user_oid: str = Field(nullable=False)
     tool_name: str = Field(nullable=False)
     tool_args_json: str = Field(nullable=False)
-    reason: str = Field(nullable=False)
+    reason: str = Field(nullable=False)  # generator's stated intent — audit only; the card shows risk_description
     status: str = Field(nullable=False, default="pending")  # pending | approved | denied | expired
+    # Advisory risk verdict from the separate review LLM (see §5 2026-06-04).
+    # risk_level: pending | safe | caution | destructive. None until the review
+    # resolves; never gates execution on its own.
+    risk_level: Optional[str] = Field(default=None)
+    risk_description: Optional[str] = Field(default=None)  # neutral "what this command does"
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     resolved_at: Optional[datetime] = Field(default=None)
     result_json: Optional[str] = Field(default=None)

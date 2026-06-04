@@ -47,6 +47,7 @@
 | **DOT capture pipeline** | The mechanism behind `generate_drawio_from_python`. The user's Python (mingrammer `diagrams` DSL) is run with a capture header injected; the Graphviz DOT output is intercepted mid-flight, `dot -Tjson` extracts node coordinates, then each node is mapped to its **Azure2 SVG image** (`shape=image;image=img/lib/azure2/…`) or **AWS4 stencil** (`shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.<service>`) before emitting `.drawio` XML. Unmapped nodes fall through to a labelled rectangle. Distinct from `generate_python_diagram` which just renders a PNG via Graphviz directly. | "drawio pipeline", "diagram pipeline" |
 | **Text summary** | A cached LLM-generated condensation of a long user message (> 3 KB), stored in `messages.text_summary`. Computed once by compaction; used in place of the full content in all subsequent prompt builds to save tokens. The original content is preserved in the DB. | "message summary", "paste summary" |
 | **Image summary** | A cached vision-LLM description of an image attachment on a non-recent user message, stored in `messages.image_summary`. The most recent image-bearing message always keeps its actual bytes; older ones are replaced with this description in the composed system prompt. | "attachment summary", "vision description" |
+| **Risk assessment** | An advisory ✓ safe / ⚠ caution / ⛔ destructive verdict plus a plain-language command description, produced by a separate review LLM and floored by deterministic rules, rendered on the Approval card; it never gates execution by itself. | "risk score", "safety check", "approval reason" |
 
 ---
 
@@ -64,6 +65,7 @@
 - **RRF** fuses one BM25 ranked list + one **Embedding** ranked list → final ranked results returned by `search_kb_hybrid`
 - One **Learning** → one **Tool** (the tool it relates to, or `general`)
 - One **ARM token** → one **User** per request (attached to `User.arm_token`; never stored in DB)
+- One **Approval** → one **Risk assessment** (advisory; the review LLM verdict shown on the card, never a gate)
 
 ---
 
@@ -88,3 +90,4 @@
 | "skill" vs "command" | A **skill** is a Nexus agent persona (lives in KB, shown in UI). A **command** (`.claude/commands/*.md`) is a Claude Code IDE slash command. These are different systems serving different users — agent users vs developers. |
 | "tool" vs "tool call" | A **tool** is the registered Python class. A **tool call** is a specific invocation of it by the LLM, represented as JSON in `messages.tool_calls_json`. |
 | "approval" vs "question" | Both pause execution and wait for the user. **Approval** is binary (allow/deny a specific command). **Question** is multi-choice (gather intent before starting work). |
+| "reason" vs risk description | **`reason`** is the *generator's* stated intent, persisted on `pending_approvals` for audit only. The user-facing "what this command does" line on the Approval card is the **Risk assessment** description from the independent reviewer — not `reason`. |

@@ -19,10 +19,31 @@ def sse_tool_call_start(call_id: str, name: str, args: dict) -> str:
     return sse_event("tool_call_start", {"call_id": call_id, "name": name, "args": args})
 
 
-def sse_approval_required(approval_id: str, tool_name: str, args: dict, reason: str) -> str:
+def sse_approval_required(
+    approval_id: str,
+    tool_name: str,
+    args: dict,
+    reason: str,
+    risk_level: str | None = None,
+    risk_description: str | None = None,
+) -> str:
+    """Approval card payload.
+
+    Emitted twice per approval (§5 2026-06-04): first with
+    `risk_level="pending"` so the card renders immediately, then again with the
+    resolved advisory verdict. Same `approval_id` both times — the frontend
+    updates the existing card in place rather than stacking a second one.
+    """
     return sse_event(
         "approval_required",
-        {"approval_id": approval_id, "tool_name": tool_name, "args": args, "reason": reason},
+        {
+            "approval_id": approval_id,
+            "tool_name": tool_name,
+            "args": args,
+            "reason": reason,
+            "risk_level": risk_level,
+            "risk_description": risk_description,
+        },
     )
 
 

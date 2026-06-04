@@ -15,11 +15,12 @@ from typing import AsyncGenerator
 from openai import AzureOpenAI
 from sqlmodel import Session, select
 
-from app.agent.approvals import create_pending_approval, wait_for_approval
+from app.agent.approvals import create_pending_approval, update_approval_risk, wait_for_approval
 from app.agent.circuit_breaker import CircuitOpenError, check as cb_check, record_failure as cb_failure, record_success as cb_success
 from app.agent.compaction import get_original_task, load_compacted_history
 from app.agent.concurrency import get_user_semaphore, run_in_tool_executor
 from app.agent.questions import create_pending_question, wait_for_answer
+from app.agent.risk_review import assess_risk
 from app.agent.streaming import (
     sse_approval_required,
     sse_done,
@@ -49,8 +50,10 @@ from app.tools.base import (
     TOOL_CALLS,
     Tool,
     classify_tool_outcome,
+    kill_conversation_processes,
     resolve_tools,
     set_arm_token,
+    set_conversation_id,
     set_skill_name,
 )
 
@@ -108,11 +111,81 @@ def _clear_lease(session: Session, conversation_id: int) -> None:
     except Exception:
         logger.exception("Lease clear failed for conv=%s", conversation_id)
 
+
+def cleanup_interrupted_turn(session: Session, conversation_id: int) -> None:
+    """Idempotent end-of-turn cleanup, safe to call when a turn is interrupted.
+
+    The normal done-path in `handle_chat` already clears these, but a client
+    disconnect / Stop never reaches it — the generator is closed mid-stream. The
+    chat endpoint calls this from a `finally` so a stopped turn doesn't leave a
+    stale conversation lease (which would mislead the "restart turn" affordance)
+    or a dangling ARM-token override behind.
+    """
+    # Kill any script still running for this conversation (the Stop / disconnect
+    # kill switch — see §5 2026-06-04). No-op when nothing is registered.
+    try:
+        kill_conversation_processes(conversation_id)
+    except Exception:
+        logger.debug("process kill failed for conv=%s", conversation_id, exc_info=True)
+    _clear_lease(session, conversation_id)
+    try:
+        clear_arm_token_override(conversation_id)
+    except Exception:
+        logger.debug("ARM override clear failed for conv=%s", conversation_id, exc_info=True)
+
 # Tools whose errors should trigger automatic multi-strategy retry
 _COMMAND_TOOLS = {"az_cli", "execute_script", "az_resource_graph"}
 
 # Max consecutive failures on the same type of tool before giving up
 _MAX_RETRIES_PER_TOOL = 3
+
+# After this many user denials in a single turn, the orchestrator stops
+# prompting the user and auto-refuses any further approval-gated calls for the
+# rest of the turn — a structural backstop against an agent that tries to route
+# around a refusal by re-issuing the action through another tool/path. Set to 1:
+# a single refusal ends the approval surface for the turn (no re-prompting).
+_MAX_DENIALS_PER_TURN = 1
+
+# Fed back to the model when the user denies an approval. A denial is an
+# intentional, terminal decision — NOT a syntax error or a blocked path to be
+# retried. This message must steer the model away from re-attempting the same
+# outcome through a different tool, command, REST call, or script.
+_DENIAL_FEEDBACK = (
+    "DENIED BY USER. The user explicitly refused to allow this action. This is a "
+    "final decision — not a syntax error, not a permissions problem, and not a "
+    "blocked path to work around. Do NOT retry this command, and do NOT attempt to "
+    "achieve the same result by any other means (a different tool, a REST API call, "
+    "a generated script, or rephrased arguments). Stop, acknowledge that the user "
+    "declined, and ask what they would like to do instead."
+)
+
+# Used once the per-turn denial limit is hit and the orchestrator auto-refuses
+# without prompting the user again.
+_DENIAL_AUTODENY_FEEDBACK = (
+    "DENIED (auto). The user already refused this action in this turn, so it was "
+    "blocked automatically without prompting them again. Stop attempting it by any "
+    "means and respond to the user in plain text — do not emit further tool calls "
+    "to accomplish this."
+)
+
+
+def _tool_control_outcome(approval_denied: bool, tool_result: str) -> tuple[str, bool]:
+    """Decide the control-flow outcome of a tool result.
+
+    Returns ``(envelope_status, is_error)`` where ``envelope_status`` is one of
+    ``"denied" | "error" | "success"`` and ``is_error`` drives the
+    multi-strategy retry. A user denial is **terminal**: status ``"denied"`` and
+    ``is_error=False``, so it can never feed the retry escalation that routes the
+    model around a refusal via another tool/path. (Approval timeouts remain
+    errors but are not denials.)
+    """
+    if approval_denied:
+        return "denied", False
+    is_error = (
+        tool_result.strip().startswith("Error")
+        or "Approval timed out" in tool_result
+    )
+    return ("error" if is_error else "success"), is_error
 
 # Narration-instead-of-action detection. The architect / drawio-diagrammer
 # skill prompts say "tool calls are not narration", but the model sometimes
@@ -1248,6 +1321,9 @@ async def handle_chat(
     # Propagate the user's ARM token into the tool execution context so every
     # Azure tool subprocess authenticates as the current user.
     set_arm_token(user.arm_token)
+    # Propagate the conversation id so a tool running in the executor thread can
+    # register its subprocess for the Stop / disconnect kill switch (§5 2026-06-04).
+    set_conversation_id(conversation.id)
 
     # 1. Persist user message
     user_msg = _save_message(
@@ -1280,6 +1356,11 @@ async def handle_chat(
     # Track consecutive failures per tool type for multi-strategy retry
     failure_tracker: dict[str, int] = {}  # tool_name -> consecutive failure count
     failure_history: dict[str, list[tuple[dict, str]]] = {}  # tool_name -> [(args, error), ...]
+
+    # Denial tracking for this turn. A user refusal is terminal; once the limit
+    # is hit, further approval-gated calls are auto-refused without re-prompting.
+    denials_this_turn = 0
+    auto_deny_approvals = False
 
     # Track .drawio iteration count per filename so we can encourage the model
     # to keep going after repeated validation failures. Smaller models tend to
@@ -1607,6 +1688,11 @@ async def handle_chat(
                             status_, func_name, conversation.id,
                         )
 
+                # Per-call flag: set when the user (or the auto-deny backstop)
+                # refuses this approval-gated call. A denial is terminal — it
+                # must not feed the multi-strategy retry or the learning path.
+                approval_denied = False
+
                 if json_parse_error:
                     # Skip tool execution — feed the parse error back so the model
                     # understands what went wrong on its own previous turn.
@@ -1659,36 +1745,70 @@ async def handle_chat(
                                 ),
                             })
                 elif _tool_needs_approval(tool, func_args):
-                    # Create approval
-                    approval = create_pending_approval(
-                        session=session,
-                        conversation_id=conversation.id,
-                        user_oid=user.oid,
-                        tool_name=func_name,
-                        tool_args_json=json.dumps(func_args),
-                        reason=func_args.get("reason", "No reason provided"),
-                    )
-                    yield sse_approval_required(
-                        approval.id, func_name, func_args, func_args.get("reason", "")
-                    )
-
-                    # Wait for approval
-                    status = await wait_for_approval(approval.id)
-
-                    if status == "approved":
-                        yield sse_tool_executing(call_id, func_name)
-                        tool_result = await _gated_tool_execute(
-                            user_oid=user.oid or "anonymous",
-                            tool=tool,
-                            func_args=func_args,
-                            user=user,
-                            call_id=call_id,
-                            chunk_sink=_stream_chunks,
+                    if auto_deny_approvals:
+                        # The per-turn denial limit was already hit. Refuse
+                        # without prompting the user again so a denial can't be
+                        # turned into approval-spam by re-issuing the action.
+                        approval_denied = True
+                        tool_result = _DENIAL_AUTODENY_FEEDBACK
+                        logger.warning(
+                            "Auto-denied %s (conv=%s) — denial limit reached this turn",
+                            func_name, conversation.id,
                         )
-                    elif status == "denied":
-                        tool_result = "User denied the tool call."
                     else:
-                        tool_result = "Approval timed out."
+                        # Render the card immediately (risk "pending"), then run the
+                        # independent advisory risk review off the event loop and
+                        # re-emit the same card with the resolved verdict. The
+                        # frontend keeps Allow disabled until the verdict arrives.
+                        # Advisory only — never gates execution (§5 2026-06-04).
+                        reason = func_args.get("reason", "No reason provided")
+                        approval = create_pending_approval(
+                            session=session,
+                            conversation_id=conversation.id,
+                            user_oid=user.oid,
+                            tool_name=func_name,
+                            tool_args_json=json.dumps(func_args),
+                            reason=reason,
+                            risk_level="pending",
+                        )
+                        yield sse_approval_required(
+                            approval.id, func_name, func_args, reason,
+                            risk_level="pending",
+                        )
+
+                        # Separate review LLM (fails closed to >= caution).
+                        verdict = await asyncio.to_thread(assess_risk, func_name, func_args)
+                        update_approval_risk(
+                            session, approval.id, verdict.risk_level, verdict.description
+                        )
+                        yield sse_approval_required(
+                            approval.id, func_name, func_args, reason,
+                            risk_level=verdict.risk_level,
+                            risk_description=verdict.description,
+                        )
+
+                        # Wait for approval
+                        status = await wait_for_approval(approval.id)
+
+                        if status == "approved":
+                            yield sse_tool_executing(call_id, func_name)
+                            tool_result = await _gated_tool_execute(
+                                user_oid=user.oid or "anonymous",
+                                tool=tool,
+                                func_args=func_args,
+                                user=user,
+                                call_id=call_id,
+                                chunk_sink=_stream_chunks,
+                            )
+                        elif status == "denied":
+                            # Terminal user refusal — not a retryable failure.
+                            approval_denied = True
+                            denials_this_turn += 1
+                            if denials_this_turn >= _MAX_DENIALS_PER_TURN:
+                                auto_deny_approvals = True
+                            tool_result = _DENIAL_FEEDBACK
+                        else:
+                            tool_result = "Approval timed out."
                 else:
                     yield sse_tool_executing(call_id, func_name)
                     prefetched = prefetched_calls.pop(call_id, None)
@@ -1718,20 +1838,18 @@ async def handle_chat(
                 for chunk in _stream_chunks:
                     yield sse_tool_output_chunk(call_id, chunk)
 
-                # Standardise output envelope
-                is_error = (
-                    tool_result.strip().startswith("Error") or 
-                    "Approval timed out" in tool_result or 
-                    "User denied" in tool_result
-                )
-                
+                # Standardise output envelope. A user denial is its own terminal
+                # status — never "error" — so it cannot feed the multi-strategy
+                # retry (which routes around errors by trying other tools/paths).
+                envelope_status, is_error = _tool_control_outcome(approval_denied, tool_result)
+
                 try:
                     parsed_data = json.loads(tool_result)
                 except Exception:
                     parsed_data = tool_result
 
                 envelope = {
-                    "status": "error" if is_error else "success",
+                    "status": envelope_status,
                     "tool": func_name,
                     "data": parsed_data,
                 }
@@ -1823,7 +1941,12 @@ async def handle_chat(
                             drawio_attempt_count.pop(diag_filename, None)
 
                 # Multi-strategy retry: track failures and escalate
-                if func_name in _COMMAND_TOOLS and is_error:
+                if approval_denied:
+                    # A user refusal is terminal: not a failure to retry (that
+                    # would route the model around the denial), and not a
+                    # success to learn from. Skip both paths entirely.
+                    pass
+                elif func_name in _COMMAND_TOOLS and is_error:
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
                         try:

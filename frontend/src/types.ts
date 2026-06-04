@@ -50,11 +50,17 @@ export interface ConversationDetail {
   messages: Message[];
 }
 
+// "pending" while the advisory review LLM runs; resolves to safe/caution/destructive.
+export type RiskLevel = "pending" | "safe" | "caution" | "destructive";
+
 export interface ApprovalInfo {
   approval_id: string;
   tool_name: string;
   args: Record<string, unknown>;
   reason: string;
+  // Advisory risk verdict (§5 2026-06-04). May be null on older payloads.
+  risk_level?: RiskLevel | null;
+  risk_description?: string | null;
 }
 
 export interface QuestionOption {

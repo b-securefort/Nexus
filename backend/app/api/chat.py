@@ -24,7 +24,7 @@ from app.agent.questions import (
     get_pending_question_for_conversation,
     resolve_question,
 )
-from app.agent.orchestrator import handle_chat
+from app.agent.orchestrator import cleanup_interrupted_turn, handle_chat
 from app.agent.streaming import (
     sse_approval_required,
     sse_done,
@@ -425,6 +425,11 @@ async def chat(
             except Exception as e:
                 logger.error("Chat stream error: %s", str(e), exc_info=True)
                 yield sse_error("An internal error occurred")
+            finally:
+                # Covers the client-disconnect / Stop path, where handle_chat's
+                # done-path cleanup never runs because the generator is closed
+                # mid-stream. Idempotent with the normal end-of-turn cleanup.
+                cleanup_interrupted_turn(session, conversation.id)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -598,6 +603,8 @@ async def resume_chat(conversation_id: int, user: User = Depends(current_user)):
                 pending.tool_name,
                 json.loads(pending.tool_args_json),
                 pending.reason,
+                risk_level=pending.risk_level,
+                risk_description=pending.risk_description,
             )
         elif pending_q:
             # No call_id available on resume - the original tool_call_id lives

@@ -733,6 +733,81 @@ Replaces the four scalar `INGEST_ADO_WIKI_*` env vars (deleted outright, no depr
 
 **Refines the 2026-05-27 "ARM token mandatory" decision.** The `DEV_AUTH_BYPASS` predicate was unspoofable but still a per-deployment config knob; the hosting platform already tells us we're deployed. The ARM missing-token hard-stop now triggers when `CONTAINER_APP_NAME` is set (Azure Container Apps injects this in every replica) and falls through to the local `az login` session otherwise. URL-based detection (`Host` header, peer IP) was considered and rejected: every signal a request carries is either client-spoofable from the internet or, behind the Container Apps ingress controller, reports localhost from inside the container — inverting the intent. **Trade-off**: the gate is now coupled to one specific hosting platform — `_is_deployed_environment()` is the single edit point if Nexus ever moves off Container Apps. `DEV_AUTH_BYPASS` survives unchanged for its other job (bypassing Entra JWT validation for `dev-user`).
 
+### 2026-06-04 — Advisory risk assessment on approval cards via a separate review LLM
+
+Every approval-gated tool call (`az_cli`, `execute_script`, mutating `az_rest_api` /
+`az_devops`) gets an AI risk verdict (✓ safe / ⚠ caution / ⛔ destructive) plus a neutral
+"what this command does" description, produced by a **separate** LLM call so the generator
+isn't grading its own homework; ⛔ requires a second confirmation click. The verdict is
+advisory only — it never approves or denies, the human stays the sole gate — and a
+deterministic floor (the existing `_is_blocked` matcher for `az_cli`, plus an equivalent
+content scan of the `.ps1`/`.sh` body for `execute_script`) can raise the tier to ⛔ but the
+LLM can never lower it, so a false ✓ can't downgrade a destructive command. The card renders
+immediately with Allow disabled until the verdict resolves; the review is capped ~3–4s and
+**fails closed to ⚠ "assessment unavailable," never ✓.** The reviewer judges the raw command
+cold (not the generator's `reason`, which stays only for audit) and reads script *contents*
+for `execute_script`; the verdict folds into the existing `approval_required` SSE event (per
+the 2026-05-15 typed-events decision), with `risk_level` + `risk_description` added to
+`pending_approvals`.
+**Trade-off**: one extra LLM call and a round-trip of latency on every approval, a new schema
+column, and the risk that a green ✓ trains users to stop reading — accepted because the
+deterministic floor + escalate-only + fail-closed design keeps the tick from ever being the
+sole guard on a destructive command, where a biased self-review would rationalize what an
+independent reviewer catches.
+
+### 2026-06-04 — A user denial is terminal, never a retryable error
+
+When the user denies an approval-gated tool call, the orchestrator now classifies the result
+as its own envelope status `"denied"` (via `_tool_control_outcome`) with `is_error=False`, so
+it can never enter the multi-strategy retry path. Previously a denial was lumped in as an
+error, which fed Strategy 2 — the hint that literally tells the model "use `az_rest_api`
+instead" — so a denied `az vm delete` got routed into an `az_rest_api DELETE` (denial-evasion;
+OWASP LLM06 Excessive Agency). The denial is fed back with an explicit "this is final, do not
+attempt the same outcome by any other tool/command/REST/script" instruction, the
+success-after-failure learning path is also skipped, and a structural backstop
+(`_MAX_DENIALS_PER_TURN = 1`) auto-refuses any further approval-gated call for the rest of the
+turn **without re-prompting the user**, so a refusal can't be turned into approval-spam.
+**Trade-off**: a denied call gets no retry even when the refusal was about syntax rather than
+intent (the user must re-ask), and the per-turn auto-deny can block a later legitimate approval
+in the same turn — both accepted because honouring a refusal unconditionally is the whole point
+of the approval gate, and a fresh user message clears the turn-level state.
+
+### 2026-06-04 — Stop button: interrupt cleanup via `cleanup_interrupted_turn`
+
+The chat composer shows a Stop button in place of Send while a turn is streaming; it aborts the
+SSE request client-side (`AbortController`), which disconnects the `StreamingResponse` and
+closes the orchestrator generator. Because the generator's normal done-path cleanup never runs
+on an interrupt, the `/api/chat` stream wraps its loop in a `finally` that calls
+`cleanup_interrupted_turn(session, conversation_id)` — clearing the conversation lease and any
+ARM-token override so a stopped turn doesn't leave stale state behind. A tool subprocess already
+executing when Stop is pressed finishes server-side but its result is discarded; no *new* tool
+calls run after the abort, and the frontend re-fetches the conversation so the view reflects
+exactly what was persisted. **Trade-off**: an in-flight (already-approved) command is not
+force-killed — Stop halts generation and the agent's forward progress, not an OS process that
+is already running — accepted because cooperatively cancelling a mid-flight subprocess across
+the thread-pool boundary is out of scope and the approval gate already governed that command.
+
+### 2026-06-04 — Kill switch for execute_script via tracked process group
+
+**Refines the 2026-06-04 "Stop button" decision, which left in-flight subprocess kill out of
+scope.** `execute_script` now launches its subprocess as a killable group (POSIX
+`start_new_session` → `os.killpg`; Windows `taskkill /F /T` over the PID tree) and registers
+the handle in a per-conversation registry in `app/tools/base.py`, keyed by a `conversation_id`
+ContextVar that propagates into the executor thread (same mechanism as the ARM token / skill
+slug). The existing Stop / client-disconnect path kills the whole tree through
+`cleanup_interrupted_turn`, so a multi-step script (a loop over resources) can be stopped before
+its remaining iterations run. **Rejected alternative**: running scripts via an Azure DevOps
+pipeline the user could cancel — rejected because a pipeline executes as its service connection,
+not the signed-in user, which breaks the 2026-05-15 user-identity ARM-token passthrough
+invariant (a privilege-escalation path: the user acts as the pipeline's SP) and reintroduces the
+operational surface the 2026-05-22 run_shell/ACI decision rejected. A kill switch on single-line
+`az_cli` / `az_rest_api` was also rejected as false safety — their destructive effect is a
+server-side ARM dispatch that killing the local `az` process can't recall. **Trade-off**:
+scripts still run on the Nexus host (blast radius unchanged), and the kill stops only *future*
+iterations — whatever the current iteration already dispatched to Azure completes server-side;
+accepted because preserving "every action runs as the signed-in user" plus a real forward-stop
+beats a better abort button that acts as the wrong principal.
+
 ---
 
 ## 6. Operations

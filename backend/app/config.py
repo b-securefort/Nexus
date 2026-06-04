@@ -209,6 +209,14 @@ class Settings(BaseSettings):
     AOAI_CB_OPEN_SECONDS: int = 30
     AOAI_TIMEOUT_SECONDS: int = 60
 
+    # Approval-card risk assessment (separate review LLM; advisory only — never
+    # gates execution). RISK_REVIEW_ENABLED=false disables the review call and
+    # the card falls back to the deterministic-floor verdict only.
+    # RISK_REVIEW_TIMEOUT_SECONDS caps the review so the approval card resolves
+    # fast; on timeout/error the verdict fails closed to "caution".
+    RISK_REVIEW_ENABLED: bool = True
+    RISK_REVIEW_TIMEOUT_SECONDS: float = 4.0
+
     @field_validator("DEV_AUTH_BYPASS", mode="after")
     @classmethod
     def validate_dev_auth_bypass(cls, v: bool, info) -> bool:

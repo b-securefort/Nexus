@@ -7,8 +7,10 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import Generator
@@ -50,6 +52,108 @@ def set_skill_name(name: str | None) -> None:
 
 def get_skill_name() -> str | None:
     return _current_skill_name.get()
+
+
+# ── Killable subprocess registry (DESIGN.md §5 2026-06-04) ────────────────────
+#
+# `execute_script` can run a long, multi-step script (e.g. a loop deleting
+# resources). When the user hits Stop / disconnects, the orchestrator's
+# interrupt cleanup kills the script's whole process tree so the remaining
+# iterations never run. The tool runs in an executor thread; the kill is
+# triggered from the async path — so we keep a thread-safe per-conversation
+# registry of live Popen handles, keyed by a ContextVar that propagates into
+# the worker thread (same mechanism as the ARM token / skill slug).
+#
+# NB: this only stops *future* work. Whatever the current iteration already
+# dispatched to Azure completes server-side — a local kill can't recall it.
+_current_conversation_id: ContextVar[int | None] = ContextVar("conversation_id", default=None)
+
+
+def set_conversation_id(conversation_id: int | None) -> None:
+    """Store the active conversation id for the current request context so a
+    tool running in the executor thread can register its subprocess for kill."""
+    _current_conversation_id.set(conversation_id)
+
+
+def get_conversation_id() -> int | None:
+    return _current_conversation_id.get()
+
+
+_process_registry_lock = threading.Lock()
+_process_registry: dict[int, set[subprocess.Popen]] = {}
+
+
+def register_process(conversation_id: int | None, proc: subprocess.Popen) -> None:
+    """Track a running subprocess so Stop / disconnect can kill it."""
+    if conversation_id is None:
+        return
+    with _process_registry_lock:
+        _process_registry.setdefault(conversation_id, set()).add(proc)
+
+
+def unregister_process(conversation_id: int | None, proc: subprocess.Popen) -> None:
+    """Drop a subprocess from the registry once it has finished."""
+    if conversation_id is None:
+        return
+    with _process_registry_lock:
+        procs = _process_registry.get(conversation_id)
+        if procs:
+            procs.discard(proc)
+            if not procs:
+                _process_registry.pop(conversation_id, None)
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Best-effort terminate a process AND its children, cross-platform.
+
+    Windows: ``taskkill /T`` walks the child tree by PID parentage. POSIX: the
+    process was launched with ``start_new_session=True`` so the children share a
+    process group we can signal with ``killpg`` (SIGTERM, then SIGKILL).
+    """
+    if proc.poll() is not None:
+        return  # already exited
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                **SUBPROCESS_FLAGS,
+            )
+        else:
+            try:
+                pgid = os.getpgid(proc.pid)
+            except ProcessLookupError:
+                return
+            os.killpg(pgid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+    except Exception:
+        logger.exception("Failed to kill process tree pid=%s", getattr(proc, "pid", "?"))
+
+
+def kill_conversation_processes(conversation_id: int | None) -> int:
+    """Kill every tracked subprocess for a conversation; return the count.
+
+    Called from the orchestrator's interrupt cleanup (Stop / client disconnect).
+    Idempotent — a no-op when nothing is registered.
+    """
+    if conversation_id is None:
+        return 0
+    with _process_registry_lock:
+        procs = list(_process_registry.get(conversation_id, ()))
+    for proc in procs:
+        _kill_process_tree(proc)
+        unregister_process(conversation_id, proc)
+    if procs:
+        logger.info(
+            "Killed %d tracked process(es) for conv=%s", len(procs), conversation_id
+        )
+    return len(procs)
 
 
 _az_executable_path: str | None = None

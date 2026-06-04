@@ -26,8 +26,14 @@ def create_pending_approval(
     tool_name: str,
     tool_args_json: str,
     reason: str,
+    risk_level: str | None = None,
+    risk_description: str | None = None,
 ) -> PendingApproval:
-    """Create a new pending approval and register an asyncio event."""
+    """Create a new pending approval and register an asyncio event.
+
+    `risk_level` starts as "pending" while the advisory review LLM runs;
+    `update_approval_risk` fills in the resolved verdict (see §5 2026-06-04).
+    """
     approval_id = str(uuid.uuid4())
 
     approval = PendingApproval(
@@ -37,6 +43,8 @@ def create_pending_approval(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         reason=reason,
+        risk_level=risk_level,
+        risk_description=risk_description,
         status="pending",
     )
     session.add(approval)
@@ -47,6 +55,25 @@ def create_pending_approval(
     _approval_events[approval_id] = asyncio.Event()
 
     return approval
+
+
+def update_approval_risk(
+    session: Session,
+    approval_id: str,
+    risk_level: str,
+    risk_description: str | None,
+) -> None:
+    """Persist the resolved advisory risk verdict on a pending approval.
+
+    Advisory only — this never changes `status` and never gates execution.
+    """
+    approval = session.get(PendingApproval, approval_id)
+    if approval is None:
+        return
+    approval.risk_level = risk_level
+    approval.risk_description = risk_description
+    session.add(approval)
+    session.commit()
 
 
 async def wait_for_approval(approval_id: str) -> str:

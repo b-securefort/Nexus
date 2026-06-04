@@ -1,6 +1,6 @@
-# Nexus — Team Architect Assistant
+# Nexus — Platform Team Assistant
 
-A self-hosted, team-oriented AI assistant that serves a small team via a web interface, powered by Azure OpenAI. Chat with a shared Markdown knowledge base through configurable skills.
+A self-hosted, team-oriented AI assistant for platform teams that serves a small team via a web interface, powered by Azure OpenAI. Chat with a shared Markdown knowledge base through configurable skills.
 
 ## Quick Start (Local Development)
 

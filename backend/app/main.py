@@ -98,6 +98,20 @@ def _apply_lightweight_migrations(engine):
             ))
             conn.commit()
 
+        # Advisory risk assessment on approval cards (DESIGN.md §5 2026-06-04)
+        try:
+            conn.execute(sqlalchemy.text("SELECT risk_level FROM pending_approvals LIMIT 0"))
+        except Exception:
+            logger.info("Adding risk_level column to pending_approvals table")
+            conn.execute(sqlalchemy.text("ALTER TABLE pending_approvals ADD COLUMN risk_level TEXT"))
+            conn.commit()
+        try:
+            conn.execute(sqlalchemy.text("SELECT risk_description FROM pending_approvals LIMIT 0"))
+        except Exception:
+            logger.info("Adding risk_description column to pending_approvals table")
+            conn.execute(sqlalchemy.text("ALTER TABLE pending_approvals ADD COLUMN risk_description TEXT"))
+            conn.commit()
+
         # Per-message compression cache (long user pastes + image descriptions)
         try:
             conn.execute(sqlalchemy.text("SELECT text_summary FROM messages LIMIT 0"))

@@ -1,8 +1,8 @@
-# Nexus — Team Architect Assistant
+# Nexus — Platform Team Assistant
 
 ## What This Is
 
-Nexus is a self-hosted AI assistant for Azure cloud teams. It combines Azure OpenAI (GPT) with a team knowledge base (KB) synced from Git, a skills system (switchable personas), and approval-gated tool execution (az CLI, PowerShell, Resource Graph queries). It runs commands proactively instead of just suggesting them, learns from mistakes via a persistent `learn.md`, and retries failed commands using 3 different strategies before giving up.
+Nexus is a self-hosted AI assistant for platform teams (Azure is the primary platform today). It combines Azure OpenAI (GPT) with a team knowledge base (KB) synced from Git, a skills system (switchable personas), and approval-gated tool execution (az CLI, PowerShell, Resource Graph queries). It runs commands proactively instead of just suggesting them, learns from mistakes via a persistent `learn.md`, and retries failed commands using 3 different strategies before giving up.
 
 ## Tech Stack
 

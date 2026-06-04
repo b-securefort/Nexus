@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Loader2, Bot, Paperclip, X as XIcon } from "lucide-react";
+import { Send, Square, Bot, Paperclip, X as XIcon } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import {
   sendChatMessage,
@@ -329,6 +329,38 @@ export function ChatWindow() {
     }
   };
 
+  const handleStop = useCallback(() => {
+    // Abort the in-flight SSE request. The backend's StreamingResponse is
+    // cancelled on disconnect; its `finally` clears the lease + ARM override
+    // (cleanup_interrupted_turn). No new tool calls run after this point; a
+    // tool already executing finishes server-side but its result is discarded.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+    setStreamingContent("");
+    // A pending approval/question is moot once the turn is aborted — drop the
+    // cards so they don't linger waiting on a stream that no longer exists.
+    setPendingApproval(null);
+    setPendingQuestion(null);
+    // Reconcile the view with what the backend persisted before the stop, then
+    // drop the live (now-aborted) tool-call cards — same order as the "done"
+    // path so saved tool calls in history don't flash out and back in.
+    const cid = useAppStore.getState().conversationId;
+    if (cid) {
+      fetchConversation(cid)
+        .then((conv) => {
+          setMessages(conv.messages);
+          clearToolCalls();
+        })
+        .catch(() => clearToolCalls());
+    } else {
+      clearToolCalls();
+    }
+  }, [
+    setIsStreaming, setStreamingContent, setMessages, clearToolCalls,
+    setPendingApproval, setPendingQuestion,
+  ]);
+
   const handleApproval = async (action: "approve" | "deny") => {
     if (!pendingApproval) return;
     try {
@@ -611,18 +643,25 @@ export function ChatWindow() {
               className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)] text-sm leading-relaxed"
               style={{ minHeight: "44px", maxHeight: "200px" }}
             />
-            <button
-              onClick={handleSend}
-              disabled={!canSend}
-              aria-label="Send message"
-              className="self-end bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
-            >
-              {isStreaming ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
+            {isStreaming ? (
+              <button
+                onClick={handleStop}
+                aria-label="Stop generation"
+                title="Stop"
+                className="self-end bg-red-700 hover:bg-red-600 text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
+              >
+                <Square className="w-5 h-5 fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!canSend}
+                aria-label="Send message"
+                className="self-end bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
+              >
                 <Send className="w-5 h-5" />
-              )}
-            </button>
+              </button>
+            )}
           </div>
           <div className="mt-2 flex justify-start">
             <ContextUsageIndicator usage={contextUsage} />

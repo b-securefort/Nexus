@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 _MAX_CONTENT_SIZE = 16384
 _TIMEOUT = 15
 
+# Below this many characters of extracted text, a documentation fetch has almost
+# certainly failed (JS-rendered shell, auth wall, or near-empty page) rather than
+# returned real content.
+_MIN_USEFUL_TEXT = 200
+
+# Phrases that mark an extracted page as a JS/auth shell rather than content.
+# Seen in production: learn.microsoft.com SPA pages return an "Access to this
+# page requires authorization" interstitial to non-browser fetchers.
+_EXTRACTION_FAILURE_MARKERS = (
+    "access to this page requires authorization",
+    "you need to enable javascript",
+    "please enable javascript",
+    "enable javascript to run this app",
+)
+
 # Connection pool for HTTP requests
 _shared_client = httpx.Client(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5)
 
@@ -143,6 +158,17 @@ class WebFetchTool(Tool):
                 "Requests to internal networks and metadata services (e.g. 169.254.169.254) "
                 "are blocked for security."
             )
+
+        # Microsoft Learn is a JavaScript-rendered SPA: a static fetch only gets
+        # back an auth/JS shell ("Access to this page requires authorization"),
+        # never the doc body. fetch_ms_docs queries the Learn API and returns the
+        # real content, so route the agent there instead of wasting the fetch.
+        if host == "learn.microsoft.com" or host.endswith(".learn.microsoft.com"):
+            return (
+                "Error: learn.microsoft.com pages are JavaScript-rendered, so web_fetch "
+                "cannot extract their content (it only sees an authorization/JS shell). "
+                "Use `fetch_ms_docs` to search Microsoft Learn for this topic instead."
+            )
         try:
             response = _shared_client.get(
                 url,
@@ -160,6 +186,18 @@ class WebFetchTool(Tool):
 
             if mode == "text":
                 content = self._extract_text(content)
+                # Surface a content-level failure instead of returning a JS/auth
+                # shell as success. Without this the agent (and the orchestrator's
+                # is_error check) treats a useless stub as a real doc and never
+                # retries or learns to pivot to a better tool.
+                reason = self._extraction_failed(content)
+                if reason:
+                    return (
+                        f"Error: fetched {url} (HTTP {response.status_code}) but could not "
+                        f"extract usable content ({reason}). The page is likely "
+                        "JavaScript-rendered or behind an authorization wall — try a "
+                        "different source, or fetch_ms_docs for Microsoft Learn topics."
+                    )
 
             if len(content) > _MAX_CONTENT_SIZE:
                 content = content[:_MAX_CONTENT_SIZE] + "\n... (truncated)"
@@ -173,6 +211,20 @@ class WebFetchTool(Tool):
         except Exception as e:
             logger.error("Web fetch error for %s: %s", url, str(e))
             return f"Error: {str(e)}"
+
+    def _extraction_failed(self, content: str) -> str | None:
+        """Return a short reason if the extracted text is a JS/auth shell or
+        otherwise unusable, else None. Only applied in 'text' mode."""
+        stripped = (content or "").strip()
+        if not stripped:
+            return "empty after extraction"
+        low = stripped.lower()
+        for marker in _EXTRACTION_FAILURE_MARKERS:
+            if marker in low:
+                return f"content wall: {marker!r}"
+        if len(stripped) < _MIN_USEFUL_TEXT:
+            return f"only {len(stripped)} chars extracted"
+        return None
 
     def _extract_text(self, html: str) -> str:
         """Extract readable text from HTML.

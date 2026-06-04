@@ -1206,13 +1206,54 @@ class TestWebFetchTool:
         tool = get_tool("web_fetch")
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = "<html><body><p>Hello World</p></body></html>"
+        # Realistic article-length body. A trivial "<p>Hello World</p>" would now
+        # (correctly) be rejected as a failed extraction — a real documentation
+        # page that yields ~11 chars of text is a JS/auth shell, not content.
+        mock_response.text = (
+            "<html><body><article><h1>Hello World Guide</h1>"
+            "<p>Hello World is the canonical first program. This page documents how to "
+            "set it up, why it works as a smoke test for deployment, routing, and TLS "
+            "termination, and the common pitfalls teams hit when wiring it into a "
+            "continuous integration pipeline across multiple environments.</p>"
+            "<p>Once the Hello World endpoint returns a 200 response you can be "
+            "confident the end-to-end path is functioning correctly.</p>"
+            "</article></body></html>"
+        )
         mock_response.reason_phrase = "OK"
         mock_client.get.return_value = mock_response
 
         result = tool.execute({"url": "https://example.com"}, _USER)
         assert "Hello World" in result
         assert "<html>" not in result  # HTML should be stripped
+
+    def test_learn_microsoft_routes_to_fetch_ms_docs(self):
+        """learn.microsoft.com is a JS SPA web_fetch can't read — it should be
+        short-circuited to an Error pointing at fetch_ms_docs, before any GET."""
+        tool = get_tool("web_fetch")
+        result = tool.execute(
+            {"url": "https://learn.microsoft.com/en-us/azure/api-management/private-endpoint"},
+            _USER,
+        )
+        assert result.startswith("Error")
+        assert "fetch_ms_docs" in result
+
+    @patch("app.tools.generic.web_fetch._shared_client")
+    def test_auth_wall_stub_is_an_error_not_success(self, mock_client):
+        """A 200 response whose body is a JS/auth shell must surface as Error,
+        not be returned as if it were real content (the conv-314 failure)."""
+        tool = get_tool("web_fetch")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = (
+            "<html><body><main>Note. Access to this page requires authorization. "
+            "You can try signing in or changing directories.</main></body></html>"
+        )
+        mock_response.reason_phrase = "OK"
+        mock_client.get.return_value = mock_response
+
+        result = tool.execute({"url": "https://example.com/docs"}, _USER)
+        assert result.startswith("Error")
+        assert "authorization wall" in result or "content wall" in result
 
     @patch("app.tools.generic.web_fetch._shared_client")
     def test_fetch_raw_mode(self, mock_client):

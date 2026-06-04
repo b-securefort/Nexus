@@ -136,6 +136,25 @@ def cleanup_interrupted_turn(session: Session, conversation_id: int) -> None:
 # Tools whose errors should trigger automatic multi-strategy retry
 _COMMAND_TOOLS = {"az_cli", "execute_script", "az_resource_graph"}
 
+# Tools whose failure→success transitions yield a generalizable learning. A
+# superset of _COMMAND_TOOLS: retry escalation stays gated on _COMMAND_TOOLS,
+# but learning capture also covers REST and diagram-as-code tools, which emit
+# real errors (status:error) the agent recovers from within a turn. Read/search/
+# ask_user are intentionally excluded — their "failures" (missing path, no
+# results, user intent) don't generalize into a reusable lesson.
+# See DESIGN.md §5 2026-06-04 "Decouple learning-eligibility from retry".
+_LEARNING_ELIGIBLE_TOOLS = _COMMAND_TOOLS | {
+    "az_rest_api",
+    "az_devops",
+    "generate_drawio_from_python",
+    "generate_python_diagram",
+}
+
+# Strong references to in-flight background learning-write tasks. asyncio holds
+# only weak references to tasks, so without this a fire-and-forget task can be
+# GC'd before it finishes. Entries are removed via add_done_callback.
+_learning_write_tasks: set = set()
+
 # Max consecutive failures on the same type of tool before giving up
 _MAX_RETRIES_PER_TOOL = 3
 
@@ -828,14 +847,21 @@ def _attachment_for_rendered_png(args: dict) -> dict | None:
 
     image_path = (Path("output") / filename).with_suffix(f".{fmt}")
     try:
-        if not image_path.is_file() or image_path.stat().st_size == 0:
-            return None
+        stat = image_path.stat()
     except OSError:
+        return None
+    if not image_path.is_file() or stat.st_size == 0:
         return None
 
     png_name = image_path.name
+    # Cache-bust on the file's mtime so that *editing* a diagram (which
+    # overwrites <stem>.png in place, reusing the filename) yields a distinct
+    # URL per render. Without this, the reused filename maps to one stable URL
+    # and the browser keeps showing the already-painted image even though the
+    # bytes on disk changed. serve_output matches only the path param, so the
+    # query string passes through untouched.
     return {
-        "url": f"/api/output/{png_name}",
+        "url": f"/api/output/{png_name}?v={stat.st_mtime_ns}",
         "filename": png_name,
         "original_name": png_name,
         "mime": "image/png" if fmt == "png" else "image/jpeg",
@@ -1160,7 +1186,13 @@ def _schedule_learning_write(
             )
 
     try:
-        asyncio.create_task(_do_write())
+        # Retain a strong reference until completion. asyncio only keeps a weak
+        # reference to tasks, so a fire-and-forget task with no saved reference
+        # can be garbage-collected mid-flight — silently dropping the learning
+        # write. Hold it in a module-level set and discard on done.
+        task = asyncio.create_task(_do_write())
+        _learning_write_tasks.add(task)
+        task.add_done_callback(_learning_write_tasks.discard)
     except RuntimeError:
         # No running event loop (e.g. unit tests calling the orchestrator
         # sync helpers directly). Fall back to a synchronous best-effort
@@ -1946,7 +1978,7 @@ async def handle_chat(
                     # would route the model around the denial), and not a
                     # success to learn from. Skip both paths entirely.
                     pass
-                elif func_name in _COMMAND_TOOLS and is_error:
+                elif func_name in _LEARNING_ELIGIBLE_TOOLS and is_error:
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
                         try:
@@ -1955,42 +1987,49 @@ async def handle_chat(
                         except ImportError:
                             pass
 
-                    # Track this failure
+                    # Track this failure. This drives both multi-strategy retry
+                    # (command tools) and success-after-failure learning capture
+                    # (the broader learning-eligible set).
                     failure_tracker[func_name] = failure_tracker.get(func_name, 0) + 1
                     if func_name not in failure_history:
                         failure_history[func_name] = []
                     failure_history[func_name].append((func_args, tool_result))
                     count = failure_tracker[func_name]
 
-                    strategy = _get_retry_strategy(count, func_name, func_args, tool_result)
-                    if strategy:
-                        messages.append({"role": "system", "content": strategy})
-                        logger.info(
-                            "Retry strategy %d/%d triggered for %s (failure #%d)",
-                            min(count, _MAX_RETRIES_PER_TOOL),
-                            _MAX_RETRIES_PER_TOOL,
-                            func_name,
-                            count,
-                        )
-                    else:
-                        # All retries exhausted — report to the user. Learning
-                        # is NOT recorded here (we record on success-after-failure,
-                        # not on confirmed failure — a failure pattern without a
-                        # known fix doesn't give the next run useful guidance).
-                        summary = _build_failure_summary_for_learning(
-                            func_name, failure_history[func_name]
-                        )
-                        give_up_msg = (
-                            f"[ALL RETRIES EXHAUSTED] `{func_name}` failed {count} times.\n"
-                            f"{summary}\n\n"
-                            "Tell the user what you tried, what went wrong, and suggest "
-                            "they run the command manually or check their environment/permissions."
-                        )
-                        messages.append({"role": "system", "content": give_up_msg})
-                        logger.warning(
-                            "All %d retries exhausted for %s", _MAX_RETRIES_PER_TOOL, func_name
-                        )
-                elif func_name in _COMMAND_TOOLS:
+                    # Retry escalation is only for command tools. Other
+                    # learning-eligible tools (az_rest_api, az_devops, the
+                    # diagram-as-code tools) have their own recovery paths — we
+                    # still track their failures so a later success is learnable.
+                    if func_name in _COMMAND_TOOLS:
+                        strategy = _get_retry_strategy(count, func_name, func_args, tool_result)
+                        if strategy:
+                            messages.append({"role": "system", "content": strategy})
+                            logger.info(
+                                "Retry strategy %d/%d triggered for %s (failure #%d)",
+                                min(count, _MAX_RETRIES_PER_TOOL),
+                                _MAX_RETRIES_PER_TOOL,
+                                func_name,
+                                count,
+                            )
+                        else:
+                            # All retries exhausted — report to the user. Learning
+                            # is NOT recorded here (we record on success-after-failure,
+                            # not on confirmed failure — a failure pattern without a
+                            # known fix doesn't give the next run useful guidance).
+                            summary = _build_failure_summary_for_learning(
+                                func_name, failure_history[func_name]
+                            )
+                            give_up_msg = (
+                                f"[ALL RETRIES EXHAUSTED] `{func_name}` failed {count} times.\n"
+                                f"{summary}\n\n"
+                                "Tell the user what you tried, what went wrong, and suggest "
+                                "they run the command manually or check their environment/permissions."
+                            )
+                            messages.append({"role": "system", "content": give_up_msg})
+                            logger.warning(
+                                "All %d retries exhausted for %s", _MAX_RETRIES_PER_TOOL, func_name
+                            )
+                elif func_name in _LEARNING_ELIGIBLE_TOOLS:
                     # Tool succeeded — check if there were prior failures to learn from
                     prior_failures = failure_history.get(func_name)
                     if prior_failures:
@@ -2023,7 +2062,7 @@ async def handle_chat(
                 # ignored the retrieved entries — but across many turns this
                 # provides a directional signal that promotes load-bearing
                 # entries and archives drifted ones.
-                if retrieved_learning_ids and func_name in _COMMAND_TOOLS:
+                if retrieved_learning_ids and func_name in _LEARNING_ELIGIBLE_TOOLS:
                     try:
                         from app.agent.learnings import mark_learning_outcome
                         mark_learning_outcome(

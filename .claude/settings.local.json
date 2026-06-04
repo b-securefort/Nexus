@@ -43,7 +43,8 @@
       "Bash(npm test *)",
       "WebFetch(domain:github.com)",
       "Bash(python -m pytest tests/test_compaction.py -x)",
-      "Bash(python -m pytest tests/ -q --no-header)"
+      "Bash(python -m pytest tests/ -q --no-header)",
+      "Bash(python -c \"import importlib.metadata as m; print\\('ddgs', m.version\\('ddgs'\\)\\)\")"
     ]
   }
 }

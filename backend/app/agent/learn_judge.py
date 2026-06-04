@@ -96,14 +96,21 @@ def _build_user_prompt(
 
 
 def _get_judge_client() -> AzureOpenAI:
-    """Same client construction as the orchestrator; sharing the deployment is intentional."""
+    """Same client construction as the orchestrator; sharing the deployment is intentional.
+
+    `max_retries=2`: the judge (and rephraser) run in a background task and fail
+    CLOSED, so a transient AOAI hiccup (timeout, 429, 5xx) would silently drop an
+    otherwise-valid learning. The SDK retries only transient errors with backoff —
+    a genuine REJECT verdict is a successful response, not an error, so it is
+    never retried. Being off the request path, the extra latency is harmless.
+    """
     settings = get_settings()
     return AzureOpenAI(
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
         api_key=settings.AZURE_OPENAI_API_KEY,
         api_version=settings.AZURE_OPENAI_API_VERSION,
         timeout=float(settings.AOAI_TIMEOUT_SECONDS),
-        max_retries=0,
+        max_retries=2,
     )
 
 

@@ -157,9 +157,7 @@ swaps the agent's persona and scoped toolset. Personal skills live in the
 | `search_kb` | No | Token-scored search over titles/summaries/tags |
 | `search_kb_semantic` | No | **Cloud** path: Azure-OpenAI query expansion + rerank over file-level index. Kept side-by-side with `search_kb_hybrid`. |
 | `search_kb_hybrid` | No | **Local** path: chunked hybrid retrieval, one embed call per query — preferred over `search_kb_semantic` |
-| `fetch_ms_docs` | No | Microsoft Learn doc search |
-| `read_learnings` | No | Read the agent's persistent `learn.md` |
-| `update_learnings` | No | Append a categorized learning entry |
+| `fetch_ms_docs` | No | Microsoft Learn doc search — the correct tool for `learn.microsoft.com` content (see `web_fetch`) |
 | `az_resource_graph` | No | KQL queries against Azure Resource Graph |
 | `az_cost_query` | No | Cost Management API queries |
 | `az_monitor_logs` | No | Log Analytics KQL queries |
@@ -173,8 +171,31 @@ swaps the agent's persona and scoped toolset. Personal skills live in the
 | `read_file` | No | Read a file from the `output/` sandbox (symmetric with `generate_file`) |
 | `validate_drawio` / `render_drawio` / `patch_drawio_cell` | No | Diagram authoring + validation |
 | `generate_python_diagram` / `generate_drawio_from_python` | No | Diagram-as-code → drawio |
-| `web_fetch` | No | HTTP GET for documentation URLs |
+| `web_fetch` | No | HTTP GET + text extraction for a *known* URL. Returns `Error` on JS/auth-wall stubs (no JS rendering); short-circuits `learn.microsoft.com` to `fetch_ms_docs` |
+| `web_search` | No | General web search via DuckDuckGo (`ddgs`), optional `site:` scoping — Reddit, Tech Community, blogs not covered by the other search tools. Returns a ranked list of links + snippets (not page content; pair with `web_fetch`) |
+| `search_github` / `search_stack_overflow` | No | Targeted GitHub and Stack Overflow search |
+| `search_azure_updates` | No | Azure service-update / roadmap announcement search |
 | `ask_user` | No (pauses for UI) | Surface options to the user via the UI; resumes on answer |
+
+#### Tool failure-signalling contract (load-bearing)
+
+The orchestrator decides whether a tool call **failed** by inspecting the
+returned string: a result that begins with `Error` (or a JSON envelope with
+`status: "error"`) is a failure; anything else is success (`_tool_control_outcome`
+in `orchestrator.py`). That single signal (`is_error`) drives three behaviours:
+multi-strategy **retry**, the **success-after-failure learning** capture, and the
+`nexus_tool_calls_total{outcome}` **metric**.
+
+The trap: a tool that completes but whose *operation* failed, yet returns a
+non-`Error` string, is silently treated as **success** — no retry, no learning,
+mislabelled metric. This was violated three ways and fixed 2026-06-04: `az_cli`
+and `execute_script` returned a bare `Exit code: 2` on non-zero exit, and
+`web_fetch` returned a JS/auth-wall stub with HTTP 200. **Every tool that can
+fail must return an `Error`-prefixed string (or `status:error`) on failure** —
+`AzureToolBase._run_az()` already does this (`Error (label) [exit N]: …`), which
+is why `az_resource_graph` and the other base-runner tools never had the bug.
+A new hand-rolled `subprocess`/`httpx` tool that forgets this will have its
+failures silently swallowed.
 
 ### Auth
 **Files**: [backend/app/auth/](../backend/app/auth/)
@@ -807,6 +828,10 @@ scripts still run on the Nexus host (blast radius unchanged), and the kill stops
 iterations — whatever the current iteration already dispatched to Azure completes server-side;
 accepted because preserving "every action runs as the signed-in user" plus a real forward-stop
 beats a better abort button that acts as the wrong principal.
+
+### 2026-06-04 — Decouple learning-eligibility from retry-eligibility; broaden capture
+
+**Refines the 2026-05-20 "Orchestrator-owned learning writes" decision.** Learning capture was gated on `_COMMAND_TOOLS` (`az_cli`, `execute_script`, `az_resource_graph`) — the same set used for multi-strategy retry — so `az_rest_api`, `az_devops`, and the diagram-as-code tools could never produce a learning despite emitting real `status:error` failures the agent recovers from within a turn; a new `_LEARNING_ELIGIBLE_TOOLS` superset now gates the success-after-failure write path while `_COMMAND_TOOLS` continues to gate retry alone (read/search/`ask_user` stay excluded — their "failures" don't generalize). This only became worth doing once three latent bugs that made the live path produce *zero* rows were fixed in the same change: `az_cli`/`execute_script` reported non-zero exits as `"Exit code: N"` (so the orchestrator's `is_error` prefix check never fired and the failure was never tracked); `derive_learning_from_success` embedded raw tool args whose subscription GUIDs tripped the `_looks_environment_specific` guard and rejected every Azure learning (now redacted to placeholders at derivation, the guard kept as a safety net); and the fire-and-forget judge task discarded its own reference and could be GC'd mid-flight. The LLM judge additionally now retries transient AOAI errors (`max_retries=2`) rather than failing closed on a momentary hiccup. All existing gates (redaction, override-pattern guard, environment guard, LLM judge, provisional→active lifecycle) still apply, so broader capture does not widen the memory-poisoning surface. **Trade-off**: more background judge/rephrase LLM calls and more provisional rows to validate; accepted because the 2026-06-04 conversation logs showed the highest-value lessons (REST api-versions, diagram-class hallucinations) live exactly in the previously-excluded tools.
 
 ---
 

@@ -217,6 +217,10 @@ class ExecuteScriptTool(Tool):
                 output += f"--- stderr ---\n{result.stderr}\n"
             if len(output) > _MAX_OUTPUT_SIZE:
                 output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
+            # Non-zero exit is a real failure — prefix "Error:" so the
+            # orchestrator detects it (is_error), retries, and can learn the fix.
+            if result.returncode != 0:
+                return f"Error: script exited with code {result.returncode}.\n{output}"
             return output
         except subprocess.TimeoutExpired:
             return f"Error: script timed out after {timeout} seconds"
@@ -310,6 +314,9 @@ class ExecuteScriptTool(Tool):
 
             if len(full) > _MAX_OUTPUT_SIZE:
                 full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
+            # See execute(): surface non-zero exit as an error for retry/learning.
+            if proc.returncode != 0:
+                return f"Error: script exited with code {proc.returncode}.\n{full}"
             return full
         except subprocess.TimeoutExpired:
             try:

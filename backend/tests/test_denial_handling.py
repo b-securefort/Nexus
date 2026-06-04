@@ -9,11 +9,32 @@ the control-flow contract so the evasion loop can't regress.
 
 from app.agent.orchestrator import (
     _COMMAND_TOOLS,
+    _LEARNING_ELIGIBLE_TOOLS,
     _MAX_DENIALS_PER_TURN,
     _DENIAL_FEEDBACK,
     _get_retry_strategy,
     _tool_control_outcome,
 )
+
+
+class TestLearningEligibilityDecoupling:
+    """Learning capture is broader than retry escalation. These pin that the
+    two sets are decoupled so the diagram/REST tools can be learned from without
+    also inheriting multi-strategy retry (they have their own recovery paths)."""
+
+    def test_command_tools_are_a_subset_of_learning_eligible(self):
+        assert _COMMAND_TOOLS <= _LEARNING_ELIGIBLE_TOOLS
+
+    def test_rest_and_diagram_tools_are_learnable_but_not_retried(self):
+        for tool in ("az_rest_api", "az_devops",
+                     "generate_drawio_from_python", "generate_python_diagram"):
+            assert tool in _LEARNING_ELIGIBLE_TOOLS  # learnable
+            assert tool not in _COMMAND_TOOLS         # but not retry-escalated
+
+    def test_read_and_search_tools_are_not_learning_eligible(self):
+        # Their "failures" (missing path, no results, intent) don't generalize.
+        for tool in ("read_kb_file", "search_kb_hybrid", "ask_user", "web_fetch"):
+            assert tool not in _LEARNING_ELIGIBLE_TOOLS
 
 
 class TestDenialIsTerminal:

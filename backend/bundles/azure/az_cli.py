@@ -133,6 +133,14 @@ class AzCliTool(Tool):
             if len(output) > _MAX_OUTPUT_SIZE:
                 output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
 
+            # A non-zero exit is a real failure. Prefix "Error:" so the
+            # orchestrator's failure detection (is_error) engages — otherwise a
+            # failed command (bad syntax, exit 2, auth error) reads as success,
+            # so multi-strategy retry never fires and the success-after-failure
+            # learning path never captures the fix. The full exit/stderr detail
+            # is preserved after the prefix for the model to read.
+            if result.returncode != 0:
+                return f"Error: az CLI exited with code {result.returncode}.\n{output}"
             return output
 
         except subprocess.TimeoutExpired:
@@ -225,6 +233,11 @@ class AzCliTool(Tool):
             if len(full) > _MAX_OUTPUT_SIZE:
                 full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
 
+            # See execute(): non-zero exit must surface as an error so retry +
+            # learning capture engage. Streamed chunks already reached the UI;
+            # only the returned value (used for is_error) gets the prefix.
+            if proc.returncode != 0:
+                return f"Error: az CLI exited with code {proc.returncode}.\n{full}"
             return full
 
         except subprocess.TimeoutExpired:

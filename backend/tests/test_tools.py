@@ -385,6 +385,25 @@ class TestExecuteScriptTool:
         assert "hello-from-script" in result
         assert "Exit code: 0" in result
 
+    def test_nonzero_exit_surfaces_as_error(self):
+        """A script exiting non-zero must return an Error-prefixed result so the
+        orchestrator's failure detection (is_error) engages for retry/learning."""
+        import sys
+        tool = get_tool("execute_script")
+        if sys.platform == "win32":
+            self._write_script("fail.ps1", "Write-Output 'before'; exit 3")
+            name = "fail.ps1"
+        else:
+            self._write_script("fail.sh", "#!/usr/bin/env bash\necho before\nexit 3")
+            name = "fail.sh"
+        try:
+            result = tool.execute({"path": name, "reason": "t"}, _USER)
+        finally:
+            self._cleanup(name)
+        assert result.startswith("Error")
+        assert "exited with code 3" in result
+        assert "Exit code: 3" in result  # detail preserved for the model
+
     def test_timeout_string_does_not_crash(self):
         tool = get_tool("execute_script")
         result = tool.execute(
@@ -450,6 +469,41 @@ class TestAzCliTool:
         tool = get_tool("az_cli")
         result = tool.execute({"args": "not-a-list", "reason": "test"}, _USER)
         assert "Error" in result
+
+    @patch("bundles.azure.az_cli.subprocess.run")
+    @patch("bundles.azure.az_cli._find_az", return_value="az")
+    @patch("bundles.azure.az_cli.require_az_login", return_value=None)
+    def test_nonzero_exit_surfaces_as_error(self, _login, _find, mock_run):
+        """A command that exits non-zero (e.g. bad flag) must return an
+        Error-prefixed result so the orchestrator detects the failure and the
+        success-after-failure learning path can fire. Regression for the
+        'az vm deallocate --yes reported as success' bug (conv 313)."""
+        mock_run.return_value = MagicMock(
+            returncode=2,
+            stdout="",
+            stderr="ERROR: unrecognized arguments: --yes",
+        )
+        tool = get_tool("az_cli")
+        result = tool.execute(
+            {"args": ["vm", "deallocate", "--name", "x", "--yes"], "reason": "t"},
+            _USER,
+        )
+        assert result.startswith("Error")
+        assert "exited with code 2" in result
+        assert "unrecognized arguments" in result  # detail preserved for the model
+
+    @patch("bundles.azure.az_cli.subprocess.run")
+    @patch("bundles.azure.az_cli._find_az", return_value="az")
+    @patch("bundles.azure.az_cli.require_az_login", return_value=None)
+    def test_zero_exit_is_not_an_error(self, _login, _find, mock_run):
+        """Success path is unchanged — exit 0 must NOT be prefixed with Error."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout='{"id": "abc"}', stderr="",
+        )
+        tool = get_tool("az_cli")
+        result = tool.execute({"args": ["account", "show"], "reason": "t"}, _USER)
+        assert not result.startswith("Error")
+        assert "Exit code: 0" in result
 
 
 # ── Adversarial / quality coverage ──────────────────────────────────────────

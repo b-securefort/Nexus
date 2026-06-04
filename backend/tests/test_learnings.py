@@ -245,6 +245,35 @@ class TestDeriveLearning:
         )
         assert out["category"] == "workaround"
 
+    def test_redacts_env_specific_so_learning_survives_guard(self):
+        """Regression: derived learnings carrying a subscription GUID / resource
+        name used to be rejected by _looks_environment_specific, so NO Azure
+        command-tool learning was ever stored. Redaction must strip those tokens
+        while keeping the transferable lesson (here: `--yes` is unsupported)."""
+        out = lrn.derive_learning_from_success(
+            tool_name="az_cli",
+            final_successful_args={"args": [
+                "vm", "deallocate", "--subscription",
+                "9bc590be-f9d4-4605-bf6f-bb21a7ca21fa",
+                "--resource-group", "rg-app-prod", "--name", "ResearchVM"]},
+            prior_failures=[(
+                {"args": [
+                    "vm", "deallocate", "--subscription",
+                    "9bc590be-f9d4-4605-bf6f-bb21a7ca21fa",
+                    "--resource-group", "rg-app-prod", "--name", "ResearchVM",
+                    "--yes"]},
+                "Error: az CLI exited with code 2. ERROR: unrecognized arguments: --yes",
+            )],
+        )
+        blob = out["summary"] + "\n" + out["details"]
+        # The concrete subscription GUID must be gone...
+        assert "9bc590be-f9d4-4605-bf6f-bb21a7ca21fa" not in blob
+        # ...and the entry must now pass the environment-specific guard.
+        is_specific, why = lrn._looks_environment_specific(blob)
+        assert not is_specific, f"still rejected: {why}"
+        # The transferable signal (the --yes that was removed) is preserved.
+        assert "--yes" in blob
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Validation outcome tracking

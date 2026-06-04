@@ -89,6 +89,30 @@ def _looks_environment_specific(text_: str) -> tuple[bool, str]:
     return False, ""
 
 
+# Values of these CLI scoping flags are concrete resource identifiers (noise for
+# a generalized lesson). Matched in the JSON-list arg form ["--name","vm-x"].
+_SCOPING_FLAG_VALUE_RE = re.compile(
+    r'("(?:--subscription|--resource-group|-g|--name|-n|--ids|--account-name|--vault-name)"\s*,\s*)'
+    r'"[^"]*"',
+    re.IGNORECASE,
+)
+
+
+def _redact_environment_specific(text_: str) -> str:
+    """Replace environment-specific tokens (subscription/resource GUIDs, Azure
+    resource names, CLI scoping-flag values) with placeholders so the
+    *generalizable* part of a derived learning survives the
+    `_looks_environment_specific` guard. The guard stays as a safety net for
+    anything this misses — this just stops it rejecting otherwise-transferable
+    lessons (e.g. "az vm deallocate rejects --yes") because an arg list happened
+    to carry a subscription id.
+    """
+    text_ = _GUID_RE.sub("<id>", text_)
+    text_ = _AZURE_NAME_RE.sub("<resource>", text_)
+    text_ = _SCOPING_FLAG_VALUE_RE.sub(r'\g<1>"<redacted>"', text_)
+    return text_
+
+
 # ── Retrieval result ────────────────────────────────────────────────────────
 
 @dataclass
@@ -296,11 +320,15 @@ def derive_learning_from_success(
     *content derivation* step — judge + storage gates are still applied
     downstream by `record_validated_learning`.
     """
-    # Pick the most recent failure as the canonical "what was wrong"
+    # Pick the most recent failure as the canonical "what was wrong".
+    # Redact environment-specific tokens (subscription/resource IDs, names)
+    # BEFORE truncating — truncating first could cut a GUID in half and leak the
+    # remainder past the redactor. The generalizable lesson is in the *shape* of
+    # the args (which flag/syntax changed), not the concrete resource targeted.
     last_failure_args, last_failure_msg = prior_failures[-1] if prior_failures else ({}, "")
-    fail_arg_repr = json.dumps(last_failure_args, ensure_ascii=False)[:300]
-    success_arg_repr = json.dumps(final_successful_args, ensure_ascii=False)[:300]
-    fail_msg_short = (last_failure_msg or "")[:400].replace("\n", " ").strip()
+    fail_arg_repr = _redact_environment_specific(json.dumps(last_failure_args, ensure_ascii=False))[:300]
+    success_arg_repr = _redact_environment_specific(json.dumps(final_successful_args, ensure_ascii=False))[:300]
+    fail_msg_short = _redact_environment_specific((last_failure_msg or "").replace("\n", " ").strip())[:400]
 
     # Heuristic categorisation: syntax errors → syntax-fix; auth/permission →
     # known-issue; otherwise workaround.
@@ -699,6 +727,14 @@ def migrate_legacy_learn_md(session: Session) -> int:
         tool_name = tool_match.group(1).strip() if tool_match else "general"
         details_match = re.search(r"\*\*Details\*\*:\s*(.+?)(?:\n\n|\Z)", body, flags=re.DOTALL)
         details = details_match.group(1).strip() if details_match else body.strip()
+
+        # Skip junk/stub entries with no body. The live write path enforces this
+        # via record_validated_learning's non-empty guard, but the migration
+        # builds AgentLearning directly and would otherwise import empty-detail
+        # rows (e.g. leftover "## [gotcha] real entry" stubs in legacy learn.md).
+        if not summary or not details:
+            logger.info("Skipping legacy entry with empty summary/details: %r", summary[:60])
+            continue
 
         # Skip if regex guard catches it
         if _looks_like_override_attempt(summary, details):

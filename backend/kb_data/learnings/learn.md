@@ -94,12 +94,6 @@ The agent consults this before running commands to avoid repeating errors.
 - **Tool**: generate_file
 - **Details**: After structural validation passes or is close to passing, render the .drawio file to PNG and inspect the actual image. This catches issues the validator cannot: edge labels colliding with icons, badges drifting into busy areas, and container boxes that technically validate but still look too cramped. The render step should be part of the normal feedback loop, not optional.
 
-## [gotcha] real entry
-
-## [gotcha] real entry
-
-## [gotcha] real entry
-
 ## [syntax-fix] az login on Linux without browser
 - **Date**: 2026-05-09 01:11 UTC
 - **Tool**: az_cli
@@ -109,8 +103,6 @@ The agent consults this before running commands to avoid repeating errors.
 - **Date**: 2026-05-09 01:11 UTC
 - **Tool**: validate_drawio
 - **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
-
-## [gotcha] real entry
 
 ## [syntax-fix] az login on Linux without browser
 - **Date**: 2026-05-09 01:13 UTC
@@ -146,8 +138,6 @@ The agent consults this before running commands to avoid repeating errors.
 - **Date**: 2026-05-09 01:18 UTC
 - **Tool**: validate_drawio
 - **Details**: validate_drawio classifies vertices >= 300px wide or tall as containers. Stay under 280px for resource icons and the classification is correct.
-
-## [gotcha] real entry
 
 ## [syntax-fix] let-bindings unsupported
 - **Date**: 2026-05-09 01:20 UTC

@@ -90,6 +90,7 @@ def _patch_geometry(
 
 class PatchDrawioCellTool(Tool):
     name = "patch_drawio_cell"
+    is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
     description = (
         "Update only the geometry (x, y, width, height) of one cell in an existing "
         ".drawio file. Use this to apply a validator suggested-fix coordinate "

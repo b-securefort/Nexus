@@ -8,13 +8,19 @@ the control-flow contract so the evasion loop can't regress.
 """
 
 from app.agent.orchestrator import (
-    _COMMAND_TOOLS,
-    _LEARNING_ELIGIBLE_TOOLS,
     _MAX_DENIALS_PER_TURN,
     _DENIAL_FEEDBACK,
     _get_retry_strategy,
     _tool_control_outcome,
 )
+from app.tools.base import TOOL_REGISTRY, init_tools
+
+# Retry/learning eligibility now lives on per-tool capability attributes
+# (DESIGN.md §5 2026-06-05). Derive the sets the orchestrator used to hardcode
+# so these invariants keep guarding the retry-vs-learning decoupling.
+init_tools()
+_COMMAND_TOOLS = {n for n, t in TOOL_REGISTRY.items() if t.retry_eligible}
+_LEARNING_ELIGIBLE_TOOLS = {n for n, t in TOOL_REGISTRY.items() if t.learning_eligible}
 
 
 class TestLearningEligibilityDecoupling:

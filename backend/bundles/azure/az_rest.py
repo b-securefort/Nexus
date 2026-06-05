@@ -30,6 +30,7 @@ _MAX_BODY_BYTES = 1_048_576
 
 class AzRestApiTool(AzureToolBase):
     name = "az_rest_api"
+    learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     rate_limit_calls = 10
     description = (
         "Call any Azure Resource Manager REST API directly using 'az rest'. "

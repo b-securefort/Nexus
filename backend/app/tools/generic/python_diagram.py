@@ -226,6 +226,7 @@ def _suggest_mingrammer_fix(stderr: str) -> str | None:
 
 class GeneratePythonDiagramTool(Tool):
     name = "generate_python_diagram"
+    learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     description = (
         "Render an architecture diagram from Python code using the `diagrams` "
         "library (mingrammer/diagrams). Unlike generate_file with .drawio, this "

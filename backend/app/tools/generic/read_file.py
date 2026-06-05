@@ -33,6 +33,7 @@ _DANGEROUS_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
 
 class ReadFileTool(Tool):
     name = "read_file"
+    result_limit = 6_000        # was orchestrator _TOOL_RESULT_LIMITS
     description = (
         "Read a file previously written to the output/ sandbox by generate_file "
         "or a diagram/render tool. Path must be relative to output/ "

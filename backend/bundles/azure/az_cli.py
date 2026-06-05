@@ -57,6 +57,9 @@ def _is_blocked(az_args: list[str]) -> str | None:
 
 class AzCliTool(Tool):
     name = "az_cli"
+    retry_eligible = True       # was orchestrator _COMMAND_TOOLS
+    learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
+    result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
     description = (
         "Execute an Azure CLI command. Requires explicit user approval. "
         "Commands run as the authenticated user's own Azure identity — the same permissions "

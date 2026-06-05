@@ -46,8 +46,8 @@ from app.db.models import Conversation, Message
 from app.kb.indexer import get_index_summary
 from app.skills.models import Skill
 from app.tools.base import (
-    AzureToolBase,
     TOOL_CALLS,
+    TOOL_REGISTRY,
     Tool,
     classify_tool_outcome,
     kill_conversation_processes,
@@ -133,22 +133,19 @@ def cleanup_interrupted_turn(session: Session, conversation_id: int) -> None:
     except Exception:
         logger.debug("ARM override clear failed for conv=%s", conversation_id, exc_info=True)
 
-# Tools whose errors should trigger automatic multi-strategy retry
-_COMMAND_TOOLS = {"az_cli", "execute_script", "az_resource_graph"}
-
-# Tools whose failure→success transitions yield a generalizable learning. A
-# superset of _COMMAND_TOOLS: retry escalation stays gated on _COMMAND_TOOLS,
-# but learning capture also covers REST and diagram-as-code tools, which emit
-# real errors (status:error) the agent recovers from within a turn. Read/search/
-# ask_user are intentionally excluded — their "failures" (missing path, no
-# results, user intent) don't generalize into a reusable lesson.
+# Per-tool capability lookup (DESIGN.md §5 2026-06-05). Whether a tool drives
+# multi-strategy retry (`retry_eligible`) or success-after-failure learning
+# capture (`learning_eligible`) is declared on the tool itself, not hardcoded
+# here — so a bundle owns the facts about its own tools and core never names
+# them. Learning is a superset of retry (REST/diagram tools are learnable but
+# have their own recovery paths); that distinction is now two independent attrs.
 # See DESIGN.md §5 2026-06-04 "Decouple learning-eligibility from retry".
-_LEARNING_ELIGIBLE_TOOLS = _COMMAND_TOOLS | {
-    "az_rest_api",
-    "az_devops",
-    "generate_drawio_from_python",
-    "generate_python_diagram",
-}
+def _tool_has(tool_name: str, attr: str) -> bool:
+    """True when the registered tool named `tool_name` has capability `attr` set;
+    unknown name → False. Replaces the old _COMMAND_TOOLS / _LEARNING_ELIGIBLE_TOOLS
+    name-sets."""
+    tool = TOOL_REGISTRY.get(tool_name)
+    return bool(getattr(tool, attr, False)) if tool is not None else False
 
 # Strong references to in-flight background learning-write tasks. asyncio holds
 # only weak references to tasks, so without this a fire-and-forget task can be
@@ -253,15 +250,11 @@ MAX_HISTORY_MESSAGES = 50
 # LLM. The full result is still persisted to DB and streamed to the UI; only
 # the prompt copy is trimmed. Keeps long shell/CLI dumps from drowning out
 # the original task across iterations.
-_TOOL_RESULT_LIMITS = {
-    "az_cli": 4_000,
-    "az_resource_graph": 4_000,
-    "execute_script": 4_000,
-    "read_kb_file": 6_000,
-    "read_file": 6_000,
-    "search_kb_hybrid": 4_000,
-}
-_DRAWIO_TOOLS = {"render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell"}
+def _tool_result_limit(tool_name: str) -> int | None:
+    """In-prompt size cap for this tool's result, declared on the tool via the
+    `result_limit` capability attribute (was the _TOOL_RESULT_LIMITS table)."""
+    tool = TOOL_REGISTRY.get(tool_name)
+    return getattr(tool, "result_limit", None) if tool is not None else None
 
 # Track 4D — threshold above which the head+tail truncation is replaced by
 # an LLM summarisation pass. The old head+tail split could leave the model
@@ -359,7 +352,7 @@ def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
     # For drawio tools, strip echoed XML from the envelope.data.xml field
     # if it's present — the validator/renderer often echoes the whole file
     # and we don't need the model to re-read it.
-    if tool_name in _DRAWIO_TOOLS and len(enveloped_result) > 4_000:
+    if _tool_has(tool_name, "is_diagram_tool") and len(enveloped_result) > 4_000:
         try:
             envelope = json.loads(enveloped_result)
             data = envelope.get("data")
@@ -390,7 +383,7 @@ def _truncate_tool_result(tool_name: str, enveloped_result: str) -> str:
             return summarised
         # fall through to head+tail
 
-    limit = _TOOL_RESULT_LIMITS.get(tool_name)
+    limit = _tool_result_limit(tool_name)
     if limit and len(enveloped_result) > limit:
         head_size = int(limit * 0.75)
         tail_size = limit - head_size
@@ -449,13 +442,15 @@ _ARM_REFRESH_THRESHOLD_SECONDS = 60
 
 
 def _tool_requires_arm_token(tool: Tool) -> bool:
-    """True if the tool is implemented on top of AzureToolBase and therefore
-    relies on the per-request ARM token to authenticate to Azure.
+    """True if the tool needs its bundle's per-request credential (today, the
+    Azure ARM token) to authenticate.
 
-    Pure registry/class check — we don't introspect the args; even a "read-only"
-    Resource Graph query needs a valid bearer to ARM.
+    Reads the `requires_credentials` capability attribute — reproduces the prior
+    isinstance(tool, AzureToolBase) check without core naming the Azure base
+    class (DESIGN.md §5 2026-06-05). NB AzCliTool does not set it, matching the
+    prior isinstance behaviour.
     """
-    return isinstance(tool, AzureToolBase)
+    return tool.requires_credentials
 
 
 def _current_arm_token(user: User, conversation_id: int) -> str | None:
@@ -2130,7 +2125,7 @@ async def handle_chat(
                     # would route the model around the denial), and not a
                     # success to learn from. Skip both paths entirely.
                     pass
-                elif func_name in _LEARNING_ELIGIBLE_TOOLS and is_error:
+                elif _tool_has(func_name, "learning_eligible") and is_error:
                     # Auth errors — clear cache so next attempt re-checks
                     if "az login" in tool_result or "not logged in" in tool_result.lower():
                         try:
@@ -2152,7 +2147,7 @@ async def handle_chat(
                     # learning-eligible tools (az_rest_api, az_devops, the
                     # diagram-as-code tools) have their own recovery paths — we
                     # still track their failures so a later success is learnable.
-                    if func_name in _COMMAND_TOOLS:
+                    if _tool_has(func_name, "retry_eligible"):
                         strategy = _get_retry_strategy(count, func_name, func_args, tool_result)
                         if strategy:
                             messages.append({"role": "system", "content": strategy})
@@ -2181,7 +2176,7 @@ async def handle_chat(
                             logger.warning(
                                 "All %d retries exhausted for %s", _MAX_RETRIES_PER_TOOL, func_name
                             )
-                elif func_name in _LEARNING_ELIGIBLE_TOOLS:
+                elif _tool_has(func_name, "learning_eligible"):
                     # Tool succeeded — check if there were prior failures to learn from
                     prior_failures = failure_history.get(func_name)
                     if prior_failures:
@@ -2214,7 +2209,7 @@ async def handle_chat(
                 # ignored the retrieved entries — but across many turns this
                 # provides a directional signal that promotes load-bearing
                 # entries and archives drifted ones.
-                if retrieved_learning_ids and func_name in _LEARNING_ELIGIBLE_TOOLS:
+                if retrieved_learning_ids and _tool_has(func_name, "learning_eligible"):
                     try:
                         from app.agent.learnings import mark_learning_outcome
                         mark_learning_outcome(

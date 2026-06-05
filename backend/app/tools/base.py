@@ -252,6 +252,32 @@ class Tool(ABC):
     rate_limit_calls: int | None = None
     rate_limit_window: int = 60  # seconds
 
+    # ── Capability attributes (bundle-decoupling, DESIGN.md §5 2026-06-05) ─────
+    # These let the orchestrator/loader treat every tool by declared capability
+    # instead of hardcoded name-sets, so a bundle owns the facts about its own
+    # tools. Defaults reproduce today's generic (non-Azure) behaviour; a tool
+    # opts in by overriding the relevant attribute on its subclass.
+    #
+    #   retry_eligible      — failures drive multi-strategy retry escalation
+    #                         (was orchestrator `_COMMAND_TOOLS`)
+    #   learning_eligible   — failure→success transitions yield a learning
+    #                         (was orchestrator `_LEARNING_ELIGIBLE_TOOLS`)
+    #   result_limit        — in-prompt size cap for this tool's result, or None
+    #                         (was orchestrator `_TOOL_RESULT_LIMITS`)
+    #   is_diagram_tool     — drawio-family tool: strip echoed XML on truncation
+    #                         (was orchestrator `_DRAWIO_TOOLS`)
+    #   requires_credentials— needs its bundle's per-request credential set up
+    #                         (was orchestrator `isinstance(tool, AzureToolBase)`)
+    #   config_flag         — Settings attribute name that enables/disables this
+    #                         tool, or None when always enabled (was the
+    #                         `config_mapping` table in init_tools)
+    retry_eligible: bool = False
+    learning_eligible: bool = False
+    result_limit: int | None = None
+    is_diagram_tool: bool = False
+    requires_credentials: bool = False
+    config_flag: str | None = None
+
     def to_openai_schema(self) -> dict:
         return {
             "type": "function",
@@ -312,6 +338,12 @@ def retry_with_backoff(
 
 class AzureToolBase(Tool):
     """Base class for tools that call the az CLI under the hood."""
+
+    # All az-backed tools authenticate via the per-request ARM token set by the
+    # orchestrator. Reproduces the old `isinstance(tool, AzureToolBase)` check
+    # (DESIGN.md §5 2026-06-05). NB: AzCliTool does NOT inherit this base, so —
+    # matching prior behaviour — az_cli does not set requires_credentials.
+    requires_credentials = True
     
     max_output_size = 12288  # Default 12KB token-budget friendly limit
 

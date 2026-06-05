@@ -147,6 +147,9 @@ def _shell_env() -> dict[str, str]:
 
 class ExecuteScriptTool(Tool):
     name = "execute_script"
+    retry_eligible = True       # was orchestrator _COMMAND_TOOLS
+    learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
+    result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
     description = (
         "Execute a script that already exists under output/scripts/. "
         "Requires explicit user approval before execution. "

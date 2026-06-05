@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class ReadKBFileTool(Tool):
     name = "read_kb_file"
+    result_limit = 6_000        # was orchestrator _TOOL_RESULT_LIMITS
     description = (
         "Read the full contents of a file from the knowledge base. "
         "Path must be relative to the KB root (e.g. 'kb/adrs/adr-001.md'). "
@@ -264,6 +265,7 @@ def _keyword_hit(entry) -> dict:
 
 class SearchKBHybridTool(Tool):
     name = "search_kb_hybrid"
+    result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
     description = (
         "Local hybrid semantic + keyword search over chunked KB content. "
         "Returns the most relevant chunks (not full files) with kb_path, heading, "

@@ -22,6 +22,7 @@ _SAFE_ACTIONS = {
 
 class AzDevOpsTool(AzureToolBase):
     name = "az_devops"
+    learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     description = (
         "Query Azure DevOps for projects, pipelines, builds, pull requests, and work items. "
         "Read-only queries (list/show) do not require approval. "

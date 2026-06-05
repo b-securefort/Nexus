@@ -948,6 +948,7 @@ def validate_drawio_file(path: Path) -> str:
 
 class ValidateDrawioTool(Tool):
     name = "validate_drawio"
+    is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
     description = (
         "Validate a .drawio file in output/ for layout violations: icon overlap, "
         "missing vendor icons (Azure2/AWS4), resources not parented to subnets (floating icons), "

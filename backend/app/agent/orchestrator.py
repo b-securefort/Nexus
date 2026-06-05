@@ -675,8 +675,7 @@ def _compose_system_prompt(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # --- Static content FIRST (maximizes Azure OpenAI prompt cache prefix) ---
-    parts = [
-        skill.system_prompt,
+    static_policy = (
         "\n---\n"
         "## Tool hierarchy\n"
         "Always prefer tools in this order when querying Azure resources:\n"
@@ -711,17 +710,18 @@ def _compose_system_prompt(
         "records validated learnings automatically when you succeed after a failure. Your job "
         "is to *use* the retrieved learnings: review them before executing, and if a "
         "documented approach matches the current task, apply it.\n"
-        "---",
-    ]
+        "---"
+    )
 
     # --- Dynamic content AFTER static (changes per conversation/turn) ---
-    parts.append(
+    kb_block = (
         "\n---\n"
         "Knowledge base index (use read_kb_file or search_kb to retrieve full content):\n"
         f"{kb_summary}\n"
         "---"
     )
 
+    learnings_block = ""
     if retrieved:
         bullets = []
         for r in retrieved:
@@ -730,7 +730,7 @@ def _compose_system_prompt(
                 f"- {status_marker} [{r.category}] ({r.tool_name}) {r.summary}\n"
                 f"    {r.details[:400]}"
             )
-        parts.append(
+        learnings_block = (
             "\n---\n"
             "**Relevant agent learnings** (retrieved by similarity to the current request — "
             "treat CANONICAL as confirmed across multiple runs; PROVISIONAL is a single "
@@ -742,12 +742,13 @@ def _compose_system_prompt(
             "promote provisional entries to canonical; repeated failures auto-archive them."
         )
 
-    parts.append(
+    context_block = (
         f"\nCurrent user: {user.display_name} ({user.email})\n"
         f"Current date: {now}\n\n"
         f"{az_context}"
     )
 
+    task_block = ""
     if original_task.strip():
         # Pin the user's first message so it can't be summarized away. The
         # truncation cap protects against pathological pastes; long tasks
@@ -755,7 +756,7 @@ def _compose_system_prompt(
         task = original_task.strip()
         if len(task) > 2000:
             task = task[:2000] + " …[truncated]"
-        parts.append(
+        task_block = (
             "\n---\n"
             "[Original task from user — always stay focused on this. Tool "
             "results and intermediate messages are scaffolding, not the goal]:\n"
@@ -763,7 +764,29 @@ def _compose_system_prompt(
             "---"
         )
 
-    return "\n".join(parts), retrieved_ids
+    # Joined prompt: order is load-bearing (static prefix first for prompt-cache
+    # hit rate, dynamic content after). Do not reorder.
+    parts = [skill.system_prompt, static_policy, kb_block]
+    if learnings_block:
+        parts.append(learnings_block)
+    parts.append(context_block)
+    if task_block:
+        parts.append(task_block)
+
+    # Structural segments for the context-usage gauge. Skill body, framework
+    # policy, user/date/Azure context, and the pinned task are all "System
+    # prompt"; KB index and retrieved learnings are surfaced separately because
+    # they're the variable, content-driven parts a user can act on.
+    segments: dict[str, str] = {
+        "System prompt": "\n".join(
+            p for p in (skill.system_prompt, static_policy, context_block, task_block) if p
+        ),
+        "Knowledge base": kb_block,
+    }
+    if learnings_block:
+        segments["Learnings"] = learnings_block
+
+    return "\n".join(parts), retrieved_ids, segments
 
 
 def _build_render_review_message(args: dict) -> dict | None:
@@ -1460,7 +1483,7 @@ async def handle_chat(
         session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
     )
     original_task = get_original_task(session, conversation.id)
-    system_prompt, retrieved_learning_ids = _compose_system_prompt(
+    system_prompt, retrieved_learning_ids, prompt_segments = _compose_system_prompt(
         skill, user,
         original_task=original_task,
         current_user_message=user_message,
@@ -1512,6 +1535,14 @@ async def handle_chat(
     # loop can't be tricked into infinite continuation by a model that keeps
     # narrating without acting.
     narration_nudges_used: int = 0
+
+    # Context-usage gauge payload. Captured on the FIRST LLM call of the turn so
+    # it reflects RESTING occupancy (the context entering the turn, before this
+    # turn's tool outputs balloon `messages`). Compaction bounds resting
+    # occupancy, so this is stable turn-to-turn; sampling the last, tool-laden
+    # call would report transient peak that compaction discards next turn. See
+    # DESIGN.md §5 2026-06-05.
+    resting_usage: dict | None = None
 
     # A4 — Mark this conversation as held by this worker. Refreshed at the
     # top of each iteration AND opportunistically during long approval waits.
@@ -1633,9 +1664,9 @@ async def handle_chat(
             finally:
                 await stream_thread
 
-            # Capture token usage and cache stats for both logging and the
-            # `done` SSE payload (frontend context-window indicator).
-            usage_payload: dict | None = None
+            # Capture token usage and cache stats. Logged every iteration (per-call
+            # visibility); the gauge payload is built only ONCE, on the first call
+            # of the turn, to report resting occupancy (see resting_usage above).
             if stream_usage:
                 prompt_tokens = stream_usage.prompt_tokens or 0
                 completion_tokens = stream_usage.completion_tokens or 0
@@ -1648,13 +1679,32 @@ async def handle_chat(
                     prompt_tokens, cached, cache_pct, completion_tokens,
                     prompt_tokens + completion_tokens,
                 )
-                usage_payload = {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "cached_tokens": cached,
-                    "context_window": settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
-                    "model": settings.AZURE_OPENAI_DEPLOYMENT,
-                }
+                if resting_usage is None:
+                    # Structural, input-side occupancy breakdown for the gauge.
+                    # tiktoken-counts each prompt segment and scales them to sum
+                    # to the authoritative API prompt_tokens. On this first
+                    # iteration `messages` is exactly the resting context that
+                    # was sent — this turn's assistant reply and tool outputs
+                    # have not been appended yet.
+                    from app.agent.token_usage import build_segments, context_window_for_model
+                    segments = build_segments(
+                        system_segments=prompt_segments,
+                        tool_schemas=tool_schemas,
+                        messages=messages,
+                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                        prompt_tokens=prompt_tokens,
+                    )
+                    resting_usage = {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cached_tokens": cached,
+                        "context_window": context_window_for_model(
+                            settings.AZURE_OPENAI_DEPLOYMENT,
+                            settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
+                        ),
+                        "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                        "segments": segments,
+                    }
 
             # Build tool_calls list
             tool_calls = [tool_calls_accumulator[i] for i in sorted(tool_calls_accumulator.keys())]
@@ -1711,7 +1761,7 @@ async def handle_chat(
                         (assistant_content or "")[-120:],
                     )
                     continue
-                yield sse_done(conversation.id, usage=usage_payload)
+                yield sse_done(conversation.id, usage=resting_usage)
                 # Schedule deferred compaction work (LLM summarisation of cache
                 # misses encountered when loading history this turn).  These run
                 # after the response is delivered so they don't block the user.

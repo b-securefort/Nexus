@@ -19,17 +19,43 @@ interface Category {
   swatchClass: string;
 }
 
+// Palette for the structural segment categories, assigned by order. Free space
+// is always the trailing grey.
+const SEGMENT_COLORS: { color: string; swatchClass: string }[] = [
+  { color: "#a78bfa", swatchClass: "bg-violet-400" }, // System prompt
+  { color: "#60a5fa", swatchClass: "bg-blue-400" }, // Knowledge base
+  { color: "#34d399", swatchClass: "bg-emerald-400" }, // Learnings
+  { color: "#fbbf24", swatchClass: "bg-amber-400" }, // Tools
+  { color: "#f472b6", swatchClass: "bg-pink-400" }, // Messages
+];
+const FREE_SPACE: { color: string; swatchClass: string } = {
+  color: "#3f3f46",
+  swatchClass: "bg-base-700",
+};
+
+// This is a context-window *occupancy* gauge: it shows how full the model's
+// window is right now (prompt_tokens), broken down by what's filling it. Output
+// (completion) tokens are deliberately excluded — they are not occupancy.
 function buildCategories(usage: ContextUsage): Category[] {
+  const free = Math.max(usage.context_window - usage.prompt_tokens, 0);
+
+  if (usage.segments && usage.segments.length > 0) {
+    const cats: Category[] = usage.segments.map((seg, i) => ({
+      label: seg.label,
+      tokens: seg.tokens,
+      ...SEGMENT_COLORS[i % SEGMENT_COLORS.length],
+    }));
+    cats.push({ label: "Free space", tokens: free, ...FREE_SPACE });
+    return cats;
+  }
+
+  // Legacy payload without a segment breakdown: fall back to the cache split,
+  // but still keep completion out of the occupancy view.
   const fresh = Math.max(usage.prompt_tokens - usage.cached_tokens, 0);
-  const free = Math.max(
-    usage.context_window - usage.prompt_tokens - usage.completion_tokens,
-    0
-  );
   return [
     { label: "Cached prompt", tokens: usage.cached_tokens, color: "#60a5fa", swatchClass: "bg-blue-400" },
     { label: "Fresh prompt", tokens: fresh, color: "#a78bfa", swatchClass: "bg-violet-400" },
-    { label: "Completion", tokens: usage.completion_tokens, color: "#f87171", swatchClass: "bg-red-400" },
-    { label: "Free space", tokens: free, color: "#3f3f46", swatchClass: "bg-base-700" },
+    { label: "Free space", tokens: free, ...FREE_SPACE },
   ];
 }
 
@@ -63,7 +89,9 @@ export function ContextUsageIndicator({ usage }: Props) {
     );
   }
 
-  const used = usage.prompt_tokens + usage.completion_tokens;
+  // Occupancy = how full the window is right now = the prompt we sent. The
+  // model's output (completion) is not part of the window's occupancy.
+  const used = usage.prompt_tokens;
   const pct = usage.context_window > 0 ? (used / usage.context_window) * 100 : 0;
   const pctRounded = Math.round(pct);
 
@@ -136,8 +164,12 @@ export function ContextUsageIndicator({ usage }: Props) {
             </button>
           </div>
 
-          <p className="text-xs text-base-300 mb-2">
+          <p className="text-xs text-base-300 mb-1">
             {formatTokens(used)} / {formatTokens(usage.context_window)} tokens ({pctRounded}%)
+          </p>
+          <p className="text-[11px] text-base-500 mb-2">
+            Live window occupancy — how full the context is right now. Drops when
+            older messages are compacted; not a running total of tokens spent.
           </p>
 
           {/* Segmented bar */}

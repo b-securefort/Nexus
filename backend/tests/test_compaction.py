@@ -113,7 +113,7 @@ def test_system_prompt_includes_original_task_block():
         system_prompt="BASE", tools=[], source="shared",
     )
     user = User(oid="o", email="e@x", display_name="Dev")
-    prompt, _ = _compose_system_prompt(skill, user, original_task="deploy aks cluster")
+    prompt, _, _ = _compose_system_prompt(skill, user, original_task="deploy aks cluster")
     assert "[Original task from user" in prompt
     assert "deploy aks cluster" in prompt
 
@@ -124,7 +124,7 @@ def test_system_prompt_omits_block_when_no_original_task():
         system_prompt="BASE", tools=[], source="shared",
     )
     user = User(oid="o", email="e@x", display_name="Dev")
-    prompt, _ = _compose_system_prompt(skill, user, original_task="")
+    prompt, _, _ = _compose_system_prompt(skill, user, original_task="")
     assert "[Original task from user" not in prompt
 
 
@@ -135,7 +135,7 @@ def test_system_prompt_truncates_huge_original_task():
     )
     user = User(oid="o", email="e@x", display_name="Dev")
     huge = "x" * 5000
-    prompt, _ = _compose_system_prompt(skill, user, original_task=huge)
+    prompt, _, _ = _compose_system_prompt(skill, user, original_task=huge)
     assert "…[truncated]" in prompt
     pin_section = prompt.split("[Original task from user")[1]
     assert pin_section.count("x") <= 2000

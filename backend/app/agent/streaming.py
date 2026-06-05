@@ -93,13 +93,17 @@ def sse_done(conversation_id: int, usage: dict | None = None) -> str:
     """End-of-turn event.
 
     `usage` (optional) carries the last LLM call's token accounting so the
-    frontend can render a context-window indicator. Shape:
+    frontend can render a context-window *occupancy* indicator (how full the
+    window is now — not cumulative spend). Shape:
         {
-          "prompt_tokens": int,
-          "completion_tokens": int,
+          "prompt_tokens": int,        # authoritative window occupancy (headline)
+          "completion_tokens": int,    # output — NOT counted in the gauge headline
           "cached_tokens": int,        # subset of prompt_tokens
-          "context_window": int,       # model's total window
+          "context_window": int,       # model-derived total window
           "model": str,                # deployment name
+          "segments": [                # input-side breakdown, sums to prompt_tokens
+            {"label": str, "tokens": int}, ...
+          ],
         }
     Omitted by the resume endpoint (no fresh LLM call happened).
     """

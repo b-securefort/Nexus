@@ -94,8 +94,12 @@ class TestSystemPromptComposition:
         )
         user = User(oid="u1", email="test@test.com", display_name="Test User")
 
-        prompt, retrieved_ids = _compose_system_prompt(skill, user)
+        prompt, retrieved_ids, segments = _compose_system_prompt(skill, user)
         assert "You are a test assistant." in prompt
         assert "Test User" in prompt
         assert "test@test.com" in prompt
         assert isinstance(retrieved_ids, list)
+        # Structural segments back the context-usage gauge.
+        assert "System prompt" in segments
+        assert "Knowledge base" in segments
+        assert "You are a test assistant." in segments["System prompt"]

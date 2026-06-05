@@ -87,12 +87,20 @@ export interface QuestionAnswerEntry {
   notes?: string;
 }
 
+export interface ContextUsageSegment {
+  label: string;
+  tokens: number;
+}
+
 export interface ContextUsage {
   prompt_tokens: number;
   completion_tokens: number;
   cached_tokens: number;
   context_window: number;
   model: string;
+  // Input-side occupancy breakdown (System prompt / Knowledge base / Learnings /
+  // Tools / Messages), scaled to sum to prompt_tokens. Absent on older payloads.
+  segments?: ContextUsageSegment[];
 }
 
 // SSE event types

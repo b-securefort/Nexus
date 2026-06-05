@@ -22,6 +22,7 @@ _SAFE_ACTIONS = {
 
 class AzDevOpsTool(AzureToolBase):
     name = "az_devops"
+    config_flag = "TOOL_AZ_DEVOPS_ENABLED"
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     description = (
         "Query Azure DevOps for projects, pipelines, builds, pull requests, and work items. "

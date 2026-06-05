@@ -948,6 +948,7 @@ def validate_drawio_file(path: Path) -> str:
 
 class ValidateDrawioTool(Tool):
     name = "validate_drawio"
+    config_flag = "TOOL_VALIDATE_DRAWIO_ENABLED"
     is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
     description = (
         "Validate a .drawio file in output/ for layout violations: icon overlap, "

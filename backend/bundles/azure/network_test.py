@@ -18,6 +18,7 @@ _ALLOWED_PORTS = set(range(1, 65536))
 
 class NetworkTestTool(AzureToolBase):
     name = "network_test"
+    config_flag = "TOOL_NETWORK_TEST_ENABLED"
     description = (
         "Test network connectivity: DNS resolution, TCP port checks, "
         "and Azure NSG rule queries. Read-only — no approval needed. "

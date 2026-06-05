@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class AzResourceGraphTool(AzureToolBase):
     name = "az_resource_graph"
+    config_flag = "TOOL_AZ_CLI_ENABLED"   # shares the az_cli toggle
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS

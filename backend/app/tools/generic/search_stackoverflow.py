@@ -18,6 +18,10 @@ _API_BASE = "https://api.stackexchange.com/2.3"
 
 class SearchStackOverflowTool(Tool):
     name = "search_stack_overflow"
+    # FIX (DESIGN.md §5 2026-06-05): the old init_tools config_mapping keyed this
+    # under "search_stackoverflow" — not the registered name "search_stack_overflow"
+    # — so TOOL_SEARCH_STACKOVERFLOW_ENABLED was a dead flag (tool always on).
+    config_flag = "TOOL_SEARCH_STACKOVERFLOW_ENABLED"
     description = (
         "Search Stack Overflow for technical questions and answers. "
         "Returns score, accepted-answer status, and answer count — "

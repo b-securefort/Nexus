@@ -195,6 +195,7 @@ def render_drawio_to_disk(
 
 class RenderDrawioTool(Tool):
     name = "render_drawio"
+    config_flag = "TOOL_RENDER_DRAWIO_ENABLED"
     is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
     description = (
         "Render a .drawio file in output/ to an image (PNG by default) so you can "

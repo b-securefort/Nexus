@@ -18,6 +18,7 @@ _API_BASE = "https://api.github.com"
 
 class SearchGithubTool(Tool):
     name = "search_github"
+    config_flag = "TOOL_SEARCH_GITHUB_ENABLED"
     description = (
         "Search GitHub for repositories and code. "
         "Useful for finding IaC templates (Bicep, Terraform, ARM), Azure SDK samples, "

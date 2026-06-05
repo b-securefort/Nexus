@@ -63,6 +63,52 @@ def test_is_diagram_tool_tools():
     }
 
 
+def test_config_flag_matrix():
+    # Each tool declares the Settings attribute that toggles it (was the
+    # init_tools `config_mapping` table). Pins the mapping, including the two
+    # fixes for the previously-dead `ms_docs` / `search_stackoverflow` keys.
+    derived = {
+        name: tool.config_flag
+        for name, tool in TOOL_REGISTRY.items()
+        if tool.config_flag is not None
+    }
+    assert derived == {
+        "search_kb_semantic": "TOOL_SEARCH_SEMANTIC_ENABLED",
+        "fetch_ms_docs": "TOOL_MS_DOCS_ENABLED",
+        "execute_script": "TOOL_SHELL_ENABLED",
+        "az_cli": "TOOL_AZ_CLI_ENABLED",
+        "az_resource_graph": "TOOL_AZ_CLI_ENABLED",
+        "az_cost_query": "TOOL_AZ_COST_ENABLED",
+        "az_monitor_logs": "TOOL_AZ_MONITOR_ENABLED",
+        "az_rest_api": "TOOL_AZ_REST_ENABLED",
+        "generate_file": "TOOL_GENERATE_FILE_ENABLED",
+        "validate_drawio": "TOOL_VALIDATE_DRAWIO_ENABLED",
+        "render_drawio": "TOOL_RENDER_DRAWIO_ENABLED",
+        "generate_python_diagram": "TOOL_PYTHON_DIAGRAM_ENABLED",
+        "generate_drawio_from_python": "TOOL_DRAWIO_FROM_PYTHON_ENABLED",
+        "az_devops": "TOOL_AZ_DEVOPS_ENABLED",
+        "az_policy_check": "TOOL_AZ_POLICY_ENABLED",
+        "az_advisor": "TOOL_AZ_ADVISOR_ENABLED",
+        "network_test": "TOOL_NETWORK_TEST_ENABLED",
+        "web_fetch": "TOOL_WEB_FETCH_ENABLED",
+        "search_stack_overflow": "TOOL_SEARCH_STACKOVERFLOW_ENABLED",
+        "search_github": "TOOL_SEARCH_GITHUB_ENABLED",
+        "search_azure_updates": "TOOL_SEARCH_AZURE_UPDATES_ENABLED",
+        "web_search": "TOOL_WEB_SEARCH_ENABLED",
+    }
+
+
+def test_every_config_flag_is_a_real_setting():
+    # Guards against the dead-key class of bug (a config_flag naming a Settings
+    # attribute that doesn't exist would silently fail-open to enabled).
+    from app.config import get_settings
+
+    settings = get_settings()
+    for name, tool in TOOL_REGISTRY.items():
+        if tool.config_flag is not None:
+            assert hasattr(settings, tool.config_flag), f"{name}: {tool.config_flag}"
+
+
 def test_requires_credentials_matches_azuretoolbase_isinstance():
     # Reproduces the orchestrator's old `isinstance(tool, AzureToolBase)` check.
     # NB AzCliTool does NOT inherit AzureToolBase, so az_cli is intentionally

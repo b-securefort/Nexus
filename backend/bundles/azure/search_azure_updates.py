@@ -65,6 +65,7 @@ _STOPWORDS = {
 
 class SearchAzureUpdatesTool(Tool):
     name = "search_azure_updates"
+    config_flag = "TOOL_SEARCH_AZURE_UPDATES_ENABLED"
     rate_limit_calls = 5
     description = (
         "Search the official Azure Updates API (azure.microsoft.com/en-us/updates) "

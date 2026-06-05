@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class AzMonitorLogsTool(AzureToolBase):
     name = "az_monitor_logs"
+    config_flag = "TOOL_AZ_MONITOR_ENABLED"
     max_output_size = 16384
     description = (
         "Query Azure Monitor Log Analytics workspaces using KQL (Kusto Query Language). "

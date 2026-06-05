@@ -38,6 +38,7 @@ _CUSTOM_DAYS = {
 
 class AzCostQueryTool(AzureToolBase):
     name = "az_cost_query"
+    config_flag = "TOOL_AZ_COST_ENABLED"
     max_output_size = 16384
     rate_limit_calls = 8
     description = (

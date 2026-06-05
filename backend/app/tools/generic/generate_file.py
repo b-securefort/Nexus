@@ -40,6 +40,7 @@ _DANGEROUS_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
 
 class GenerateFileTool(Tool):
     name = "generate_file"
+    config_flag = "TOOL_GENERATE_FILE_ENABLED"
     is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
     description = (
         "Write generated content (Bicep, Terraform, scripts, configs, docs) to the "

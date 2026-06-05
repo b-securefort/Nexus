@@ -100,6 +100,7 @@ def _is_private_or_internal_host(hostname: str) -> bool:
 
 class WebFetchTool(Tool):
     name = "web_fetch"
+    config_flag = "TOOL_WEB_FETCH_ENABLED"
     rate_limit_calls = 15
     description = (
         "Fetch and extract text content from a web page URL. "

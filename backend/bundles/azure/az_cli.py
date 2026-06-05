@@ -57,6 +57,7 @@ def _is_blocked(az_args: list[str]) -> str | None:
 
 class AzCliTool(Tool):
     name = "az_cli"
+    config_flag = "TOOL_AZ_CLI_ENABLED"
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS

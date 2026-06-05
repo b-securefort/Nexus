@@ -41,6 +41,10 @@ def _is_landing_page(url: str) -> bool:
 
 class FetchMsDocsTool(Tool):
     name = "fetch_ms_docs"
+    # FIX (DESIGN.md §5 2026-06-05): the old init_tools config_mapping keyed this
+    # under "ms_docs" — not the registered name — so TOOL_MS_DOCS_ENABLED was a
+    # dead flag (tool always on). Wiring it to the real name makes the flag work.
+    config_flag = "TOOL_MS_DOCS_ENABLED"
     description = (
         "Search Microsoft Learn documentation. Returns top 5 results with title, URL, and description. "
         "Article-level results are ranked above landing/hub pages. "

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 class AzAdvisorTool(AzureToolBase):
     name = "az_advisor"
+    config_flag = "TOOL_AZ_ADVISOR_ENABLED"
     description = (
         "Retrieve Azure Advisor recommendations for cost, security, reliability, "
         "performance, and operational excellence. Read-only — no approval needed."

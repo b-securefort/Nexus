@@ -88,6 +88,7 @@ class SearchKBTool(Tool):
 
 class SearchKBSemanticTool(Tool):
     name = "search_kb_semantic"
+    config_flag = "TOOL_SEARCH_SEMANTIC_ENABLED"
     description = (
         "Cloud path: LLM-powered semantic search of the knowledge base (older approach). "
         "Expands acronyms and synonyms via Azure OpenAI, then re-ranks file-level results. "

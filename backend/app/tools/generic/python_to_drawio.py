@@ -201,6 +201,7 @@ class _DiagramKwargInjector(ast.NodeTransformer):
 
 class GenerateDrawioFromPythonTool(Tool):
     name = "generate_drawio_from_python"
+    config_flag = "TOOL_DRAWIO_FROM_PYTHON_ENABLED"
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     description = (
         "Generate an editable `.drawio` architecture diagram by describing it "

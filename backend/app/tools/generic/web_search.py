@@ -32,6 +32,7 @@ SITE_SHORTCUTS: dict[str, str] = {
 
 class WebSearchTool(Tool):
     name = "web_search"
+    config_flag = "TOOL_WEB_SEARCH_ENABLED"
     description = (
         "General web search via DuckDuckGo. Use this to search Reddit, Microsoft Tech Community, "
         "Azure blogs, or any site not covered by the other search tools. "

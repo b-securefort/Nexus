@@ -560,35 +560,15 @@ def init_tools() -> None:
                 except Exception as e:
                     logger.error("Failed to load azure tool %s: %s", module_name, e)
 
-    # 2. Apply config flags to enable/disable tools
-    config_mapping = {
-        "search_kb_semantic": settings.TOOL_SEARCH_SEMANTIC_ENABLED,
-        "ms_docs": settings.TOOL_MS_DOCS_ENABLED,
-        "execute_script": settings.TOOL_SHELL_ENABLED,
-        "az_cli": settings.TOOL_AZ_CLI_ENABLED,
-        "az_resource_graph": settings.TOOL_AZ_CLI_ENABLED,  # shares az_cli config
-        "az_cost_query": settings.TOOL_AZ_COST_ENABLED,
-        "az_monitor_logs": settings.TOOL_AZ_MONITOR_ENABLED,
-        "az_rest_api": settings.TOOL_AZ_REST_ENABLED,
-        "generate_file": settings.TOOL_GENERATE_FILE_ENABLED,
-        "validate_drawio": settings.TOOL_VALIDATE_DRAWIO_ENABLED,
-        "render_drawio": settings.TOOL_RENDER_DRAWIO_ENABLED,
-        "generate_python_diagram": settings.TOOL_PYTHON_DIAGRAM_ENABLED,
-        "generate_drawio_from_python": settings.TOOL_DRAWIO_FROM_PYTHON_ENABLED,
-        "az_devops": settings.TOOL_AZ_DEVOPS_ENABLED,
-        "az_policy_check": settings.TOOL_AZ_POLICY_ENABLED,
-        "az_advisor": settings.TOOL_AZ_ADVISOR_ENABLED,
-        "network_test": settings.TOOL_NETWORK_TEST_ENABLED,
-        "web_fetch": settings.TOOL_WEB_FETCH_ENABLED,
-        "search_stackoverflow": settings.TOOL_SEARCH_STACKOVERFLOW_ENABLED,
-        "search_github": settings.TOOL_SEARCH_GITHUB_ENABLED,
-        "search_azure_updates": settings.TOOL_SEARCH_AZURE_UPDATES_ENABLED,
-        "web_search": settings.TOOL_WEB_SEARCH_ENABLED,
-    }
-
-    for name, tool in TOOL_REGISTRY.items():
-        if name in config_mapping:
-            tool.enabled_by_config = config_mapping[name]
+    # 2. Apply per-tool config flags. Each tool declares the Settings attribute
+    #    that enables/disables it via its `config_flag` attribute (DESIGN.md §5
+    #    2026-06-05) — core no longer enumerates tool names in a central table,
+    #    so a bundle owns its own toggles. Tools with config_flag=None are
+    #    always enabled. Missing settings default to True (fail-open, matching
+    #    the prior behaviour for unmapped tools).
+    for tool in TOOL_REGISTRY.values():
+        if tool.config_flag:
+            tool.enabled_by_config = bool(getattr(settings, tool.config_flag, True))
 
     logger.info(
         "Initialized %d tools (%d enabled)",

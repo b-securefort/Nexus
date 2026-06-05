@@ -30,6 +30,7 @@ _MAX_BODY_BYTES = 1_048_576
 
 class AzRestApiTool(AzureToolBase):
     name = "az_rest_api"
+    config_flag = "TOOL_AZ_REST_ENABLED"
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     rate_limit_calls = 10
     description = (

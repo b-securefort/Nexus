@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 class AzPolicyCheckTool(AzureToolBase):
     name = "az_policy_check"
+    config_flag = "TOOL_AZ_POLICY_ENABLED"
     description = (
         "Check Azure Policy compliance status. Read-only — no approval needed. "
         "List non-compliant resources, policy assignments, and compliance summaries."

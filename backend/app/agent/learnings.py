@@ -41,6 +41,7 @@ from app.agent.learn_judge import (
     JudgeVerdict,
     judge_proposed_learning,
     rephrase_learning,
+    synthesize_learning,
 )
 from app.config import get_settings
 from app.db.engine import get_engine
@@ -154,6 +155,7 @@ def record_validated_learning(
     details: str,
     prior_failures_summary: str,
     originating_conversation_id: Optional[int] = None,
+    source: str = "failure_success",
     skip_judge: bool = False,
     skip_rephrase: bool = False,
 ) -> Optional[AgentLearning]:
@@ -252,6 +254,7 @@ def record_validated_learning(
                     summary=canonical_summary,
                     details=details,
                     status="rejected",
+                    source=source,
                     originating_conversation_id=originating_conversation_id,
                     judge_verdict_json=json.dumps({
                         "approve": verdict.approve,
@@ -276,6 +279,7 @@ def record_validated_learning(
         summary=canonical_summary,
         details=details,
         status="provisional",  # promoted to "active" after re-validation
+        source=source,
         originating_conversation_id=originating_conversation_id,
         judge_verdict_json=(
             json.dumps({
@@ -312,13 +316,23 @@ def derive_learning_from_success(
     tool_name: str,
     final_successful_args: dict,
     prior_failures: list[tuple[dict, str]],
-) -> dict:
+) -> Optional[dict]:
     """Build a structured summary + details + category from the orchestrator's
     tracked failure → success transition.
 
-    Returns kwargs compatible with `record_validated_learning`. This is the
-    *content derivation* step — judge + storage gates are still applied
-    downstream by `record_validated_learning`.
+    Returns kwargs compatible with `record_validated_learning`, or **None** when
+    there is no generalizable lesson to record (the synthesizer returned NONE —
+    e.g. the failing and working calls differ only in the concrete resource
+    targeted). The judge + storage gates are still applied downstream by
+    `record_validated_learning`.
+
+    The summary is produced by `synthesize_learning` (an LLM reading the full
+    redacted args), which replaced a mechanical `fail[:80] → success[:80]`
+    arg-diff. That prefix-diff collapsed to "switch from X to X" whenever the
+    distinguishing change sat past the truncation window (REST URLs, KQL
+    queries) — the exact failure mode that got real az_rest_api /
+    az_resource_graph learnings rejected by the judge. `details` keeps the raw
+    redacted facts as the audit trail. See DESIGN.md §5 2026-06-05.
     """
     # Pick the most recent failure as the canonical "what was wrong".
     # Redact environment-specific tokens (subscription/resource IDs, names)
@@ -326,9 +340,12 @@ def derive_learning_from_success(
     # remainder past the redactor. The generalizable lesson is in the *shape* of
     # the args (which flag/syntax changed), not the concrete resource targeted.
     last_failure_args, last_failure_msg = prior_failures[-1] if prior_failures else ({}, "")
-    fail_arg_repr = _redact_environment_specific(json.dumps(last_failure_args, ensure_ascii=False))[:300]
-    success_arg_repr = _redact_environment_specific(json.dumps(final_successful_args, ensure_ascii=False))[:300]
-    fail_msg_short = _redact_environment_specific((last_failure_msg or "").replace("\n", " ").strip())[:400]
+    fail_redacted = _redact_environment_specific(json.dumps(last_failure_args, ensure_ascii=False))
+    success_redacted = _redact_environment_specific(json.dumps(final_successful_args, ensure_ascii=False))
+    fail_msg_redacted = _redact_environment_specific((last_failure_msg or "").replace("\n", " ").strip())
+    fail_arg_repr = fail_redacted[:300]
+    success_arg_repr = success_redacted[:300]
+    fail_msg_short = fail_msg_redacted[:400]
 
     # Heuristic categorisation: syntax errors → syntax-fix; auth/permission →
     # known-issue; otherwise workaround.
@@ -346,10 +363,26 @@ def derive_learning_from_success(
     else:
         category = "workaround"
 
-    summary = (
+    # Mechanical arg-diff summary — used as the fallback when synthesis errors.
+    mechanical_summary = (
         f"For `{tool_name}`, the failure pattern '{fail_arg_repr[:80]}' "
         f"is resolved by switching to '{success_arg_repr[:80]}'"
     )
+
+    synthesized = synthesize_learning(
+        tool_name=tool_name,
+        failing_args=fail_redacted,
+        error_message=fail_msg_redacted,
+        working_args=success_redacted,
+    )
+    if synthesized.strip().upper() == "NONE":
+        # No transferable difference — don't manufacture a junk learning (and
+        # don't spend a judge call rejecting it). This is the "switch from X to
+        # X" class that previously produced rejected audit rows.
+        logger.info("Synthesis found no generalizable lesson for %s; skipping write", tool_name)
+        return None
+    summary = synthesized or mechanical_summary  # "" → transient error → fall back
+
     details = (
         f"Tool: {tool_name}\n"
         f"Last failing args: {fail_arg_repr}\n"
@@ -568,6 +601,15 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
     Heuristic, not precise — the agent may have ignored the retrieved
     learning. But across many turns it provides a directional signal that
     distinguishes load-bearing entries from drifted ones.
+
+    Scope: this path applies ONLY to `source='failure_success'` learnings.
+    `user_correction` learnings are assertion-grounded — a command running
+    successfully does not validate the *correctness* of a user's advice, and a
+    command erroring does not disprove it. Letting tool outcome promote them
+    would canonize wrong advice that merely didn't break execution; letting it
+    archive them would drop good advice on an unrelated failure. Their lifecycle
+    is driven by contradiction (archive) and, later, survival (promote) instead.
+    See DESIGN.md §5 2026-06-05.
     """
     if not learning_ids:
         return
@@ -583,7 +625,8 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"UPDATE agent_learnings "
                     f"SET validation_count = validation_count + 1, "
                     f"    last_validated_at = :ts "
-                    f"WHERE id IN ({placeholders})"
+                    f"WHERE id IN ({placeholders}) "
+                    f"  AND source = 'failure_success'"
                 ),
                 {"ts": now, **id_params},
             )
@@ -592,6 +635,7 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                 text(
                     f"UPDATE agent_learnings SET status = 'active' "
                     f"WHERE id IN ({placeholders}) "
+                    f"  AND source = 'failure_success' "
                     f"  AND status = 'provisional' "
                     f"  AND validation_count >= :thr"
                 ),
@@ -602,7 +646,8 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                 text(
                     f"UPDATE agent_learnings "
                     f"SET failure_count = failure_count + 1 "
-                    f"WHERE id IN ({placeholders})"
+                    f"WHERE id IN ({placeholders}) "
+                    f"  AND source = 'failure_success'"
                 ),
                 id_params,
             )
@@ -612,12 +657,148 @@ def mark_learning_outcome(learning_ids: list[int], succeeded: bool) -> None:
                     f"UPDATE agent_learnings "
                     f"SET status = 'archived', archived_at = :ts "
                     f"WHERE id IN ({placeholders}) "
+                    f"  AND source = 'failure_success' "
                     f"  AND failure_count >= :thr "
                     f"  AND failure_count > validation_count"
                 ),
                 {"ts": now, "thr": ARCHIVE_FAILURE_THRESHOLD, **id_params},
             )
         conn.commit()
+
+
+# ── User-correction learnings: capture entry point + contradiction archive ──
+
+# Distance below which two user-correction learnings are "about the same thing"
+# and worth a contradiction check. vec0 returns the configured metric's
+# distance; tuned conservatively so only close neighbours are ever compared,
+# keeping this to at most a handful of LLM calls (usually zero).
+_CONTRADICTION_DISTANCE_MAX = 0.6
+_CONTRADICTION_MAX_CANDIDATES = 3
+
+
+def record_user_correction_learning(
+    *,
+    session: Session,
+    tool_name: str,
+    category: str,
+    summary: str,
+    details: str,
+    prior_failures_summary: str,
+    originating_conversation_id: Optional[int] = None,
+) -> Optional[AgentLearning]:
+    """Write a user-taught learning, then supersede any prior learning it
+    contradicts.
+
+    Thin wrapper over `record_validated_learning(source="user_correction")` —
+    it inherits the full defense stack (rephrase → override regex → name guard →
+    suppression judge) and lands `provisional`. After a successful write, a
+    *newer* user correction archives an older one it contradicts: for
+    assertion-grounded learnings the arbiter is the user, so a later
+    contradicting statement is the correct supersession signal (the analogue of
+    reality arbitrating failure→success learnings). See DESIGN.md §5 2026-06-05.
+    """
+    learning = record_validated_learning(
+        session=session,
+        tool_name=tool_name,
+        category=category,
+        summary=summary,
+        details=details,
+        prior_failures_summary=prior_failures_summary,
+        originating_conversation_id=originating_conversation_id,
+        source="user_correction",
+    )
+    if learning is None:
+        return None
+    try:
+        archived = archive_contradicted_user_corrections(session=session, new_learning=learning)
+        if archived:
+            logger.info(
+                "User-correction %s superseded %d prior contradicting learning(s)",
+                learning.id, archived,
+            )
+    except Exception:
+        logger.exception("Contradiction-archive failed for user-correction %s", learning.id)
+    return learning
+
+
+def _find_near_user_correction_ids(new_learning_id: int, summary: str) -> list[int]:
+    """Return ids of the closest existing learnings to `summary` (excluding
+    `new_learning_id`), via the same vec0 index retrieval uses. Best-effort:
+    returns [] if embedding or the vec table is unavailable. Split out so the
+    archive decision path is unit-testable without a vec0 table."""
+    try:
+        qvec = embed_query(summary)
+    except Exception as e:
+        logger.warning("Contradiction-archive: embed_query failed (%s); skipping", e)
+        return []
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            vrows = conn.execute(
+                text(
+                    "SELECT rowid, distance FROM agent_learnings_vec "
+                    "WHERE embedding MATCH :v ORDER BY distance LIMIT :k"
+                ),
+                {"v": _serialise_vec(qvec), "k": 10},
+            ).fetchall()
+    except Exception as e:
+        logger.warning("Contradiction-archive: vec search failed (%s); skipping", e)
+        return []
+    return [
+        int(r[0]) for r in vrows
+        if int(r[0]) != new_learning_id and float(r[1]) <= _CONTRADICTION_DISTANCE_MAX
+    ][:_CONTRADICTION_MAX_CANDIDATES]
+
+
+def archive_contradicted_user_corrections(
+    *,
+    session: Session,
+    new_learning: AgentLearning,
+) -> int:
+    """Archive existing `user_correction` learnings that the new one contradicts.
+
+    Finds near-neighbours of the new learning in `agent_learnings_vec`, restricts
+    to live user-correction rows, and runs an LLM supersession check on the
+    closest few. Each confirmed contradiction is archived (newer wins). Returns
+    the number archived. Best-effort: any failure leaves existing rows untouched.
+    """
+    from app.agent.learn_capture import detect_supersession
+
+    near_ids = _find_near_user_correction_ids(new_learning.id, new_learning.summary)
+    if not near_ids:
+        return 0
+
+    engine = get_engine()
+    with engine.connect() as conn:
+        id_params = {f"id{i}": v for i, v in enumerate(near_ids)}
+        placeholders = ",".join(f":id{i}" for i in range(len(near_ids)))
+        rows = conn.execute(
+            text(
+                f"SELECT id, summary, details FROM agent_learnings "
+                f"WHERE id IN ({placeholders}) "
+                f"  AND source = 'user_correction' "
+                f"  AND status IN ('active', 'provisional')"
+            ),
+            id_params,
+        ).fetchall()
+
+    archived = 0
+    now = _utcnow()
+    for old_id, old_summary, old_details in rows:
+        if detect_supersession(
+            new_summary=new_learning.summary,
+            new_details=new_learning.details,
+            old_summary=old_summary,
+            old_details=old_details,
+        ):
+            obj = session.get(AgentLearning, int(old_id))
+            if obj is not None and obj.status in ("active", "provisional"):
+                obj.status = "archived"
+                obj.archived_at = now
+                session.add(obj)
+                session.commit()
+                archived += 1
+    return archived
 
 
 # ── Embedding population (called after writes, and as a background sweep) ───

@@ -260,3 +260,92 @@ def rephrase_learning(
             tool_name, str(e)[:200],
         )
         return summary
+
+
+# ── Synthesizer ──────────────────────────────────────────────────────────────
+#
+# Turns a structured failure→success transition into a generalized, transferable
+# lesson. Replaces the mechanical arg-diff summary in `derive_learning_from_
+# success`, which broke on long structured payloads (REST URLs, KQL queries):
+# the distinguishing change often falls past the summary's prefix truncation, so
+# the two sides looked identical ("switch from X to X"), and identifiers buried
+# in URL/query positions leaked past the placeholder redaction. The synthesizer
+# reads the FULL redacted args, so it finds the real diff wherever it sits and
+# states the mechanism, not the target. It runs off the request path (the write
+# is already backgrounded) and fails soft — see the return contract below.
+
+_SYNTHESIZER_SYSTEM_PROMPT = """You write ONE generalized, transferable lesson from a tool failure→success event.
+
+You are given, for a single tool: the failing arguments, the error message, and
+the working arguments. Environment-specific identifiers are already replaced with
+placeholders like <id>, <resource>, <redacted> — treat those as opaque and NEVER
+invent or reintroduce concrete names, IDs, paths, or regions.
+
+Your job: identify what ACTUALLY changed between the failing and working call and
+why that fixed it, then state it as one neutral, reusable sentence an engineer
+could apply to a DIFFERENT resource later. Focus on the transferable mechanism (a
+flag, an HTTP method, an endpoint rule, an api-version, a query shape/operator) —
+not the specific target.
+
+If the failing and working arguments are effectively identical, differ ONLY in
+placeholder/identifier values, or you cannot find a difference that generalizes,
+output exactly: NONE
+
+RULES:
+  - Output ONLY the sentence, or the literal word NONE. No preface, no quotes.
+  - Keep flags, method names, api-versions, and KQL/operator syntax verbatim.
+  - State fact, not opinion. Never claim a tool is broken, too strict, or wrong.
+  - Maximum 240 characters."""
+
+
+def synthesize_learning(
+    *,
+    tool_name: str,
+    failing_args: str,
+    error_message: str,
+    working_args: str,
+    timeout_seconds: float = 10.0,
+) -> str:
+    """Return a generalized one-sentence lesson derived from the (already
+    redacted) failure→success facts.
+
+    Return contract (three distinct signals the caller acts on):
+      - a sentence  → use it as the learning summary.
+      - "NONE"      → the model found no transferable difference; the caller
+                      should SKIP recording (this is what kills the "switch from
+                      X to X" junk before it ever reaches the judge).
+      - ""          → a transient error; the caller should FALL BACK to the
+                      mechanical arg-diff summary (never lose a real lesson to a
+                      flaky call). Never raises.
+    """
+    try:
+        settings = get_settings()
+        client = _get_judge_client()
+        user_prompt = (
+            f"Tool: {tool_name}\n\n"
+            f"FAILING ARGS:\n{(failing_args or '')[:800]}\n\n"
+            f"ERROR:\n{(error_message or '')[:600]}\n\n"
+            f"WORKING ARGS:\n{(working_args or '')[:800]}\n\n"
+            "Write the single transferable lesson, or NONE."
+        )
+        resp = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": _SYNTHESIZER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_completion_tokens=120,
+            timeout=timeout_seconds,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        # Strip surrounding quotes the model sometimes adds despite the prompt.
+        if len(out) >= 2 and out[0] in "\"'" and out[-1] == out[0]:
+            out = out[1:-1].strip()
+        return out
+    except Exception as e:
+        logger.warning(
+            "synthesize_learning failed for %s (mechanical fallback): %s",
+            tool_name, str(e)[:200],
+        )
+        return ""

@@ -213,6 +213,13 @@ class TestCategoryTypeMapping:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestDeriveLearning:
+    @pytest.fixture(autouse=True)
+    def _mechanical(self, monkeypatch):
+        # These tests target the mechanical derivation (category + redaction).
+        # Force synthesis onto its mechanical-fallback path so they run offline
+        # and deterministically; synthesis behaviour is covered in TestSynthesis.
+        monkeypatch.setattr(lrn, "synthesize_learning", lambda **kw: "")
+
     def test_syntax_error_classified_as_syntax_fix(self):
         out = lrn.derive_learning_from_success(
             tool_name="az_resource_graph",
@@ -273,6 +280,66 @@ class TestDeriveLearning:
         assert not is_specific, f"still rejected: {why}"
         # The transferable signal (the --yes that was removed) is preserved.
         assert "--yes" in blob
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM synthesis of the learning summary (DESIGN.md §5 2026-06-05)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSynthesis:
+    def test_synthesized_summary_replaces_mechanical(self, monkeypatch):
+        monkeypatch.setattr(
+            lrn, "synthesize_learning",
+            lambda **kw: "az_rest_api config/appsettings/list requires POST, not GET.",
+        )
+        out = lrn.derive_learning_from_success(
+            tool_name="az_rest_api",
+            final_successful_args={"method": "POST", "url": "/x/config/appsettings/list?api-version=2022-03-01"},
+            prior_failures=[({"method": "GET", "url": "/x/config/appsettings/list?api-version=2022-03-01"},
+                             "Method Not Allowed")],
+        )
+        assert out is not None
+        assert out["summary"] == "az_rest_api config/appsettings/list requires POST, not GET."
+        # Details keep the raw redacted facts as the audit trail.
+        assert "Working args:" in out["details"]
+
+    def test_none_verdict_skips_the_write(self, monkeypatch):
+        # The "switch from X to X" class: only the resource differed.
+        monkeypatch.setattr(lrn, "synthesize_learning", lambda **kw: "NONE")
+        out = lrn.derive_learning_from_success(
+            tool_name="az_resource_graph",
+            final_successful_args={"query": "Resources | where resourceGroup =~ 'rg-a-prod'"},
+            prior_failures=[({"query": "Resources | where resourceGroup =~ 'rg-b-prod'"},
+                             "InvalidQuery")],
+        )
+        assert out is None
+
+    def test_transient_error_falls_back_to_mechanical(self, monkeypatch):
+        monkeypatch.setattr(lrn, "synthesize_learning", lambda **kw: "")
+        out = lrn.derive_learning_from_success(
+            tool_name="az_cli",
+            final_successful_args={"args": ["vm", "start"]},
+            prior_failures=[({"args": ["vm", "strt"]}, "unrecognized")],
+        )
+        assert out is not None
+        assert "is resolved by switching to" in out["summary"]  # mechanical form
+
+    def test_synthesize_learning_passes_none_through(self, monkeypatch):
+        from app.agent import learn_judge as lj
+
+        class _R:
+            def __init__(self, c): self.choices = [type("C", (), {"message": type("M", (), {"content": c})})]
+
+        class _Client:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kw): return _R('"NONE"')  # quoted — must be stripped
+        monkeypatch.setattr(lj, "_get_judge_client", lambda: _Client())
+        out = lj.synthesize_learning(
+            tool_name="az_cli", failing_args="{}", error_message="e", working_args="{}",
+        )
+        assert out == "NONE"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

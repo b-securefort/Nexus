@@ -630,7 +630,7 @@ def _compose_system_prompt(
     user: User,
     original_task: str = "",
     current_user_message: str = "",
-) -> tuple[str, list[int]]:
+) -> tuple[str, list[int], dict[str, str]]:
     """Compose the final system prompt per §11.6.
 
     `original_task` is the very first user message of the conversation; it is
@@ -642,9 +642,11 @@ def _compose_system_prompt(
     top-K relevant entries from `agent_learnings` via embedding similarity.
     See app/agent/learnings.py.
 
-    Returns (system_prompt, retrieved_learning_ids). The caller passes the
-    IDs back into mark_learning_outcome after subsequent tool calls so
-    validation_count / failure_count stay current.
+    Returns (system_prompt, retrieved_learning_ids, segments). The caller passes
+    the IDs back into mark_learning_outcome after subsequent tool calls so
+    validation_count / failure_count stay current. `segments` is an ordered
+    {display_label: text} map of the prompt's structural parts, used by the
+    context-usage gauge to show what is filling the window (see token_usage.py).
     """
     from app.agent.learnings import retrieve_relevant_learnings
 
@@ -1157,11 +1159,18 @@ def _schedule_learning_write(
             )
             from app.db.engine import get_session
 
-            derived = derive_learning_from_success(
+            # derive now makes an LLM call (synthesis), so run it in a thread —
+            # never on the event loop. It returns None when there's no
+            # generalizable lesson, in which case there's nothing to record.
+            derived = await asyncio.to_thread(
+                derive_learning_from_success,
                 tool_name=tool_name,
                 final_successful_args=final_successful_args,
                 prior_failures=prior_failures,
             )
+            if not derived:
+                logger.info("No generalizable learning derived for %s; nothing to record", tool_name)
+                return
 
             def _persist() -> None:
                 with get_session() as bg_session:
@@ -1209,6 +1218,8 @@ def _schedule_learning_write(
                 final_successful_args=final_successful_args,
                 prior_failures=prior_failures,
             )
+            if not derived:
+                return
             with get_session() as bg_session:
                 record_validated_learning(
                     session=bg_session,
@@ -1223,6 +1234,80 @@ def _schedule_learning_write(
             logger.exception(
                 "Synchronous fallback learning write failed for %s", tool_name,
             )
+
+
+def _build_prior_action_context(messages: list[dict]) -> str:
+    """Compact description of the most recent agent action, for the
+    user-correction extractor: the last assistant message's text plus the names
+    of any tools it invoked. Returns "" when there's no prior agent turn (a
+    first-message turn has nothing to correct)."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        parts: list[str] = []
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append(content.strip()[:600])
+        names = []
+        for tc in (msg.get("tool_calls") or []):
+            try:
+                names.append(tc["function"]["name"])
+            except (KeyError, TypeError, IndexError):
+                continue
+        if names:
+            parts.append("Tools called: " + ", ".join(names))
+        return "\n".join(parts) if parts else "(assistant turn with no text)"
+    return ""
+
+
+def _schedule_user_correction_capture(
+    *,
+    user_message: str,
+    prior_action: str,
+    originating_conversation_id: int,
+) -> None:
+    """Background extract→write for an explicit user teach-intent turn
+    (DESIGN.md §5 2026-06-05). Mirrors `_schedule_learning_write`: runs off the
+    request path on a strong-referenced task; falls back to a synchronous write
+    when no event loop is running (unit tests calling the helper directly)."""
+    def _extract_and_write(sync: bool) -> None:
+        from app.agent.learn_capture import extract_user_correction
+        from app.agent.learnings import record_user_correction_learning
+        from app.db.engine import get_session
+
+        derived = extract_user_correction(
+            user_message=user_message, prior_action=prior_action,
+        )
+        if not derived:
+            return
+        with get_session() as bg_session:
+            record_user_correction_learning(
+                session=bg_session,
+                originating_conversation_id=originating_conversation_id,
+                **derived,
+            )
+        logger.info(
+            "Captured user-correction learning for conv %s", originating_conversation_id,
+        )
+
+    async def _do_capture() -> None:
+        try:
+            await asyncio.to_thread(_extract_and_write, False)
+        except Exception:
+            logger.exception(
+                "User-correction capture failed for conv %s", originating_conversation_id,
+            )
+
+    try:
+        task = asyncio.create_task(_do_capture())
+        _learning_write_tasks.add(task)
+        task.add_done_callback(_learning_write_tasks.discard)
+    except RuntimeError:
+        # No running event loop (sync unit-test context). Best-effort.
+        try:
+            _extract_and_write(True)
+        except Exception:
+            logger.exception("Synchronous user-correction capture failed")
 
 
 _tool_call_history: dict[str, dict[str, list[float]]] = {}
@@ -1382,6 +1467,23 @@ async def handle_chat(
     )
     tools = resolve_tools(skill.tools)
     tool_schemas = [t.to_openai_schema() for t in tools] if tools else None
+
+    # User-correction capture (DESIGN.md §5 2026-06-05). When this turn is an
+    # explicit teach-intent message AND there is a prior agent action to correct,
+    # extract a generalizable lesson in the background. The marker pre-gate is a
+    # cheap regex; the extractor + write run off the request path and never block
+    # the turn. Read/diagram/command tools are irrelevant here — the signal is
+    # the user's words, not a tool outcome.
+    if settings.LEARN_FROM_USER_CORRECTIONS:
+        from app.agent.learn_capture import looks_like_teach_intent
+        if looks_like_teach_intent(user_message):
+            prior_action = _build_prior_action_context(messages)
+            if prior_action:
+                _schedule_user_correction_capture(
+                    user_message=user_message,
+                    prior_action=prior_action,
+                    originating_conversation_id=conversation.id,
+                )
 
     iteration = 0
 

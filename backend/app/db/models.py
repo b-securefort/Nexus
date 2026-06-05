@@ -164,6 +164,14 @@ class AgentLearning(SQLModel, table=True):
     tool_name: str = Field(nullable=False, index=True)
     summary: str = Field(nullable=False)
     details: str = Field(nullable=False)
+    # Provenance of the learning. Gates which lifecycle rules apply, not just audit:
+    #   "failure_success" — derived from a tracked tool failure→success transition
+    #                       (reality-grounded; validated by tool outcome).
+    #   "user_correction" — extracted from an explicit user teach-intent turn
+    #                       (assertion-grounded; never auto-promoted by tool
+    #                       outcome, archived by a later contradicting correction).
+    # See DESIGN.md §5 2026-06-05 "User-correction learning capture".
+    source: str = Field(nullable=False, default="failure_success", index=True)
     status: str = Field(nullable=False, default="active", index=True)
     # status values:
     #   "active"      — retrievable, validated

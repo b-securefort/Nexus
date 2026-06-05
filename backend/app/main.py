@@ -172,6 +172,20 @@ def _apply_lightweight_migrations(engine):
                 )
             conn.commit()
 
+        # User-correction learning capture (DESIGN.md §5 2026-06-05). Add the
+        # provenance column and backfill existing rows to the failure→success
+        # source so the source-gated lifecycle (no tool-outcome promotion for
+        # user_correction) treats legacy rows as reality-grounded.
+        try:
+            conn.execute(sqlalchemy.text("SELECT source FROM agent_learnings LIMIT 0"))
+        except Exception:
+            logger.info("Adding source column to agent_learnings table")
+            conn.execute(sqlalchemy.text(
+                "ALTER TABLE agent_learnings ADD COLUMN source TEXT "
+                "NOT NULL DEFAULT 'failure_success'"
+            ))
+            conn.commit()
+
         # Agent learnings vec0 companion (procedural + semantic memory).
         # The regular `agent_learnings` table is created by SQLModel; the
         # vec0 virtual table holds embeddings used for top-K retrieval.

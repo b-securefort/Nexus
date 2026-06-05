@@ -150,6 +150,13 @@ class Settings(BaseSettings):
     # False if false positives are hurting more than narration is.
     NARRATION_NUDGE_ENABLED: bool = True
 
+    # When True, an explicit user teach-intent turn ("add to learnings that…",
+    # "remember this…") triggers a background extractor that records a
+    # source="user_correction" learning (DESIGN.md §5 2026-06-05). Kill switch:
+    # set False to stop writing user-sourced learnings without touching the
+    # capture-detection or retrieval paths.
+    LEARN_FROM_USER_CORRECTIONS: bool = True
+
     # Tool config
     TOOL_SEARCH_SEMANTIC_ENABLED: bool = True
     TOOL_SEARCH_STACKOVERFLOW_ENABLED: bool = True

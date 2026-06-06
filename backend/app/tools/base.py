@@ -405,14 +405,17 @@ def resolve_tools(tool_names: list[str]) -> list[Tool]:
 def init_tools() -> None:
     """Initialize and register all tools via auto-discovery. Called on startup.
 
-    Generic tools (app/tools/generic/) are always loaded.
-    Bundle tools (app/tools/azure/, etc.) are loaded only when their
-    TOOL_BUNDLE_*_ENABLED flag is true in config. Teams that fork Nexus
-    add their own bundle directory here and a matching config flag.
+    Generic tools (app/tools/generic/) are always loaded. Bundles are
+    discovered by scanning bundles/ for sub-packages: each bundle's __init__
+    registers a manifest (app/tools/bundle.py) and its tool modules load only
+    when its declared config_flag is true. Core never names a bundle — drop a
+    folder under bundles/ + add its TOOL_BUNDLE_<NAME>_ENABLED flag.
     """
     import pkgutil
     import importlib
     import app.tools.generic
+    import bundles
+    from app.tools.bundle import BUNDLE_REGISTRY
 
     settings = get_settings()
 
@@ -424,15 +427,30 @@ def init_tools() -> None:
             except Exception as e:
                 logger.error("Failed to load generic tool %s: %s", module_name, e)
 
-    # 1b. Load Azure bundle if enabled
-    if settings.TOOL_BUNDLE_AZURE_ENABLED:
-        import bundles.azure
-        for _, module_name, _ in pkgutil.iter_modules(bundles.azure.__path__):
+    # 1b. Discover bundles by directory scan. Importing a bundle package runs
+    #     its __init__ (which calls register_bundle); we then load that bundle's
+    #     tool modules only when its manifest's config_flag is enabled. Core
+    #     names no bundle here (DESIGN.md §5 2026-06-05).
+    for _, pkg_name, is_pkg in pkgutil.iter_modules(bundles.__path__):
+        if not is_pkg or pkg_name.startswith("_"):
+            continue
+        try:
+            pkg = importlib.import_module(f"bundles.{pkg_name}")  # runs register_bundle
+        except Exception as e:
+            logger.error("Failed to import bundle %s: %s", pkg_name, e)
+            continue
+        bundle = BUNDLE_REGISTRY.get(pkg_name)
+        flag = bundle.config_flag if bundle else f"TOOL_BUNDLE_{pkg_name.upper()}_ENABLED"
+        if not bool(getattr(settings, flag, False)):
+            # Disabled — drop its manifest so its hooks don't fire, skip tools.
+            BUNDLE_REGISTRY.pop(pkg_name, None)
+            continue
+        for _, module_name, _ in pkgutil.iter_modules(pkg.__path__):
             if not module_name.startswith("_"):
                 try:
-                    importlib.import_module(f"bundles.azure.{module_name}")
+                    importlib.import_module(f"bundles.{pkg_name}.{module_name}")
                 except Exception as e:
-                    logger.error("Failed to load azure tool %s: %s", module_name, e)
+                    logger.error("Failed to load %s tool %s: %s", pkg_name, module_name, e)
 
     # 2. Apply per-tool config flags. Each tool declares the Settings attribute
     #    that enables/disables it via its `config_flag` attribute (DESIGN.md §5

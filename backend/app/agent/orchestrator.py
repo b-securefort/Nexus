@@ -56,6 +56,11 @@ from app.tools.base import (
     set_conversation_id,
     set_skill_name,
 )
+from app.tools.bundle import (
+    bundle_context_prompts,
+    bundle_prompt_fragments,
+    dispatch_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -662,32 +667,20 @@ def _compose_system_prompt(
         retrieved = []
     retrieved_ids = [r.id for r in retrieved]
 
-    try:
-        from bundles.azure.az_login_check import get_az_context_prompt
-        az_context = get_az_context_prompt()
-    except ImportError:
-        az_context = ""
+    # Per-turn dynamic context contributed by each enabled bundle (e.g. the
+    # Azure CLI login state). Bundle-agnostic: core loops the registry instead
+    # of importing a bundle by name (DESIGN.md §5 2026-06-05).
+    bundle_context = bundle_context_prompts()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # --- Static content FIRST (maximizes Azure OpenAI prompt cache prefix) ---
     static_policy = (
         "\n---\n"
-        "## Tool hierarchy\n"
-        "Always prefer tools in this order when querying Azure resources:\n"
-        "1. **`az_resource_graph`** (KQL) — fastest, read-only, no approval. Use first for resource queries.\n"
-        "2. **`az_cost_query`** — cost/usage data. No approval.\n"
-        "3. **`az_monitor_logs`** — Log Analytics KQL queries. No approval.\n"
-        "4. **`az_advisor`** / **`az_policy_check`** — recommendations and compliance. No approval.\n"
-        "5. **`az_cli`** — general Azure operations. Requires approval for mutations.\n"
-        "6. **`az_rest_api`** — direct ARM REST calls. GET=no approval, mutations=approval.\n"
-        "7. **`az_devops`** — Azure DevOps pipelines/PRs/builds. Read=no approval, mutations=approval.\n"
-        "8. **`execute_script`** — run a .ps1/.sh script that already exists under output/scripts/. Always requires approval. Write the script with `generate_file` first.\n\n"
-        "Other tools:\n"
-        "- **`network_test`** — DNS/port checks, NSG rules. No approval.\n"
-        "- **`generate_file`** — Write files to output/ sandbox. No approval.\n"
-        "- **`web_fetch`** — Fetch web page content. No approval.\n"
-        "Before running any command, call `fetch_ms_docs` to verify the correct syntax.\n\n"
-        "## Thinking before acting\n"
+        # Bundle-contributed tool guidance (e.g. the Azure tool hierarchy). It
+        # lives in the static cache-prefix and is ordered deterministically by
+        # bundle name so the prompt-cache prefix stays byte-stable (§5 2026-06-05).
+        + bundle_prompt_fragments()
+        + "## Thinking before acting\n"
         "ALWAYS include a brief text explanation BEFORE making any tool call(s). "
         "The user must see your reasoning. Specifically:\n"
         "- **Before a tool call**: Explain what you're about to do and why (1-2 sentences).\n"
@@ -740,7 +733,7 @@ def _compose_system_prompt(
     context_block = (
         f"\nCurrent user: {user.display_name} ({user.email})\n"
         f"Current date: {now}\n\n"
-        f"{az_context}"
+        f"{bundle_context}"
     )
 
     task_block = ""
@@ -2126,13 +2119,10 @@ async def handle_chat(
                     # success to learn from. Skip both paths entirely.
                     pass
                 elif _tool_has(func_name, "learning_eligible") and is_error:
-                    # Auth errors — clear cache so next attempt re-checks
-                    if "az login" in tool_result or "not logged in" in tool_result.lower():
-                        try:
-                            from bundles.azure.az_login_check import clear_login_cache
-                            clear_login_cache()
-                        except ImportError:
-                            pass
+                    # Let each enabled bundle react to the tool error (e.g. the
+                    # Azure bundle clears its cached az-login state on an auth
+                    # error) — core loops the registry, names no bundle.
+                    dispatch_tool_error(tool_result)
 
                     # Track this failure. This drives both multi-strategy retry
                     # (command tools) and success-after-failure learning capture

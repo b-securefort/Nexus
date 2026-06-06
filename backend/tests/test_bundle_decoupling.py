@@ -116,3 +116,55 @@ def test_requires_credentials_matches_azuretoolbase_isinstance():
     # False — matching the prior ARM-preflight behaviour exactly.
     for name, tool in TOOL_REGISTRY.items():
         assert tool.requires_credentials == isinstance(tool, AzureToolBase), name
+
+
+# ── Phase C: directory-scan loader + bundle manifest hooks ───────────────────
+
+
+def test_azure_bundle_registered_via_directory_scan():
+    from app.tools.bundle import BUNDLE_REGISTRY
+
+    assert "azure" in BUNDLE_REGISTRY
+    assert BUNDLE_REGISTRY["azure"].config_flag == "TOOL_BUNDLE_AZURE_ENABLED"
+
+
+def test_core_does_not_import_bundles_by_name():
+    # The whole point of Phase C: core composes prompts / handles auth errors by
+    # looping the registry, never `from bundles.azure import ...`.
+    import pathlib
+
+    core = pathlib.Path(__file__).resolve().parents[1] / "app"
+    offenders = [
+        p for p in core.rglob("*.py")
+        if "bundles.azure" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"core modules still name the azure bundle: {offenders}"
+
+
+def test_bundle_prompt_fragment_carries_tool_hierarchy():
+    from app.tools.bundle import bundle_prompt_fragments
+
+    frag = bundle_prompt_fragments()
+    assert "## Tool hierarchy" in frag
+    assert "az_resource_graph" in frag
+
+
+def test_bundle_context_prompt_carries_azure_state():
+    from app.tools.bundle import bundle_context_prompts
+
+    assert "Azure Context" in bundle_context_prompts()
+
+
+def test_on_tool_error_clears_login_cache_only_on_auth_error():
+    import bundles.azure.az_login_check as alc
+    from app.tools.bundle import dispatch_tool_error
+
+    # Non-auth error must NOT clear the cache.
+    alc._cached_state = "sentinel"
+    dispatch_tool_error("Error: resource not found")
+    assert alc._cached_state == "sentinel"
+
+    # Auth error must clear it so the next call re-checks.
+    alc._cached_state = "sentinel"
+    dispatch_tool_error("Error: please run az login --use-device-code")
+    assert alc._cached_state is None

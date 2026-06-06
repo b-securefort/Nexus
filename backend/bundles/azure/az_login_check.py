@@ -13,7 +13,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-from app.tools.base import SUBPROCESS_FLAGS, _find_az
+from app.tools.base import SUBPROCESS_FLAGS
+from bundles.azure._az_base import _find_az
 
 logger = logging.getLogger(__name__)
 

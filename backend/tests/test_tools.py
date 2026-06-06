@@ -702,15 +702,15 @@ class TestRunAzEnvAllowlist:
             mock = subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
             return mock
 
-        from app.tools.base import _az_executable_path, _az_circuit_breaker_tripped
-        import app.tools.base as base_mod
+        from bundles.azure._az_base import _az_executable_path, _az_circuit_breaker_tripped
+        import bundles.azure._az_base as base_mod
 
         monkeypatch.setattr(base_mod, "_az_executable_path", "/usr/bin/az")
         monkeypatch.setattr(base_mod, "_az_circuit_breaker_tripped", False)
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         # Instantiate a minimal AzureToolBase subclass inline for testing.
-        from app.tools.base import AzureToolBase
+        from bundles.azure._az_base import AzureToolBase
         from app.auth.models import User
 
         class _TestTool(AzureToolBase):
@@ -741,9 +741,10 @@ class TestRunAzEnvAllowlist:
         """ARM token from ContextVar must appear in the subprocess env as
         AZURE_ACCESS_TOKEN even though it is not in os.environ."""
         import subprocess
-        from app.tools.base import set_arm_token, AzureToolBase
+        from app.tools.base import set_arm_token
+        from bundles.azure._az_base import AzureToolBase
         from app.auth.models import User
-        import app.tools.base as base_mod
+        import bundles.azure._az_base as base_mod
 
         set_arm_token("eyJtoken123")
 
@@ -835,8 +836,8 @@ class TestRunAzShellFalse:
     def test_subprocess_run_called_with_shell_false(self, monkeypatch):
         """Monkeypatch subprocess.run and assert shell kwarg is False."""
         import subprocess
-        import app.tools.base as base_mod
-        from app.tools.base import AzureToolBase
+        import bundles.azure._az_base as base_mod
+        from bundles.azure._az_base import AzureToolBase
         from app.auth.models import User
 
         captured_kwargs: dict = {}

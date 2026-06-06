@@ -8,7 +8,8 @@ test pins the expected capability matrix directly as the durable source of
 truth: if a tool's capability flags drift, this fails.
 """
 
-from app.tools.base import TOOL_REGISTRY, AzureToolBase, init_tools
+from app.tools.base import TOOL_REGISTRY, init_tools
+from bundles.azure._az_base import AzureToolBase
 
 # Ensure the full registry (generic + azure bundle) is populated.
 init_tools()

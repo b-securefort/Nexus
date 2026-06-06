@@ -48,6 +48,19 @@ Impact: the orchestrator recovered (model retried without the arrow and recorded
 Fix applied: pass `encoding="utf-8"` to the `subprocess.run` call (fixes both stdin encode and stdout decode). Verified: a diagram with an `Edge(label="ingress → app")` now renders + validates + auto-renders cleanly.
 File: [backend/app/tools/generic/_drawio_emitter.py](backend/app/tools/generic/_drawio_emitter.py#L745)
 
+**N2 — the architect diagram loop does not converge for a complex real topology.** *Severity: MEDIUM. — OPEN.*
+Repro (E2E, `shared:architect`, "audit network topology + draw it" against the live sub): the model
+inventoried 3 VNets / 25 resources / 16 containers correctly, but all 3 `generate_drawio_from_python`
+attempts ended `Validation FAILED: 8 violation(s)` (recurring `[resource-parent]` — non-network nodes
+like Managed Identity / Entra ID / Key Vault dragged visually inside VNet clusters). It exhausted the
+iteration budget and shipped an unusable PNG (tall/narrow, stacked NSGs, overlapping labels, floating
+nodes). The simple "Front Door → App Service → SQL" diagram converged fine, so this is specifically a
+*large-graph* failure. The model was honest about the shortfall.
+Likely fixes (the `/tool-qa` (a) work item): (1) teach the architect to keep non-network resources out
+of VNet clusters; (2) decompose a whole-subscription topology into per-VNet sub-diagrams instead of one
+mega-diagram; and/or (3) raise the per-turn diagram-iteration budget so the validator-feedback loop can
+actually resolve all violations.
+
 ---
 
 ## Per-tool grades (re-run)

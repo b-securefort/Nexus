@@ -5,8 +5,9 @@ orchestrator/frontend integration around them. Complements `Testing.md` (the aut
 pytest/vitest suites) — this file is the **manual/exploratory** plan: how to exercise
 the tools directly, what cases to run, and what "good" looks like.
 
-Latest run: **2026-06-06** — full results and root-causes in
-[NEXUS_TOOL_TEST_REPORT.md](NEXUS_TOOL_TEST_REPORT.md).
+Latest run: **2026-06-06 (re-run after bug-fix pass)** — all prior bugs B1–B11 + issue #6
+verified fixed; one new finding **N1** (`generate_drawio_from_python` UTF-8 on Windows) found and
+fixed during the run. Full results in [NEXUS_TOOL_TEST_REPORT.md](NEXUS_TOOL_TEST_REPORT.md).
 
 ---
 

@@ -747,6 +747,11 @@ def run_dot_layout(dot_source: str, env: dict[str, str]) -> tuple[dict, dict[str
         input=sanitized,
         capture_output=True,
         text=True,
+        # Force UTF-8 on stdin/stdout. Without this, text mode uses the locale
+        # default (cp1252 on Windows), so any non-ASCII char the model emits in a
+        # label — arrows (→), em-dashes, accented resource names — raises
+        # UnicodeEncodeError when piping DOT to `dot` and crashes the pipeline.
+        encoding="utf-8",
         env=env,
         timeout=30,
     )

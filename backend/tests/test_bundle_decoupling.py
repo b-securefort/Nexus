@@ -168,3 +168,19 @@ def test_on_tool_error_clears_login_cache_only_on_auth_error():
     alc._cached_state = "sentinel"
     dispatch_tool_error("Error: please run az login --use-device-code")
     assert alc._cached_state is None
+
+
+# ── Phase D: retry hints live on the tools, not hardcoded in core ────────────
+
+
+def test_retry_hints_come_from_tools():
+    az_cli = TOOL_REGISTRY["az_cli"]
+    assert "az_resource_graph" in (az_cli.retry_alt_hint() or "")
+    assert az_cli.retry_docs_query({"args": ["vm", "list"]}, "err").startswith("az vm list")
+
+
+def test_non_command_tools_have_no_retry_hints():
+    # Tools that don't override fall back to the orchestrator's generic text.
+    rk = TOOL_REGISTRY["read_kb_file"]
+    assert rk.retry_alt_hint() is None
+    assert rk.retry_docs_query({}, "err") is None

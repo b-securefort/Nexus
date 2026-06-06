@@ -151,6 +151,17 @@ class ExecuteScriptTool(Tool):
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
+
+    def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
+        path = func_args.get("path", "")
+        return f"{path[:80]} script error"
+
+    def retry_alt_hint(self) -> str | None:
+        return (
+            "Don't retry the same script. Inspect it with `read_file`, fix it "
+            "with `generate_file` (overwrite=true), and re-run."
+        )
+
     description = (
         "Execute a script that already exists under output/scripts/. "
         "Requires explicit user approval before execution. "

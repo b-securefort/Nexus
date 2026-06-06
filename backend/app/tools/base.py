@@ -280,6 +280,19 @@ class Tool(ABC):
         yield result
         return result
 
+    def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
+        """Search query for `fetch_ms_docs` when this tool fails (retry Strategy
+        1). Return None to use the orchestrator's generic query. Override in
+        tools whose docs lookup benefits from tool-specific phrasing
+        (DESIGN.md §5 2026-06-05 — keeps retry advice with the tool)."""
+        return None
+
+    def retry_alt_hint(self) -> str | None:
+        """Strategy-2 'try a different approach' guidance specific to this tool
+        (e.g. which alternative tool to reach for). Return None to use the
+        generic 'try a different tool' message."""
+        return None
+
 
 def retry_with_backoff(
     func, max_retries: int = 3, base_delay: float = 2.0, retryable_errors: tuple = ("429", "500", "502", "503", "504", "Too Many Requests")

@@ -62,6 +62,19 @@ class AzCliTool(Tool):
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
+
+    def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
+        args = func_args.get("args", [])
+        return f"az {' '.join(args[:3])} syntax parameters" if args else None
+
+    def retry_alt_hint(self) -> str | None:
+        return (
+            "For read queries, try `az_resource_graph` (KQL) — faster and needs "
+            "no approval. For ARM operations not exposed by az_cli, use "
+            "`az_rest_api` (with `body_file` for large payloads). Tip: "
+            "`az <command> --help` shows the correct syntax."
+        )
+
     description = (
         "Execute an Azure CLI command. Requires explicit user approval. "
         "Commands run as the authenticated user's own Azure identity — the same permissions "

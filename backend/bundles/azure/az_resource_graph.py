@@ -21,6 +21,16 @@ class AzResourceGraphTool(AzureToolBase):
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
     max_output_size = 16384
+
+    def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
+        return f"Azure Resource Graph KQL query syntax {func_args.get('query', '')[:80]}"
+
+    def retry_alt_hint(self) -> str | None:
+        return (
+            "Try `az_cli` with `az resource list` or similar commands. If that "
+            "also fails, use `az_rest_api` to call the Azure REST API directly."
+        )
+
     description = (
         "Execute a read-only Azure Resource Graph (ARG) query using Kusto Query Language (KQL). "
         "Use this to explore, count, or list Azure resources across subscriptions. "

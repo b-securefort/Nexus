@@ -1036,17 +1036,15 @@ def _skill_from_snapshot(snapshot_json: str) -> Skill:
 # ── Multi-strategy retry system ──────────────────────────────────────────────
 
 def _build_docs_query(tool_name: str, func_args: dict, error_text: str) -> str:
-    """Build a search query from a failed tool call to look up docs."""
-    if tool_name == "az_cli":
-        args = func_args.get("args", [])
-        if args:
-            return f"az {' '.join(args[:3])} syntax parameters"
-    elif tool_name == "az_resource_graph":
-        return f"Azure Resource Graph KQL query syntax {func_args.get('query', '')[:80]}"
-    elif tool_name == "execute_script":
-        path = func_args.get("path", "")
-        return f"{path[:80]} script error"
-    return f"Azure CLI {error_text[:60]}"
+    """Build a search query from a failed tool call to look up docs. A tool may
+    supply tool-specific phrasing via `retry_docs_query`; otherwise fall back to
+    a generic query — core hardcodes no tool names (DESIGN.md §5 2026-06-05)."""
+    tool = TOOL_REGISTRY.get(tool_name)
+    if tool is not None:
+        query = tool.retry_docs_query(func_args, error_text)
+        if query:
+            return query
+    return f"{tool_name} {error_text[:60]} syntax"
 
 
 def _auto_lookup_docs(tool_name: str, func_args: dict, error_text: str) -> str | None:
@@ -1095,21 +1093,18 @@ def _get_retry_strategy(failure_count: int, tool_name: str, func_args: dict, err
         )
 
     elif failure_count == 2:
-        # Strategy 2: Try a different command/approach entirely
-        alt_tools = {
-            "az_cli": "For read queries, try `az_resource_graph` (KQL) — it's faster and needs no approval. For ARM operations not exposed by az_cli, use `az_rest_api` (with `body_file` for large payloads).",
-            "az_resource_graph": "Try using `az_cli` with `az resource list` or similar commands. If that also fails, use `az_rest_api` to call the Azure REST API directly.",
-            "execute_script": "Don't retry the same script. Inspect the script with `read_file`, fix it with `generate_file` (overwrite=true), and re-run. For Azure-specific work, prefer `az_cli` / `az_rest_api` over generating a wrapper script.",
-        }
-        alt_hint = alt_tools.get(tool_name, "Try a different tool.")
+        # Strategy 2: Try a different command/approach entirely. The tool-
+        # specific "what to try instead" hint comes from the tool itself
+        # (retry_alt_hint); core supplies only the generic framing.
+        tool = TOOL_REGISTRY.get(tool_name)
+        alt_hint = (tool.retry_alt_hint() if tool is not None else None) or "Try a different tool."
         return (
             f"[RETRY STRATEGY 2/3 — Different approach] `{tool_name}` has now failed twice.\n"
             f"Error: {error_text[:300]}\n\n"
             f"**Action**: Do NOT retry the same command again. Instead:\n"
             f"1. {alt_hint}\n"
             "2. Break the problem into smaller steps — first verify prerequisites, then attempt the operation.\n"
-            "3. Re-read the **Relevant agent learnings** section in your system prompt — relevant entries are already retrieved.\n"
-            "4. If using az_cli, try `az <command> --help` first to see the correct syntax."
+            "3. Re-read the **Relevant agent learnings** section in your system prompt — relevant entries are already retrieved."
         )
 
     else:

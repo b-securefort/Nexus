@@ -2,7 +2,8 @@
 
 The gauge is a **context-window occupancy** indicator — "how full is the model's
 window right now" — not a cumulative token-spend meter. See DESIGN.md §5
-2026-06-05 "Context-usage gauge: occupancy, not spend".
+2026-05-18 "Token usage piggy-backs on the done SSE event" and §5 2026-06-06
+"Context gauge samples turn-end resting occupancy".
 
 The API `usage` object only exposes three totals (prompt / completion / cached),
 which can't tell you *what* is filling the window. To get the structural
@@ -95,6 +96,35 @@ def _messages_text(messages: list[dict]) -> str:
     return "\n".join(chunks)
 
 
+def _raw_segment_counts(
+    system_segments: dict[str, str],
+    tool_schemas: list[dict] | None,
+    messages: list[dict],
+    model: str,
+) -> list[tuple[str, int]]:
+    """Unscaled per-segment tiktoken counts (System parts + Tools + Messages)."""
+    raw: list[tuple[str, int]] = [
+        (label, count_tokens(text, model)) for label, text in system_segments.items()
+    ]
+    raw.append(("Tools", count_tokens(json.dumps(tool_schemas) if tool_schemas else "", model)))
+    raw.append(("Messages", count_tokens(_messages_text(messages), model)))
+    return raw
+
+
+def raw_total_tokens(
+    *,
+    system_segments: dict[str, str],
+    tool_schemas: list[dict] | None,
+    messages: list[dict],
+    model: str,
+) -> int:
+    """Sum of the unscaled tiktoken segment counts — the same `raw_total`
+    `build_segments` apportions. Used to estimate occupancy when no
+    authoritative API `prompt_tokens` is available (e.g. the turn-end resting
+    recompute), via a calibration ratio captured on a real API call."""
+    return sum(t for _, t in _raw_segment_counts(system_segments, tool_schemas, messages, model))
+
+
 def build_segments(
     *,
     system_segments: dict[str, str],
@@ -112,11 +142,7 @@ def build_segments(
 
     Returns an ordered list of `{"label": str, "tokens": int}`.
     """
-    raw: list[tuple[str, int]] = [
-        (label, count_tokens(text, model)) for label, text in system_segments.items()
-    ]
-    raw.append(("Tools", count_tokens(json.dumps(tool_schemas) if tool_schemas else "", model)))
-    raw.append(("Messages", count_tokens(_messages_text(messages), model)))
+    raw = _raw_segment_counts(system_segments, tool_schemas, messages, model)
 
     raw_total = sum(t for _, t in raw)
     if raw_total <= 0 or prompt_tokens <= 0:

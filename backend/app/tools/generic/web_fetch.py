@@ -160,16 +160,12 @@ class WebFetchTool(Tool):
                 "are blocked for security."
             )
 
-        # Microsoft Learn is a JavaScript-rendered SPA: a static fetch only gets
-        # back an auth/JS shell ("Access to this page requires authorization"),
-        # never the doc body. fetch_ms_docs queries the Learn API and returns the
-        # real content, so route the agent there instead of wasting the fetch.
-        if host == "learn.microsoft.com" or host.endswith(".learn.microsoft.com"):
-            return (
-                "Error: learn.microsoft.com pages are JavaScript-rendered, so web_fetch "
-                "cannot extract their content (it only sees an authorization/JS shell). "
-                "Use `fetch_ms_docs` to search Microsoft Learn for this topic instead."
-            )
+        # Note: learn.microsoft.com is usually a JS-rendered SPA that returns an
+        # auth/JS shell to static fetchers — but we no longer short-circuit it
+        # blindly (B11). Fetching for real lets a dead link (HTTP 404) be told
+        # apart from a valid-but-JS-rendered page: the former returns an HTTP
+        # error below, the latter is caught by _extraction_failed() which already
+        # routes the agent to fetch_ms_docs.
         try:
             response = _shared_client.get(
                 url,

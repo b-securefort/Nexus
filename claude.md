@@ -13,7 +13,7 @@ Nexus is a self-hosted AI assistant for platform teams (Azure is the primary pla
 | Database | SQLite (via SQLModel/SQLAlchemy) |
 | AI | Azure OpenAI (`gpt-5.4-mini`), streaming via SSE |
 | Auth | Microsoft Entra ID (MSAL) — bypassed in dev via `DEV_AUTH_BYPASS=true` |
-| Testing | Backend: pytest (115 tests) · Frontend: vitest (109 tests) |
+| Testing | Backend: pytest (~250 tests) · Frontend: vitest (~150 tests) |
 
 ## How To Run
 
@@ -101,10 +101,10 @@ Nexus/
 │   │       ├── az_resource_graph.py # az_resource_graph — KQL queries (read-only, no approval)
 │   │       ├── shell.py           # run_shell — runs shell/PowerShell commands (requires approval)
 │   │       ├── ms_docs.py         # fetch_ms_docs — searches Microsoft Learn docs
-│   │       ├── kb_tools.py        # read_kb_file, search_kb — KB access tools
-│   │       └── learn_tool.py      # read_learnings, update_learnings — persistent mistake memory
+│   │       └── kb_tools.py        # read_kb_file, search_kb — KB access tools
+│   │       # (Azure tools live under bundles/azure/; learnings are orchestrator-owned, not a tool)
 │   │
-│   └── tests/                     # 115 pytest tests
+│   └── tests/                     # pytest suite
 │       ├── conftest.py            # Fixtures (test DB, async client, auth bypass)
 │       ├── test_api.py            # API endpoint tests
 │       ├── test_agent.py          # Orchestrator unit tests
@@ -177,7 +177,7 @@ Nexus/
    - Strategy 2: Try a completely different command/tool/approach  
    - Strategy 3: Simplest possible form, or record learning and give up
 6. Tool results fed back to model → loop continues (max 15 iterations)
-7. If all retries fail → agent calls `update_learnings` to record the mistake
+7. If all retries fail → the orchestrator derives a learning to record the mistake (the agent has no learnings write tool; see Learnings System below)
 
 ### Skills
 Each skill is a `SKILL.md` file with YAML frontmatter:
@@ -189,33 +189,41 @@ tools:
   - read_kb_file
   - search_kb
   - az_cli
-  - run_shell
   - az_resource_graph
   - fetch_ms_docs
-  - read_learnings
-  - update_learnings
 ---
 System prompt content goes here...
 ```
 Skills control which tools are available and how the AI behaves.
 
-### Tools (8 registered)
+### Tools (28 registered)
+Generic tools live in `app/tools/generic/`; Azure-platform tools in `bundles/azure/`
+(loaded only when `TOOL_BUNDLE_AZURE_ENABLED=true`). The authoritative, current
+list with approval rules is **DESIGN.md §2 → Tools**. A representative sample:
+
 | Tool | Approval | Purpose |
 |------|----------|---------|
 | `read_kb_file` | No | Read a KB file by path |
-| `search_kb` | No | Keyword search the KB index |
+| `search_kb` / `search_kb_hybrid` | No | Keyword / hybrid (BM25+vector) KB search |
 | `fetch_ms_docs` | No | Search Microsoft Learn docs |
 | `az_resource_graph` | No | Read-only KQL queries against Azure Resource Graph |
-| `read_learnings` | No | Read the agent's learn.md (known issues/fixes) |
-| `update_learnings` | No | Append a new learning entry to learn.md |
 | `az_cli` | **Yes** | Run Azure CLI commands |
-| `run_shell` | **Yes** | Run shell/PowerShell commands |
+| `execute_script` | **Yes** | Run a `.ps1`/`.sh` already under `output/scripts/` |
 
-### Learnings System (`learn.md`)
-The agent maintains `kb_data/learnings/learn.md` — a persistent file of categorized mistakes and fixes. This is:
-- Auto-injected into the system prompt so the agent sees known issues before executing
-- Updated by the agent when it discovers new issues after failed retries
-- Categories: `known-issue`, `syntax-fix`, `workaround`, `best-practice`, `gotcha`
+> Learnings are **not** tools. There is no `read_learnings`/`update_learnings`;
+> the orchestrator derives and writes learnings itself (see below).
+
+### Learnings System
+Learnings are the agent's persistent memory of mistakes and fixes, stored in the
+`agent_learnings` SQLite table (not a file). The agent has **no write tool** — the
+**orchestrator** derives and writes learnings, gated by a rephrase + override-regex
++ name-guard + LLM-judge stack. They are:
+- Retrieved per-turn by embedding relevance (not always-injected) and added to the system prompt
+- Written on a success-after-failure transition or an explicit user correction
+- Categorized: `known-issue`, `syntax-fix`, `workaround`, `best-practice`, `gotcha`
+
+The legacy `kb_data/learnings/learn.md` file is a one-way-migrated archive, no
+longer read at runtime. See DESIGN.md §4 (`agent_learnings`) and GLOSSARY.md ("Learning").
 
 ### SSE Streaming Events
 The `POST /api/chat` endpoint streams these events:

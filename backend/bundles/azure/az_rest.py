@@ -83,7 +83,12 @@ class AzRestApiTool(AzureToolBase):
 
     @property
     def requires_approval(self) -> bool:  # type: ignore[override]
-        # Dynamic — actual check happens in execute()
+        # Approval is dynamic per HTTP method, not static: the orchestrator's
+        # _tool_needs_approval() duck-types `_needs_approval(method)` below and
+        # gates mutations there (GET/HEAD are free, PUT/POST/PATCH/DELETE need
+        # approval). This static attribute is the fallback for callers that
+        # don't special-case the dynamic path; it must stay False so a bare
+        # read isn't gated. execute() does NOT re-check — keep the two in sync.
         return False
 
     def _needs_approval(self, method: str) -> bool:

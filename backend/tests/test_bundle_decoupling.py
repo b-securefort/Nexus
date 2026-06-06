@@ -54,6 +54,8 @@ def test_result_limit_tools():
         "read_kb_file": 6_000,
         "read_file": 6_000,
         "search_kb_hybrid": 4_000,
+        "az_advisor": 6_000,
+        "az_policy_check": 6_000,
     }
 
 

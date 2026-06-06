@@ -20,7 +20,7 @@ def get_engine():
         _engine = create_engine(
             settings.DATABASE_URL,
             connect_args=connect_args,
-            echo=(settings.APP_ENV == "dev"),
+            echo=settings.DB_ECHO,
         )
         # Loads the sqlite-vec extension on every new connection so vec0 virtual
         # tables and the WAL pragma are in effect for KB hybrid retrieval.

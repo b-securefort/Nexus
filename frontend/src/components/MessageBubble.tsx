@@ -1,5 +1,6 @@
 import { useState, memo, useMemo, useEffect } from "react";
-import { User, Bot, X } from "lucide-react";
+import { User, Bot, X, Download } from "lucide-react";
+import { useAuthedBlobUrl } from "../hooks/useAuthedBlobUrl";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -208,37 +209,14 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
 
         {/* Attachments (images) */}
         {attachments.length > 0 && (
-          <div className={`flex flex-wrap gap-2 ${!message.content ? "" : ""}`}>
-            {attachments.map((att, i) => {
-              const resolved = resolveAttachmentUrl(att.url);
-              if (!resolved) {
-                // Disallowed origin — render the raw URL as inert text so the
-                // user can still inspect it without the browser fetching it.
-                return (
-                  <div
-                    key={att.filename || i}
-                    className="text-xs text-base-400 italic px-2 py-1 rounded border border-base-700/40 break-all"
-                    title="Attachment from disallowed origin"
-                  >
-                    Attachment blocked: {att.url}
-                  </div>
-                );
-              }
-              return (
-                <button
-                  key={att.filename || i}
-                  onClick={() => setLightboxUrl(resolved)}
-                  className="block rounded-lg overflow-hidden border border-base-700/40 hover:border-accent/50 transition-colors duration-150"
-                >
-                  <img
-                    src={resolved}
-                    alt={att.original_name || att.filename}
-                    className="max-w-[240px] max-h-[180px] object-contain bg-base-900"
-                    loading="lazy"
-                  />
-                </button>
-              );
-            })}
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((att, i) => (
+              <AttachmentImage
+                key={att.filename || i}
+                att={att}
+                onOpen={setLightboxUrl}
+              />
+            ))}
           </div>
         )}
 
@@ -270,6 +248,74 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
     </div>
   );
 });
+
+/** One image attachment, loaded through the authenticated blob fetch (B7) so it
+ *  renders in MSAL mode where a bare `<img src>` would 401, with a download
+ *  affordance (B6). Disallowed origins are shown as inert text, never fetched. */
+function AttachmentImage({
+  att,
+  onOpen,
+}: {
+  att: Attachment;
+  onOpen: (url: string) => void;
+}) {
+  const allowed = isAllowedAttachmentUrl(att.url);
+  const { src, error } = useAuthedBlobUrl(allowed ? att.url : null);
+  const name = att.original_name || att.filename || "attachment";
+
+  if (!allowed) {
+    // Disallowed origin — render the raw URL as inert text so the user can
+    // still inspect it without the browser fetching it.
+    return (
+      <div
+        className="text-xs text-base-400 italic px-2 py-1 rounded border border-base-700/40 break-all"
+        title="Attachment from disallowed origin"
+      >
+        Attachment blocked: {att.url}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-xs text-base-500 italic px-2 py-1 rounded border border-base-700/40">
+        Failed to load {name}
+      </div>
+    );
+  }
+
+  if (!src) {
+    return (
+      <div className="w-[160px] h-[120px] rounded-lg border border-base-700/40 bg-base-900 animate-pulse" />
+    );
+  }
+
+  return (
+    <div className="group relative inline-block">
+      <button
+        onClick={() => onOpen(src)}
+        className="block rounded-lg overflow-hidden border border-base-700/40 hover:border-accent/50 transition-colors duration-150"
+      >
+        <img
+          src={src}
+          alt={name}
+          className="max-w-[240px] max-h-[180px] object-contain bg-base-900"
+          loading="lazy"
+        />
+      </button>
+      <a
+        href={src}
+        download={name}
+        onClick={(e) => e.stopPropagation()}
+        title={`Download ${name}`}
+        aria-label={`Download ${name}`}
+        className="absolute bottom-1 right-1 w-7 h-7 rounded-md bg-base-900/80 hover:bg-base-800 border border-base-700/60 text-base-200 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+      >
+        <Download className="w-4 h-4" />
+      </a>
+    </div>
+  );
+}
 
 function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
   useEffect(() => {

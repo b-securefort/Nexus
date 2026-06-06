@@ -22,6 +22,19 @@ class AzResourceGraphTool(AzureToolBase):
     result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
     max_output_size = 16384
 
+    @staticmethod
+    def _trim_arg_error(error_str: str) -> str:
+        """Strip the Azure CLI support boilerplate from a Resource Graph error
+        (B10). `az graph query` appends a 'Please provide below info when asking
+        for support: timestamp/correlationId' block on bad queries — noise the
+        model can't act on. Keep the actionable InvalidQuery/ParserFailure detail
+        (everything before the boilerplate marker)."""
+        for marker in ("Please provide below info", "\ntimestamp:", "\ncorrelationId:"):
+            idx = error_str.find(marker)
+            if idx != -1:
+                error_str = error_str[:idx]
+        return error_str.rstrip()
+
     def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
         return f"Azure Resource Graph KQL query syntax {func_args.get('query', '')[:80]}"
 
@@ -96,9 +109,9 @@ class AzResourceGraphTool(AzureToolBase):
 
         # We use truncate=False because we need to parse the JSON first
         result_str = self._run_az(cmd, label="Resource Graph query", timeout=30, truncate=False)
-        
+
         if result_str.startswith("Error"):
-            return result_str
+            return self._trim_arg_error(result_str)
 
         # Parse and format the output
         try:

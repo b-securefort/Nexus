@@ -112,6 +112,9 @@ class Settings(BaseSettings):
     # App
     APP_ENV: str = "dev"  # dev | prod
     APP_LOG_LEVEL: str = "INFO"
+    # Echo every SQL statement to the log. Opt-in for debugging only — even in
+    # dev it floods the log and slows requests (B8). Off by default everywhere.
+    DB_ECHO: bool = False
     APP_CORS_ORIGINS: str = "http://localhost:5173"
 
     # ── Phase gating (see app/phases.py and gatesreadme.md) ────────────────

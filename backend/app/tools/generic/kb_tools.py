@@ -185,7 +185,7 @@ class SearchKBSemanticTool(Tool):
                 },
                 {"role": "user", "content": f"Query: {query}"},
             ],
-            max_tokens=120,
+            max_completion_tokens=120,
             temperature=0,
         )
         raw = resp.choices[0].message.content.strip().strip("`").strip()
@@ -221,7 +221,7 @@ class SearchKBSemanticTool(Tool):
                 },
                 {"role": "user", "content": f"Query: {query}\n\nDocuments:\n{doc_lines}"},
             ],
-            max_tokens=80,
+            max_completion_tokens=80,
             temperature=0,
         )
         raw = resp.choices[0].message.content.strip().strip("`").strip()

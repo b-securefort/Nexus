@@ -940,7 +940,9 @@ class TestAzPolicyCheckTool:
         ]))
         with _patch_az_logged_in():
             result = tool.execute({"action": "non_compliant_resources"}, _USER)
-        assert "NonCompliant" in result
+        # B4: output is now a tidy summary, not raw JSON — the resource name is
+        # surfaced (the complianceState is implied by the filter).
+        assert "res1" in result
 
     @patch("app.tools.base.subprocess.run")
     def test_list_assignments(self, mock_run):
@@ -950,7 +952,8 @@ class TestAzPolicyCheckTool:
         ]))
         with _patch_az_logged_in():
             result = tool.execute({"action": "list_assignments"}, _USER)
-        assert "enforce-tags" in result
+        # B4: summary prefers the human-readable displayName.
+        assert "Enforce Tags" in result
 
     @patch("app.tools.base.subprocess.run")
     def test_with_resource_group_scope(self, mock_run):
@@ -1226,16 +1229,40 @@ class TestWebFetchTool:
         assert "Hello World" in result
         assert "<html>" not in result  # HTML should be stripped
 
-    def test_learn_microsoft_routes_to_fetch_ms_docs(self):
-        """learn.microsoft.com is a JS SPA web_fetch can't read — it should be
-        short-circuited to an Error pointing at fetch_ms_docs, before any GET."""
+    @patch("app.tools.generic.web_fetch._shared_client")
+    def test_learn_microsoft_js_shell_routes_to_fetch_ms_docs(self, mock_client):
+        """A valid learn.microsoft.com page returns a JS/auth shell to static
+        fetchers — that must surface as an Error pointing at fetch_ms_docs via
+        the extraction-failure path (B11), now that we actually fetch."""
         tool = get_tool("web_fetch")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "<html><body>Access to this page requires authorization</body></html>"
+        mock_client.get.return_value = mock_response
+
         result = tool.execute(
             {"url": "https://learn.microsoft.com/en-us/azure/api-management/private-endpoint"},
             _USER,
         )
         assert result.startswith("Error")
         assert "fetch_ms_docs" in result
+
+    @patch("app.tools.generic.web_fetch._shared_client")
+    def test_learn_microsoft_404_is_distinguishable(self, mock_client):
+        """A dead learn.microsoft.com link must report HTTP 404, not be masked
+        as 'JS-rendered' like every other Learn URL used to be (B11)."""
+        tool = get_tool("web_fetch")
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.reason_phrase = "Not Found"
+        mock_client.get.return_value = mock_response
+
+        result = tool.execute(
+            {"url": "https://learn.microsoft.com/en-us/azure/this-page-does-not-exist"},
+            _USER,
+        )
+        assert result.startswith("Error")
+        assert "404" in result
 
     @patch("app.tools.generic.web_fetch._shared_client")
     def test_auth_wall_stub_is_an_error_not_success(self, mock_client):

@@ -777,7 +777,40 @@ def _compose_system_prompt(
     return "\n".join(parts), retrieved_ids, segments
 
 
-def _build_render_review_message(args: dict) -> dict | None:
+def _resolve_rendered_png(args: dict, func_name: str | None) -> tuple["Path | None", str, str]:
+    """Resolve the on-disk PNG/JPG a diagram tool produced and the display name.
+
+    Returns (image_path, display_name, fmt). image_path is None when the args
+    don't name a file or the format isn't a vision-acceptable image.
+
+    `generate_python_diagram` writes `output/<stem>.png` (no .drawio
+    intermediate) and accepts a filename that may carry a `.png` suffix, so it
+    resolves via the bare stem — matching the tool. The drawio tools may pass
+    either a `.drawio` filename or a stem; the .drawio name is what gets
+    rendered to a sibling .png (or .jpg).
+    """
+    from pathlib import Path
+
+    filename = (args.get("filename") or args.get("file_name") or "").strip()
+    fmt = (args.get("format") or "png").strip().lower()
+    if not filename:
+        return None, "", fmt
+    if fmt not in ("png", "jpg", "jpeg"):
+        # PDF/SVG aren't sent through OpenAI vision; skip image injection.
+        return None, "", fmt
+
+    if func_name == "generate_python_diagram":
+        stem = Path(filename).stem
+        return (Path("output") / f"{stem}.png"), f"{stem}.png", "png"
+
+    # Tools like generate_drawio_from_python pass a stem (no extension) — the
+    # .drawio file is what gets written + rendered to .png next to it.
+    if not filename.endswith(".drawio"):
+        filename = f"{filename}.drawio"
+    return (Path("output") / filename).with_suffix(f".{fmt}"), filename, fmt
+
+
+def _build_render_review_message(args: dict, func_name: str | None = None) -> dict | None:
     """If a render_drawio call produced an image, build a synthetic user message
     with the image inlined for the next model turn so the vision-capable model
     can review the rendered output.
@@ -787,22 +820,11 @@ def _build_render_review_message(args: dict) -> dict | None:
     in-memory `messages` list for the current handle_chat invocation.
     """
     import base64
-    from pathlib import Path
 
-    filename = (args.get("filename") or args.get("file_name") or "").strip()
-    fmt = (args.get("format") or "png").strip().lower()
-
-    if not filename:
-        return None
-    # Tools like generate_drawio_from_python pass a stem (no extension) — the
-    # .drawio file is what gets written + rendered to .png next to it.
-    if not filename.endswith(".drawio"):
-        filename = f"{filename}.drawio"
-    if fmt not in ("png", "jpg", "jpeg"):
-        # PDF/SVG aren't sent through OpenAI vision; skip image injection.
+    image_path, display_name, fmt = _resolve_rendered_png(args, func_name)
+    if image_path is None:
         return None
 
-    image_path = (Path("output") / filename).with_suffix(f".{fmt}")
     try:
         if not image_path.is_file():
             return None
@@ -814,15 +836,26 @@ def _build_render_review_message(args: dict) -> dict | None:
 
     mime = "image/png" if fmt == "png" else "image/jpeg"
     b64 = base64.b64encode(data).decode("ascii")
-    review_text = (
-        f"Rendered image of {filename} for visual review. Check: "
-        "(1) every edge label is readable and not overlapping any icon or "
-        "another label, (2) every numbered badge sits next to the connector "
-        "or icon it annotates, (3) connection lines do not pass through "
-        "unrelated icons or container titles, (4) bidirectional flows are "
-        "explicit. If you find issues, edit the .drawio with overwrite=true, "
-        "re-render, and review again. If it looks good, tell the user it's ready."
-    )
+    if func_name == "generate_python_diagram":
+        review_text = (
+            f"Rendered image of {display_name} for visual review. Check: "
+            "(1) container nesting matches the architecture, (2) edges connect "
+            "the right nodes with the right direction, (3) cluster labels read "
+            "correctly, (4) any edge flow labels are placed sensibly. If "
+            "something is wrong, edit the Python and re-run generate_python_diagram "
+            "with the same filename (it overwrites). If it looks good, tell the "
+            "user it's ready."
+        )
+    else:
+        review_text = (
+            f"Rendered image of {display_name} for visual review. Check: "
+            "(1) every edge label is readable and not overlapping any icon or "
+            "another label, (2) every numbered badge sits next to the connector "
+            "or icon it annotates, (3) connection lines do not pass through "
+            "unrelated icons or container titles, (4) bidirectional flows are "
+            "explicit. If you find issues, edit the .drawio with overwrite=true, "
+            "re-render, and review again. If it looks good, tell the user it's ready."
+        )
     return {
         "role": "user",
         "content": [
@@ -838,27 +871,20 @@ def _build_render_review_message(args: dict) -> dict | None:
     }
 
 
-def _attachment_for_rendered_png(args: dict) -> dict | None:
+def _attachment_for_rendered_png(args: dict, func_name: str | None = None) -> dict | None:
     """If a diagram tool call produced a PNG next to its .drawio file, build
     an attachment dict for the eventual assistant message's `attachments_json`.
 
-    Mirrors the path resolution in `_build_render_review_message` but produces
-    a frontend-friendly attachment record (served via `GET /api/output/<file>`)
-    instead of an OpenAI vision message. Returns None when no PNG exists on
-    disk yet, so iterations that fail validation don't attach stale images.
+    Mirrors the path resolution in `_build_render_review_message` (via the shared
+    `_resolve_rendered_png` helper) but produces a frontend-friendly attachment
+    record (served via `GET /api/output/<file>`) instead of an OpenAI vision
+    message. Returns None when no PNG exists on disk yet, so iterations that fail
+    validation don't attach stale images.
     """
-    from pathlib import Path
-
-    filename = (args.get("filename") or args.get("file_name") or "").strip()
-    fmt = (args.get("format") or "png").strip().lower()
-    if not filename:
-        return None
-    if not filename.endswith(".drawio"):
-        filename = f"{filename}.drawio"
-    if fmt not in ("png", "jpg", "jpeg"):
+    image_path, _display_name, fmt = _resolve_rendered_png(args, func_name)
+    if image_path is None:
         return None
 
-    image_path = (Path("output") / filename).with_suffix(f".{fmt}")
     try:
         stat = image_path.stat()
     except OSError:
@@ -1519,13 +1545,15 @@ async def handle_chat(
     # narrating without acting.
     narration_nudges_used: int = 0
 
-    # Context-usage gauge payload. Captured on the FIRST LLM call of the turn so
-    # it reflects RESTING occupancy (the context entering the turn, before this
-    # turn's tool outputs balloon `messages`). Compaction bounds resting
-    # occupancy, so this is stable turn-to-turn; sampling the last, tool-laden
-    # call would report transient peak that compaction discards next turn. See
-    # DESIGN.md §5 2026-06-05.
+    # Context-usage gauge payload. Computed at turn END over the resting context
+    # the NEXT turn will load (this turn's saved messages, with compaction
+    # applied) so the gauge reflects post-turn occupancy — recent tool outputs
+    # are carried verbatim (counted), older ones compacted (the gauge "drops when
+    # compacted", matching the UI). The FIRST LLM call seeds a fallback payload
+    # and a tiktoken->API calibration ratio, since the turn-end recompute has no
+    # authoritative API prompt_tokens of its own. See DESIGN.md §5 2026-06-06.
     resting_usage: dict | None = None
+    usage_calibration: float | None = None  # authoritative prompt_tokens / raw tiktoken total
 
     # A4 — Mark this conversation as held by this worker. Refreshed at the
     # top of each iteration AND opportunistically during long approval waits.
@@ -1663,13 +1691,24 @@ async def handle_chat(
                     prompt_tokens + completion_tokens,
                 )
                 if resting_usage is None:
-                    # Structural, input-side occupancy breakdown for the gauge.
-                    # tiktoken-counts each prompt segment and scales them to sum
-                    # to the authoritative API prompt_tokens. On this first
-                    # iteration `messages` is exactly the resting context that
-                    # was sent — this turn's assistant reply and tool outputs
-                    # have not been appended yet.
-                    from app.agent.token_usage import build_segments, context_window_for_model
+                    # First LLM call: seed (1) a fallback gauge payload reflecting
+                    # turn-start occupancy, and (2) the tiktoken->API calibration
+                    # ratio used by the turn-end recompute. On this first
+                    # iteration `messages` is exactly the resting context that was
+                    # sent — this turn's assistant reply and tool outputs have not
+                    # been appended yet. The displayed payload is overwritten at
+                    # turn end (see the `not tool_calls` branch).
+                    from app.agent.token_usage import (
+                        build_segments, context_window_for_model, raw_total_tokens,
+                    )
+                    raw_total_start = raw_total_tokens(
+                        system_segments=prompt_segments,
+                        tool_schemas=tool_schemas,
+                        messages=messages,
+                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                    )
+                    if raw_total_start > 0 and prompt_tokens > 0:
+                        usage_calibration = prompt_tokens / raw_total_start
                     segments = build_segments(
                         system_segments=prompt_segments,
                         tool_schemas=tool_schemas,
@@ -1744,6 +1783,53 @@ async def handle_chat(
                         (assistant_content or "")[-120:],
                     )
                     continue
+                # B5 — Recompute the gauge over the resting context the NEXT turn
+                # will load, so it reflects post-turn occupancy (this turn's saved
+                # messages, compacted) instead of turn-start. load_compacted_history
+                # is cheap here (DB reads + cached summaries); the LLM-summary
+                # callables it returns are discarded — the turn-start set scheduled
+                # below still covers this turn's cache misses. No authoritative API
+                # prompt_tokens is available, so scale the tiktoken total by the
+                # calibration ratio captured on the first call.
+                try:
+                    from app.agent.token_usage import (
+                        build_segments, context_window_for_model, raw_total_tokens,
+                    )
+                    resting_messages, _discard = load_compacted_history(
+                        session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT,
+                    )
+                    raw_resting = raw_total_tokens(
+                        system_segments=prompt_segments,
+                        tool_schemas=tool_schemas,
+                        messages=resting_messages,
+                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                    )
+                    est_prompt_tokens = (
+                        round(raw_resting * usage_calibration)
+                        if usage_calibration else raw_resting
+                    )
+                    if est_prompt_tokens > 0:
+                        resting_usage = {
+                            "prompt_tokens": est_prompt_tokens,
+                            "completion_tokens": 0,
+                            "cached_tokens": 0,
+                            "context_window": context_window_for_model(
+                                settings.AZURE_OPENAI_DEPLOYMENT,
+                                settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
+                            ),
+                            "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                            "segments": build_segments(
+                                system_segments=prompt_segments,
+                                tool_schemas=tool_schemas,
+                                messages=resting_messages,
+                                model=settings.AZURE_OPENAI_DEPLOYMENT,
+                                prompt_tokens=est_prompt_tokens,
+                            ),
+                        }
+                except Exception as e:
+                    # Keep the turn-start fallback payload on any failure.
+                    logger.warning("Turn-end resting-usage recompute failed: %s", e)
+
                 yield sse_done(conversation.id, usage=resting_usage)
                 # Schedule deferred compaction work (LLM summarisation of cache
                 # misses encountered when loading history this turn).  These run
@@ -2052,9 +2138,9 @@ async def handle_chat(
                 # API ordering valid.
                 if not is_error and func_name in (
                     "render_drawio", "generate_file", "patch_drawio_cell",
-                    "generate_drawio_from_python",
+                    "generate_drawio_from_python", "generate_python_diagram",
                 ):
-                    review_msg = _build_render_review_message(func_args)
+                    review_msg = _build_render_review_message(func_args, func_name)
                     if review_msg is not None:
                         post_iteration_messages.append(review_msg)
                         logger.info(
@@ -2066,7 +2152,7 @@ async def handle_chat(
                     # final response of this turn. Indexed by filename so that
                     # later iterations of the same diagram overwrite earlier
                     # captures — the user sees the most recent render only.
-                    attachment = _attachment_for_rendered_png(func_args)
+                    attachment = _attachment_for_rendered_png(func_args, func_name)
                     if attachment is not None:
                         pending_render_attachments[attachment["filename"]] = attachment
 

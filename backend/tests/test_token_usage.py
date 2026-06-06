@@ -3,6 +3,7 @@ from app.agent.token_usage import (
     build_segments,
     context_window_for_model,
     count_tokens,
+    raw_total_tokens,
 )
 
 
@@ -72,3 +73,39 @@ class TestBuildSegments:
         # Defensive: API reported no usage. Should not raise or divide by zero.
         segs = self._payload(0)
         assert isinstance(segs, list)
+
+
+class TestRawTotalTokens:
+    def _args(self, messages):
+        return dict(
+            system_segments={"System prompt": "You are a helpful assistant. " * 50},
+            tool_schemas=[{"type": "function", "function": {"name": "az_cli", "parameters": {}}}],
+            messages=messages,
+            model="gpt-5.4-mini",
+        )
+
+    def test_matches_build_segments_raw_total(self):
+        # raw_total_tokens must equal the unscaled total build_segments apportions:
+        # passing it as prompt_tokens yields segments summing to that same value.
+        msgs = [{"role": "user", "content": "deploy an aks cluster " * 10}]
+        raw = raw_total_tokens(**self._args(msgs))
+        segs = build_segments(**self._args(msgs), prompt_tokens=raw)
+        assert sum(s["tokens"] for s in segs) == raw
+
+    def test_grows_with_more_messages(self):
+        # The turn-end recompute relies on this: a heavier resting set must read
+        # as higher occupancy than a lighter one (the report's B5 complaint).
+        small = raw_total_tokens(**self._args([{"role": "user", "content": "hi"}]))
+        large = raw_total_tokens(
+            **self._args([{"role": "user", "content": "x " * 2000}])
+        )
+        assert large > small
+
+    def test_calibration_scales_estimate(self):
+        # Mirrors the orchestrator: ratio from a real call applied to a tiktoken
+        # total yields an authoritative-space estimate.
+        msgs = [{"role": "user", "content": "context " * 100}]
+        raw = raw_total_tokens(**self._args(msgs))
+        calibration = 1.2  # API counted 20% more than tiktoken (envelope overhead)
+        est = round(raw * calibration)
+        assert est > raw

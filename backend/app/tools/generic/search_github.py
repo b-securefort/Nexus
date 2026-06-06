@@ -10,6 +10,7 @@ import httpx
 
 from app.auth.models import User
 from app.tools.base import Tool
+from app.tools.generic.search_relax import relaxed_queries
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,12 @@ class SearchGithubTool(Tool):
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query, e.g. 'azure landing zone bicep' or 'aks private cluster terraform'",
+                "description": (
+                    "Search query. Use 2-3 broad keywords, not a sentence — the "
+                    "GitHub API matches ALL terms, so long natural-language "
+                    "phrases often return nothing. E.g. 'azure landing zone "
+                    "bicep' or 'aks private cluster terraform'."
+                ),
             },
             "search_type": {
                 "type": "string",
@@ -60,10 +66,6 @@ class SearchGithubTool(Tool):
         language = args.get("language", "")
         limit = min(args.get("limit", 5), 10)
 
-        q = query
-        if language:
-            q += f" language:{language}"
-
         from app.config import get_settings
         settings = get_settings()
 
@@ -74,29 +76,38 @@ class SearchGithubTool(Tool):
         if settings.GITHUB_TOKEN:
             headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
 
-        params: dict = {"q": q, "per_page": limit}
-        if search_type == "repositories":
-            params["sort"] = "stars"
-            params["order"] = "desc"
-
-        try:
-            with httpx.Client(timeout=15, headers=headers) as client:
+        def _fetch(client: httpx.Client, q: str) -> list:
+            params: dict = {"q": q, "per_page": limit}
+            if search_type == "repositories":
+                params["sort"] = "stars"
+                params["order"] = "desc"
+            resp = client.get(f"{_API_BASE}/search/{search_type}", params=params)
+            if resp.status_code == 401 and "Authorization" in headers:
+                logger.warning("GITHUB_TOKEN rejected (401); retrying unauthenticated")
+                retry_headers = {k: v for k, v in headers.items() if k != "Authorization"}
                 resp = client.get(
                     f"{_API_BASE}/search/{search_type}",
                     params=params,
+                    headers=retry_headers,
                 )
-                if resp.status_code == 401 and "Authorization" in headers:
-                    logger.warning("GITHUB_TOKEN rejected (401); retrying unauthenticated")
-                    retry_headers = {k: v for k, v in headers.items() if k != "Authorization"}
-                    resp = client.get(
-                        f"{_API_BASE}/search/{search_type}",
-                        params=params,
-                        headers=retry_headers,
-                    )
-                resp.raise_for_status()
-                data = resp.json()
+            resp.raise_for_status()
+            return resp.json().get("items", [])
 
-            items = data.get("items", [])[:limit]
+        try:
+            with httpx.Client(timeout=15, headers=headers) as client:
+                # The GitHub search API ANDs every term, so verbose queries can
+                # match nothing; on zero results, retry with shorter prefixes
+                # before giving up (B3).
+                items: list = []
+                for candidate in relaxed_queries(query):
+                    q = f"{candidate} language:{language}" if language else candidate
+                    items = _fetch(client, q)
+                    if items:
+                        if candidate != query:
+                            logger.info("search_github relaxed %r -> %r", query, candidate)
+                        break
+
+            items = items[:limit]
 
             if search_type == "repositories":
                 results = [

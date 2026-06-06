@@ -1,7 +1,32 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, CheckCircle, XCircle, Loader2, Play } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle, XCircle, Loader2, Play, Download } from "lucide-react";
+import { useAuthedBlobUrl } from "../hooks/useAuthedBlobUrl";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+/** Build the URL for the editable `.drawio` source next to a rendered diagram,
+ *  for tools that actually produce one. generate_python_diagram's source is a
+ *  `.py` (not served by serve_output), so it has no source download. */
+function drawioSourceUrl(
+  toolName: string,
+  args: Record<string, unknown>,
+  callId: string,
+): string | null {
+  if (toolName === "generate_python_diagram") return null;
+  const filename = typeof args.filename === "string" ? args.filename : "";
+  if (!filename) return null;
+  const stem = filename.endsWith(".drawio")
+    ? filename.slice(0, -".drawio".length)
+    : filename;
+  const cacheBust = encodeURIComponent(callId || "");
+  return `${API_BASE}/api/output/${encodeURIComponent(stem)}.drawio?v=${cacheBust}`;
+}
+
+/** Strip directory + cache-bust to a clean download filename. */
+function downloadName(url: string): string {
+  const path = url.split("?")[0];
+  return path.substring(path.lastIndexOf("/") + 1) || "download";
+}
 
 export interface ToolCallDisplay {
   call_id: string;
@@ -13,20 +38,34 @@ export interface ToolCallDisplay {
   expanded: boolean;
 }
 
-/** Build the URL for an image rendered by render_drawio. Returns null if the
+/** Build the URL for an image rendered by a diagram tool. Returns null if the
  * args don't identify a previewable PNG/JPG/SVG. The callId is appended as a
  * cache-bust query param so successive renders of the same filename - which
- * would otherwise share the URL - aren't served from the browser's cache. */
+ * would otherwise share the URL - aren't served from the browser's cache.
+ *
+ * `generate_python_diagram` writes `output/<stem>.png` from a bare filename
+ * stem (no .drawio intermediate), so it resolves via the stem directly. The
+ * drawio tools pass a `.drawio` filename whose sibling .png/.jpg/.svg is the
+ * rendered image. */
 function renderDrawioPreviewUrl(
+  toolName: string,
   args: Record<string, unknown>,
   callId: string,
 ): string | null {
   const filename = typeof args.filename === "string" ? args.filename : "";
+  if (!filename) return null;
+  const cacheBust = encodeURIComponent(callId || "");
+
+  if (toolName === "generate_python_diagram") {
+    // Match the tool: strip any extension to the stem, output is <stem>.png.
+    const stem = filename.replace(/\.[^/.]+$/, "");
+    return `${API_BASE}/api/output/${encodeURIComponent(stem)}.png?v=${cacheBust}`;
+  }
+
   if (!filename.endsWith(".drawio")) return null;
   const fmt = (typeof args.format === "string" ? args.format : "png").toLowerCase();
   if (fmt !== "png" && fmt !== "jpg" && fmt !== "svg") return null;
   const stem = filename.slice(0, -".drawio".length);
-  const cacheBust = encodeURIComponent(callId || "");
   return `${API_BASE}/api/output/${encodeURIComponent(stem)}.${fmt}?v=${cacheBust}`;
 }
 
@@ -100,9 +139,15 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
     !hasError &&
     (tc.name === "render_drawio" ||
       tc.name === "generate_file" ||
-      tc.name === "patch_drawio_cell")
-      ? renderDrawioPreviewUrl(tc.args, tc.call_id)
+      tc.name === "patch_drawio_cell" ||
+      tc.name === "generate_python_diagram")
+      ? renderDrawioPreviewUrl(tc.name, tc.args, tc.call_id)
       : null;
+  // B7: load the preview + source through authenticated blob fetch so they
+  // render/download in MSAL mode (a bare <img src> can't send the bearer token).
+  const sourceUrl = previewUrl ? drawioSourceUrl(tc.name, tc.args, tc.call_id) : null;
+  const preview = useAuthedBlobUrl(previewUrl);
+  const source = useAuthedBlobUrl(sourceUrl);
   const [lightbox, setLightbox] = useState(false);
   // generate_file's auto-render is best-effort: if drawio isn't installed or
   // the sidecar fails, the tool still reports success but no PNG exists and
@@ -160,7 +205,7 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
         </span>
       </button>
 
-      {previewUrl && !previewBroken && (
+      {previewUrl && !previewBroken && !preview.error && preview.src && (
         <>
           <div className="border-t border-base-700/50 px-3 py-2.5 bg-base-900/40">
             <button
@@ -170,13 +215,34 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
               title="Click to view full size"
             >
               <img
-                src={previewUrl}
+                src={preview.src}
                 alt={String(tc.args.filename || "rendered diagram")}
                 className="w-full max-h-[420px] object-contain rounded-lg bg-white"
                 loading="lazy"
                 onError={() => setPreviewBroken(true)}
               />
             </button>
+            {/* B6: download the rendered image and (when it exists) the editable source. */}
+            <div className="flex gap-2 mt-2">
+              <a
+                href={preview.src}
+                download={downloadName(previewUrl)}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs text-base-300 hover:text-base-100 px-2 py-1 rounded-md border border-base-700/60 hover:border-base-600 transition-colors duration-150"
+              >
+                <Download className="w-3.5 h-3.5" /> Image
+              </a>
+              {sourceUrl && source.src && (
+                <a
+                  href={source.src}
+                  download={downloadName(sourceUrl)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs text-base-300 hover:text-base-100 px-2 py-1 rounded-md border border-base-700/60 hover:border-base-600 transition-colors duration-150"
+                >
+                  <Download className="w-3.5 h-3.5" /> .drawio
+                </a>
+              )}
+            </div>
           </div>
           {lightbox && (
             <div
@@ -184,7 +250,7 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
               onClick={() => setLightbox(false)}
             >
               <img
-                src={previewUrl}
+                src={preview.src}
                 alt="Preview"
                 className="max-w-[95vw] max-h-[95vh] object-contain rounded-lg bg-white"
                 onClick={(e) => e.stopPropagation()}

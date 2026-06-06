@@ -5,6 +5,7 @@ Read-only, no approval needed.
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -34,6 +35,13 @@ _CUSTOM_DAYS = {
     "last_30_days": 30,
     "last_3_months": 90,
 }
+
+# Subscription IDs are GUIDs. Validate an explicitly-passed one before it goes
+# into a REST URL (defence-in-depth — the default from `az account show` is
+# already trusted).
+_SUBSCRIPTION_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class AzCostQueryTool(AzureToolBase):
@@ -74,6 +82,15 @@ class AzCostQueryTool(AzureToolBase):
                 "type": "string",
                 "description": "Optional: filter costs to a specific resource group name",
             },
+            "subscription": {
+                "type": "string",
+                "description": (
+                    "Optional subscription ID (GUID) to scope the query to. "
+                    "Defaults to the logged-in account's current subscription "
+                    "(from `az account show`). Use this to get costs for a "
+                    "subscription other than the active one."
+                ),
+            },
         },
         "required": ["query_type"],
     }
@@ -88,13 +105,31 @@ class AzCostQueryTool(AzureToolBase):
         time_period = args.get("time_period", "this_month")
         group_by = args.get("group_by", "none")
         filter_rg = args.get("filter_resource_group", "")
+        subscription = (args.get("subscription") or "").strip()
+
+        # Resolve the target subscription: an explicit (validated) arg wins,
+        # else fall back to the logged-in account's current subscription (#6).
+        if subscription:
+            if not _SUBSCRIPTION_RE.match(subscription):
+                return (
+                    "Error: subscription must be a subscription ID GUID "
+                    "(e.g. 00000000-0000-0000-0000-000000000000)."
+                )
+            sub_id = subscription
+        else:
+            sub_id = self._get_subscription_id()
+        if not sub_id:
+            return (
+                "Error: Could not determine the subscription. Pass `subscription` "
+                "or run 'az account show' to check the logged-in context."
+            )
 
         if query_type == "budget_status":
-            return self._query_budgets()
+            return self._query_budgets(sub_id)
         elif query_type == "forecast":
-            return self._query_forecast()
+            return self._query_forecast(sub_id)
         else:
-            return self._query_usage(time_period, group_by, filter_rg)
+            return self._query_usage(sub_id, time_period, group_by, filter_rg)
 
     # ── Subscription discovery ───────────────────────────────────────────
 
@@ -108,12 +143,8 @@ class AzCostQueryTool(AzureToolBase):
 
     # ── Usage query via REST API ─────────────────────────────────────────
 
-    def _query_usage(self, time_period: str, group_by: str, filter_rg: str) -> str:
+    def _query_usage(self, sub_id: str, time_period: str, group_by: str, filter_rg: str) -> str:
         """Query actual usage costs via the Cost Management REST API."""
-        sub_id = self._get_subscription_id()
-        if not sub_id:
-            return "Error: Could not determine the current subscription ID. Run 'az account show' to check."
-
         # Build the REST request body
         timeframe = _TIMEFRAME_MAP.get(time_period, "MonthToDate")
         dataset: dict = {
@@ -158,12 +189,8 @@ class AzCostQueryTool(AzureToolBase):
 
         return self._format_cost_response(raw, group_by)
 
-    def _query_forecast(self) -> str:
+    def _query_forecast(self, sub_id: str) -> str:
         """Query cost forecast via the REST API."""
-        sub_id = self._get_subscription_id()
-        if not sub_id:
-            return "Error: Could not determine the current subscription ID."
-
         body = {
             "type": "Usage",
             "timeframe": "MonthToDate",
@@ -186,12 +213,8 @@ class AzCostQueryTool(AzureToolBase):
 
         return self._format_cost_response(raw, "none")
 
-    def _query_budgets(self) -> str:
+    def _query_budgets(self, sub_id: str) -> str:
         """List budgets and their current spend."""
-        sub_id = self._get_subscription_id()
-        if not sub_id:
-            return "Error: Could not determine the current subscription ID."
-
         url = (
             f"https://management.azure.com/subscriptions/{sub_id}"
             f"/providers/Microsoft.Consumption/budgets?api-version=2023-11-01"

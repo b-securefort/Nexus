@@ -467,6 +467,33 @@ class TestAzCostQueryTool:
             result = tool.execute({"query_type": "usage"}, _USER)
         assert "timed out" in result or "subscription" in result.lower()
 
+    @patch("app.tools.base.subprocess.run")
+    def test_explicit_subscription_skips_account_show_and_scopes_url(self, mock_run):
+        """#6: an explicit subscription GUID is used directly — no `az account
+        show` call — and lands in the Cost Management REST URL."""
+        tool = get_tool("az_cost_query")
+        sub = "3e40a1d8-c14c-434b-946a-dd0d1775e92f"
+        # Only ONE subprocess call expected (the REST query); no account-show.
+        mock_run.return_value = _mock_subprocess_success(
+            json.dumps({"properties": {"columns": [], "rows": []}})
+        )
+        with _patch_az_logged_in():
+            tool.execute({"query_type": "usage", "subscription": sub}, _USER)
+        assert mock_run.call_count == 1
+        rest_cmd = mock_run.call_args_list[0][0][0]
+        assert "rest" in rest_cmd
+        assert sub in str(rest_cmd)
+
+    def test_invalid_subscription_rejected(self):
+        """A non-GUID subscription is rejected before any subprocess call."""
+        tool = get_tool("az_cost_query")
+        with _patch_az_logged_in():
+            result = tool.execute(
+                {"query_type": "usage", "subscription": "not-a-guid; rm -rf"}, _USER
+            )
+        assert result.startswith("Error")
+        assert "subscription" in result.lower()
+
     def test_requires_no_approval(self):
         tool = get_tool("az_cost_query")
         assert tool.requires_approval is False
@@ -476,6 +503,7 @@ class TestAzCostQueryTool:
         schema = tool.to_openai_schema()
         assert schema["function"]["name"] == "az_cost_query"
         assert "query_type" in schema["function"]["parameters"]["properties"]
+        assert "subscription" in schema["function"]["parameters"]["properties"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

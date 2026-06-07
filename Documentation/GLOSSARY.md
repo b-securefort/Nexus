@@ -49,6 +49,8 @@
 | **Text summary** | A cached LLM-generated condensation of a long user message (> 3 KB), stored in `messages.text_summary`. Computed once by compaction; used in place of the full content in all subsequent prompt builds to save tokens. The original content is preserved in the DB. | "message summary", "paste summary" |
 | **Image summary** | A cached vision-LLM description of an image attachment on a non-recent user message, stored in `messages.image_summary`. The most recent image-bearing message always keeps its actual bytes; older ones are replaced with this description in the composed system prompt. | "attachment summary", "vision description" |
 | **Risk assessment** | An advisory ✓ safe / ⚠ caution / ⛔ destructive verdict plus a plain-language command description, produced by a separate review LLM and floored by deterministic rules, rendered on the Approval card; it never gates execution by itself. | "risk score", "safety check", "approval reason" |
+| **Diagram IR** | The structural, coordinate-free description of a diagram (nested containers, nodes, edges, adornments, with style/layout tokens) consumed by the `diagram_ir` engine; positions are computed by its layout engine, not stated in the IR. | "diagram spec", "DSL", "drawio model" |
+| **Adornment** | A fixed-corner glyph/badge on a container or node (NSG on a subnet, WAF on a gateway) that the layout engine does not place on the grid. | "child icon", "decoration node" |
 
 ---
 

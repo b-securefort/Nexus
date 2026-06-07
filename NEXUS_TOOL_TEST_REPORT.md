@@ -48,7 +48,7 @@ Impact: the orchestrator recovered (model retried without the arrow and recorded
 Fix applied: pass `encoding="utf-8"` to the `subprocess.run` call (fixes both stdin encode and stdout decode). Verified: a diagram with an `Edge(label="ingress → app")` now renders + validates + auto-renders cleanly.
 File: [backend/app/tools/generic/_drawio_emitter.py](backend/app/tools/generic/_drawio_emitter.py#L745)
 
-**N2 — the architect diagram loop does not converge for a complex real topology.** *Severity: MEDIUM. — OPEN.*
+**N2 — the architect diagram loop does not converge for a complex real topology.** *Severity: MEDIUM. — FIXED (Part 1 + 2), verified.*
 Repro (E2E, `shared:architect`, "audit network topology + draw it" against the live sub): the model
 inventoried 3 VNets / 25 resources / 16 containers correctly, but all 3 `generate_drawio_from_python`
 attempts ended `Validation FAILED: 8 violation(s)` (recurring `[resource-parent]` — non-network nodes
@@ -56,10 +56,25 @@ like Managed Identity / Entra ID / Key Vault dragged visually inside VNet cluste
 iteration budget and shipped an unusable PNG (tall/narrow, stacked NSGs, overlapping labels, floating
 nodes). The simple "Front Door → App Service → SQL" diagram converged fine, so this is specifically a
 *large-graph* failure. The model was honest about the shortfall.
-Likely fixes (the `/tool-qa` (a) work item): (1) teach the architect to keep non-network resources out
-of VNet clusters; (2) decompose a whole-subscription topology into per-VNet sub-diagrams instead of one
-mega-diagram; and/or (3) raise the per-turn diagram-iteration budget so the validator-feedback loop can
-actually resolve all violations.
+Root cause (two modes): (A) a validator self-contradiction — `_check_resources_parented_to_subnets`
+flagged top-level (`parent="1"`) identity/DNS/PaaS nodes whose Graphviz coords overlapped a VNet bbox as
+a BLOCKING `[resource-parent]` violation, directly contradicting the non-blocking hint (and the skill
+rules) that those planes belong OUTSIDE the VNet — unwinnable since the model can't hand-edit coords;
+(B) dense-graph routing the model can't fix from Python at whole-subscription scale.
+Fix applied:
+- **Part 1 (validator):** exclude identity/DNS/PaaS/observability planes from the blocking check
+  (reuse `_IDENTITY/_DNS_ZONE/_PAAS_KEYWORDS`); the non-blocking hint still covers the wrongly-nested
+  direction. + 2 regression tests. [validate_drawio.py](backend/app/tools/generic/validate_drawio.py#L279)
+- **Part 2 (architect skill):** new "Large topologies — decompose" rule: when a topology spans >1 VNet
+  or >~12 nodes, produce an overview diagram + one per VNet instead of a mega-diagram.
+Verification (re-ran the network audit, conv 331): **`[resource-parent]` count = 0 across all 7 renders**
+(was ≥1 and unwinnable every time); the model explicitly cited the decomposition rule, produced a clean,
+readable VNet-level overview, converged, and stopped — instead of shipping a failed mega-diagram.
+Residual (out of scope for N2): the model still occasionally writes the forbidden `from diagrams import
+AzureGeneric` (the AST guard rejects it and it recovers) — a recurring instruction-adherence trip worth a
+separate hardening (e.g. have the emitter silently strip that import, since AzureGeneric is injected anyway);
+and the final diagram converges to "acceptable" rather than a clean `Validation PASSED` (2 residual
+edge/label hints the model judged intentional).
 
 ---
 

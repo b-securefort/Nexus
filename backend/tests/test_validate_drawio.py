@@ -710,3 +710,64 @@ def test_hint_orphan_badge(tmp_path):
     assert "[hint]" in report
     assert "badge-orphan" in report
     assert "200px" in report or "floating" in report or "empty space" in report
+
+
+def test_top_level_identity_overlapping_vnet_not_flagged(tmp_path):
+    """N2 regression: a Managed Identity correctly placed at canvas level
+    (parent="1") whose Graphviz coordinates happen to fall inside a VNet's
+    bounding box must NOT trip the blocking [resource-parent] check. That would
+    contradict the architectural rule (identity is not subnet-resident) and is
+    unwinnable since the model can't hand-edit coordinates."""
+    cells = """
+    <mxCell id="vnet" value="vnet-prod (10.0.0.0/16)"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+    </mxCell>
+    <mxCell id="snet-data" value="Data Subnet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;"
+      vertex="1" parent="vnet">
+      <mxGeometry x="40" y="60" width="300" height="200" as="geometry"/>
+    </mxCell>
+    <mxCell id="vm" value="App VM"
+      style="shape=image;image=img/lib/azure2/compute/Virtual_Machine.svg;"
+      vertex="1" parent="snet-data">
+      <mxGeometry x="40" y="60" width="64" height="64" as="geometry"/>
+    </mxCell>
+    <mxCell id="mi" value="Managed Identity"
+      style="shape=image;image=img/lib/azure2/identity/Managed_Identities.svg;"
+      vertex="1" parent="1">
+      <mxGeometry x="120" y="120" width="64" height="64" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "mi-overlap.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "[resource-parent]" not in report
+
+
+def test_subnet_resident_floating_at_canvas_still_flagged(tmp_path):
+    """Guard for the above fix: a genuinely subnet-resident resource (VM) left at
+    parent="1" but sitting inside a VNet bbox MUST still be flagged — the
+    exclusion is only for canvas-level planes (identity/DNS/PaaS/observability)."""
+    cells = """
+    <mxCell id="vnet" value="vnet-prod (10.0.0.0/16)"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;"
+      vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="600" height="400" as="geometry"/>
+    </mxCell>
+    <mxCell id="snet-data" value="Data Subnet"
+      style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;"
+      vertex="1" parent="vnet">
+      <mxGeometry x="40" y="60" width="300" height="200" as="geometry"/>
+    </mxCell>
+    <mxCell id="orphanvm" value="Virtual Machine"
+      style="shape=image;image=img/lib/azure2/compute/Virtual_Machine.svg;"
+      vertex="1" parent="1">
+      <mxGeometry x="420" y="300" width="64" height="64" as="geometry"/>
+    </mxCell>
+    """
+    p = _write(tmp_path, "vm-floating.drawio", cells)
+    report = validate_drawio_file(p)
+    assert "FAILED" in report
+    assert "[resource-parent]" in report
+    assert "orphanvm" in report

@@ -276,11 +276,31 @@ def _check_resources_parented_to_subnets(cells: dict[str, _Cell]) -> list[str]:
         if not c.is_resource_candidate:
             continue
         
-        # Skip global services that should be on canvas
+        # Skip resources that legitimately live at canvas level (parent="1"),
+        # not in a subnet. A top-level node whose Graphviz coordinates happen to
+        # overlap a VNet's bounding box is a *layout* artifact, not a parenting
+        # error — and demanding it move INTO a subnet directly contradicts the
+        # architectural rule that identity / DNS / PaaS / observability planes
+        # belong OUTSIDE the VNet. _hint_architectural_placement already covers
+        # the wrongly-nested direction non-blockingly. Without these skips the
+        # validator is unwinnable for any topology that mixes VNets with those
+        # planes: the model puts (e.g.) Managed Identity at parent="1" per the
+        # rules, Graphviz drops it onto a cluster bbox, and this check then
+        # demands the opposite of the hint (N2).
         v = c.value.lower()
-        if any(kw in v for kw in ['internet', 'user', 'front door', 'cdn', 'monitor', 'log analytics', 'sentinel', 'cloudwatch', 'cloudtrail']):
+        if any(kw in v for kw in ('internet', 'user', 'front door', 'cdn')):
             continue
-        
+        if any(kw in v for kw in _OBSERVABILITY_KEYWORDS):
+            continue
+        if any(kw in v for kw in _IDENTITY_KEYWORDS):
+            continue
+        if any(kw in v for kw in _DNS_ZONE_KEYWORDS):
+            continue
+        if any(kw in v for kw in _PAAS_KEYWORDS) and not any(
+            kw in v for kw in _PAAS_SUBNET_RESIDENT
+        ):
+            continue
+
         # If resource has parent="1" but there are subnets in the diagram, flag it
         if c.parent == "1" and subnet_ids:
             # Check if this resource is visually inside a VNet (by coordinates)

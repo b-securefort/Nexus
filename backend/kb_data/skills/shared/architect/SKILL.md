@@ -100,6 +100,33 @@ These four corrections recur often enough to be inline rules, not learnings to r
 - **Private DNS zones live in the hub by default.** Unless the user explicitly says spokes own their DNS, draw `privatelink.*.azure.com` zones inside the hub VNet's DNS zone container (or at canvas level grouped under "Hub DNS"). Spokes link via VNet Links — show the link as a thin connector, not a duplicated zone per spoke.
 - **NVA inspection is one bidirectional hairpin edge, not ambiguous unidirectional arrows.** When traffic enters an NVA (Azure Firewall / 3rd-party appliance), gets inspected, then routes back out the same NIC, draw a single bidirectional edge labelled "inspect (hairpin)" rather than two arrows that suggest a one-way pass-through.
 
+### Large topologies — decompose, don't draw one mega-diagram
+
+The toolchain lays out cleanly for **small** graphs. A single diagram of a whole
+subscription (multiple VNets, dozens of resources, many containers) does **not**
+converge: Graphviz routing in a crowded canvas produces unavoidable edge-through-icon
+crossings and label overlaps that you cannot fix from Python (you don't control
+coordinates), so validation keeps FAILING until the budget runs out and you ship a poor
+diagram. Avoid that by **splitting the work**:
+
+- **Trigger.** When the topology you're about to draw spans **more than one VNet**, OR has
+  **more than ~12 resource nodes**, OR more than ~6 containers — do NOT attempt one diagram.
+  This applies especially to *audit/inventory* requests ("map / draw my whole network").
+- **Decompose by network boundary.** Produce **one diagram per VNet** (or per environment —
+  dev/beta/prod), each a separate `generate_drawio_from_python` call with its own `filename`
+  (e.g. `net-vnet-prod`, `net-vnet-beta`). Each sub-diagram shows that VNet's subnets, the
+  resources in them, its NSGs, and the private endpoints it hosts — small enough to lay out
+  cleanly and pass validation.
+- **Add one overview diagram** at VNet granularity: each VNet as a single box, peering edges
+  between them, and shared/hub services (DNS, firewall) — **no** intra-VNet detail. This is
+  the "map" the user actually wants for the big picture.
+- **Tell the user the plan first.** In your Phase 2 reflection, say how many diagrams you'll
+  produce and what each covers ("an overview plus one per VNet: prod, beta, dev"). Confirm
+  before generating, same as any other decision.
+- **Budget.** N VNets ⇒ ~N+1 diagram calls. Stay terse on each — at most ONE fix-up per
+  sub-diagram if validation FAILS; do not chase `[hint]`s across sub-diagrams. If even the
+  per-VNet diagram is too dense, split further by subnet tier rather than over-iterating.
+
 ### The five phases (six with iteration)
 
 **Phase 1 — Research.** Before saying anything about the design, read the KB. Relevant agent learnings from previous runs are retrieved automatically into your system prompt — check the **Relevant agent learnings** section before you start. ALWAYS also, in this order:

@@ -143,6 +143,15 @@ spine (band, layout=column)
 └─ obs      (monitoring "Monitoring", row)   → appi, law          (tail)
 ```
 
+### Focal points & straight connectors
+
+The engine routes **straight-first**: every connector is a direct, drag-to-edit line *unless* a straight shot would cut through another icon, in which case that one edge bends orthogonally to clear it. So ~all arrows are straight — but only if **you place connected nodes where a straight line between them is clean.** Two rules follow:
+
+- **Give each hub a focal position.** Find the node(s) with the most edges (in + out) — usually the App Service / AKS / the central gateway. Place each hub in the **middle of its tier** with its neighbours immediately around it (the stage above feeding in, the stage below/beside receiving), so its many connectors **radiate straight** like spokes. A hub shoved to a corner drags long lines across the whole canvas. There can be **more than one** focal point (e.g. an ingress gateway and a data hub) — centre each within its own neighbourhood.
+- **Adjacency makes straightness.** Put the source and target of an edge in adjacent stages / aligned rows so the direct line is short and unobstructed. If you find yourself wanting a connector to snake across the diagram, the two nodes are in the wrong place — move them, don't rely on routing.
+
+**Commit to ONE direction — no hybrids.** The "all over the place" look comes from mixing axes: a horizontal main row *and* a VNet block dropped underneath it, so traffic flows right **and** down. Pick LR or TB (above) and keep every stage on that one axis. A VNet/subnet is **one stage of the spine**, drawn inline with the flow — not a detached block hung off a perpendicular side.
+
 ### Expressing 2D layouts within a stage
 
 The engine arranges each container's children along one axis (its `layout`). For 2D *inside* a stage, nest invisible **`band`** containers: a satellite row over the main flow = a `column` band of `[top_band (row), main_band (row)]`; primary/standby replicas = a `row` band of `column` bands. This yields grid-aligned layout without coordinates. Use this for the *ribs*; the spine above is what gives the picture its head and tail.
@@ -217,6 +226,8 @@ Keep it to a scannable list, then ask "Does this match what you want me to draw?
 - **`align_to` a same-band sibling** — stacks them, overlaps labels, collapses chained edges into one line ("parallel lines to the same place"). The engine ignores it now; model the PE in its consuming subnet instead. `align_to` is cross-band only.
 - **Shipping a diagram that doesn't match the confirmed blueprint** — the worst failure. Re-confirm a changed blueprint instead of silently dropping structure.
 - **No flow spine (the "no head, no tail" sprawl)** — outer layout must run *with* `direction` (row for LR, column for TB), spine children ordered head→tail by traffic position. Never an LR diagram with a `column` outer stacking the flow downward.
+- **Hybrid axes (flow runs right *and* down)** — pick LR or TB and keep every stage on it; a VNet is an inline stage, not a block hung below the row.
+- **Hub in a corner** — the most-connected node belongs in the middle of its tier so its straight connectors radiate; a corner hub drags lines across the canvas.
 - **Trying to express 2D with a single container** — use nested invisible `band`s.
 - **Modeling WAF as a node** — it's an adornment on the protected resource.
 - **Putting App Service / Cosmos / Key Vault inside a VNet container** — they're PaaS (top level); use a Private Endpoint inside the consuming subnet.

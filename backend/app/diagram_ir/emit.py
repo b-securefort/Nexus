@@ -89,17 +89,28 @@ def emit_drawio(diagram: Diagram, routes=None) -> str:
         geometry = '<mxGeometry relative="1" as="geometry"/>'
         if routes is not None and routes[i] is not None:
             r = routes[i]
-            style += (
-                f"exitX={r.exitX:g};exitY={r.exitY:g};exitDx=0;exitDy=0;"
-                f"entryX={r.entryX:g};entryY={r.entryY:g};entryDx=0;entryDy=0;"
-            )
-            if r.waypoints:
-                pts = "".join(f'<mxPoint x="{x:g}" y="{y:g}"/>' for x, y in r.waypoints)
-                geometry = (
-                    '<mxGeometry relative="1" as="geometry">'
-                    f'<Array as="points">{pts}</Array>'
-                    "</mxGeometry>"
+            if r.straight:
+                # Straight, drag-to-edit connector: drop the orthogonal router and
+                # (when floating) the fixed connection points, so draw.io draws one
+                # direct border-to-border line with no waypoints to wrangle.
+                style = style.replace("edgeStyle=orthogonalEdgeStyle;", "")
+                if not r.floating:
+                    style += (
+                        f"exitX={r.exitX:g};exitY={r.exitY:g};exitDx=0;exitDy=0;"
+                        f"entryX={r.entryX:g};entryY={r.entryY:g};entryDx=0;entryDy=0;"
+                    )
+            else:
+                style += (
+                    f"exitX={r.exitX:g};exitY={r.exitY:g};exitDx=0;exitDy=0;"
+                    f"entryX={r.entryX:g};entryY={r.entryY:g};entryDx=0;entryDy=0;"
                 )
+                if r.waypoints:
+                    pts = "".join(f'<mxPoint x="{x:g}" y="{y:g}"/>' for x, y in r.waypoints)
+                    geometry = (
+                        '<mxGeometry relative="1" as="geometry">'
+                        f'<Array as="points">{pts}</Array>'
+                        "</mxGeometry>"
+                    )
         cells.append(
             f'<mxCell id="edge{i}" value="{_esc(e.label)}" style="{style}" '
             f'edge="1" parent="1" source="{_esc(e.source)}" target="{_esc(e.target)}">'

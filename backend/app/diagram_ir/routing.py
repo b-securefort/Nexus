@@ -24,6 +24,11 @@ class RouteInfo:
     entryY: float
     points: list[tuple[float, float]]   # absolute polyline [exit, ..., entry]
     waypoints: list[tuple[float, float]] = None  # interior bend points for the emitter
+    # straight = a direct source→target line with no bends; floating = let draw.io
+    # pick the border connection points (no fixed exit/entry) so the line stays a
+    # clean, drag-to-edit straight segment. Set together by the straight-first pass.
+    straight: bool = False
+    floating: bool = False
 
     def __post_init__(self):
         if self.waypoints is None:
@@ -138,6 +143,53 @@ def _bbox(b):
     return (b.x, b.y, b.x + b.w, b.y + b.h)
 
 
+# Straight-first routing: a direct source→target line is preferred (no waypoints,
+# trivially editable in draw.io). We only fall back to the orthogonal gutter route
+# when that straight line would visibly cut through another icon. An icon is
+# shrunk by this inset before the test so a line merely grazing a corner is fine.
+_STRAIGHT_INSET = 6.0
+
+
+def _seg_hits_rect(p0, p1, rect) -> bool:
+    """True if segment p0→p1 passes through the interior of axis-aligned `rect`
+    (x1, y1, x2, y2). Liang–Barsky clip; handles diagonal segments (the L-shape
+    test in geometry.py only handles axis-aligned ones)."""
+    x1, y1, x2, y2 = rect
+    if x1 >= x2 or y1 >= y2:
+        return False
+    (ax, ay), (bx, by) = p0, p1
+    dx, dy = bx - ax, by - ay
+    p = (-dx, dx, -dy, dy)
+    q = (ax - x1, x2 - ax, ay - y1, y2 - ay)
+    t0, t1 = 0.0, 1.0
+    for pi, qi in zip(p, q):
+        if abs(pi) < 1e-9:
+            if qi < 0:
+                return False            # parallel to this edge and outside the slab
+        else:
+            r = qi / pi
+            if pi < 0:
+                if r > t1:
+                    return False
+                t0 = max(t0, r)
+            else:
+                if r < t0:
+                    return False
+                t1 = min(t1, r)
+    return t1 - t0 > 1e-6               # parametric: a real (non-grazing) overlap
+
+
+def _straight_clear(p0, p1, node_boxes, src, tgt) -> bool:
+    for nid, bx in node_boxes.items():
+        if nid in (src, tgt):
+            continue
+        shrunk = (bx[0] + _STRAIGHT_INSET, bx[1] + _STRAIGHT_INSET,
+                  bx[2] - _STRAIGHT_INSET, bx[3] - _STRAIGHT_INSET)
+        if _seg_hits_rect(p0, p1, shrunk):
+            return False
+    return True
+
+
 def _seg_hits_interior(p0, p1, box) -> bool:
     x1, y1, x2, y2 = box
     (ax, ay), (bx, by) = p0, p1
@@ -242,6 +294,16 @@ def route_edges_gutter(diagram: Diagram) -> list[RouteInfo | None]:
         if info is None:
             out.append(None)
             continue
+        # Straight-first: a direct center→center line that clears every other icon
+        # becomes a clean, waypoint-free, floating connector. Only when it would cut
+        # through an icon do we fall back to the orthogonal gutter route below.
+        s, t = boxes[e.source], boxes[e.target]
+        sc, tc = _center(s), _center(t)
+        if _straight_clear(sc, tc, node_boxes, e.source, e.target):
+            out.append(RouteInfo(info.exitX, info.exitY, info.entryX, info.entryY,
+                                 points=[sc, tc], waypoints=[],
+                                 straight=True, floating=True))
+            continue
         start, goal = info.points[0], info.points[-1]
         # obstacles: other icons inflated; src/tgt exact (border-touch allowed)
         obs = []
@@ -310,7 +372,7 @@ def _separate_lanes(routes, diagram, node_boxes) -> None:
     so A (icon-crossing) can never regress."""
     segs: list[tuple] = []   # (ridx, k, orient, coord, lo, hi)
     for ridx, r in enumerate(routes):
-        if r is None:
+        if r is None or r.straight:      # never bend a straight line back into lanes
             continue
         for k in range(len(r.points) - 1):
             (ax, ay), (bx, by) = r.points[k], r.points[k + 1]

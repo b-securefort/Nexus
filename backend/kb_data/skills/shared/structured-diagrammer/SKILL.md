@@ -85,7 +85,14 @@ A reference architecture reads in one direction. The engine arranges a container
 - **LR (left→right)** for a **sequential request pipeline** that reads like a sentence — several thin stages (`ingress → process → store`). Outer `layout: row`; each stage a `column` stacking top↕down.
 - Rough tie-breaker: busiest tier has more resources than there are tiers → TB; more stages than items-per-stage → LR. Honor an explicit user/KB preference over the heuristic.
 
-In both: head is the first child, tail the last. **Never invert the axes** (an LR diagram with a `column` outer holding `row` bands stacks the flow downward → no head, no tail, just sprawl). If `direction: LR`, outer layout is `row`; if `TB`, `column`. Order spine children by traffic position, not resource type.
+In both: head is the first child, tail the last. **Never invert the axes** (an LR diagram with a `column` outer holding `row` bands stacks the flow downward → no head, no tail, just sprawl). If `direction: LR`, outer layout is `row`; if `TB`, `column`. Order spine children by traffic position, not resource type. **Commit to one axis — no hybrids** (a horizontal row *plus* a VNet block dropped below it makes traffic flow right *and* down — the "all over the place" look). A VNet/subnet is one inline stage of the spine, not a detached side block.
+
+## Focal points & straight connectors
+
+The engine routes **straight-first**: each connector is a direct, drag-to-edit line unless a straight shot would cut through an icon (then that one edge bends to clear it). To keep arrows straight, **lay out for it**:
+
+- **Put each hub at a focal position** — the node with the most edges (App Service, AKS, the central gateway) goes in the **middle of its tier**, neighbours around it, so connectors radiate straight like spokes. More than one focal point is fine; centre each in its neighbourhood. A corner hub drags long lines across the canvas.
+- **Adjacency makes straightness** — keep an edge's source and target in adjacent stages / aligned rows. If a connector wants to snake across the picture, the nodes are misplaced — move them rather than leaning on the router.
 
 ## Expressing 2D layouts within a stage
 

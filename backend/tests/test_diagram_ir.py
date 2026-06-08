@@ -355,6 +355,47 @@ def test_edge_overlap_detected():
     assert "edge-overlap" in overlaps[0]
 
 
+# --- straight-first routing: direct lines preferred, bend only to avoid an icon ---
+
+def test_route_prefers_straight_when_clear():
+    """A clear shot from A to C (B is far off the line) → a straight, floating,
+    waypoint-free connector (easy to drag-edit in draw.io)."""
+    d = Diagram(nodes=[
+        Node(id="a", label="A", icon="azure/app_services", x=0, y=0, w=56, h=56),
+        Node(id="b", label="B", icon="azure/redis", x=200, y=400, w=56, h=56),
+        Node(id="c", label="C", icon="azure/key_vaults", x=400, y=0, w=56, h=56),
+    ], edges=[Edge("a", "c", "flow")])
+    routes = route_edges_gutter(d)
+    assert routes[0].straight and routes[0].floating
+    assert routes[0].waypoints == []
+
+
+def test_route_bends_only_to_avoid_an_icon():
+    """B sits directly between A and C: a straight line would cut through it, so
+    the route falls back to an orthogonal path with waypoints — and clears B."""
+    d = Diagram(nodes=[
+        Node(id="a", label="A", icon="azure/app_services", x=0, y=0, w=56, h=56),
+        Node(id="b", label="B", icon="azure/api_management", x=200, y=0, w=56, h=56),
+        Node(id="c", label="C", icon="azure/key_vaults", x=400, y=0, w=56, h=56),
+    ], edges=[Edge("a", "c", "flow")])
+    routes = route_edges_gutter(d)
+    assert not routes[0].straight
+    assert routes[0].waypoints                       # bent
+    assert not check_edge_crossings(d, routes)       # but no longer crosses B
+
+
+def test_straight_route_emits_no_waypoints_or_orthogonal_style():
+    d = Diagram(nodes=[
+        Node(id="a", label="A", icon="azure/app_services", x=0, y=0, w=56, h=56),
+        Node(id="c", label="C", icon="azure/key_vaults", x=400, y=0, w=56, h=56),
+    ], edges=[Edge("a", "c", "flow")])
+    layout_diagram(d)  # no-op geometry already set, but exercises the real path
+    routes = route_edges_gutter(d)
+    xml = emit_drawio(d, routes=routes)
+    assert "<Array as=\"points\">" not in xml          # no waypoints to drag
+    assert "orthogonalEdgeStyle" not in xml            # straight, not orthogonal
+
+
 def test_transversal_crossing_not_flagged_as_overlap():
     """A '+' crossing (perpendicular) must NOT be flagged as an overlap."""
     from app.diagram_ir.geometry import check_edge_overlaps

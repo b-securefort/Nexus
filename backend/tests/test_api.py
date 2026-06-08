@@ -53,7 +53,7 @@ class TestSkillsAPI:
         assert resp.status_code == 200
         tools = resp.json()
         assert isinstance(tools, list)
-        assert len(tools) == 28  # 27 prior + read_file (run_shell → execute_script is a rename, net +1)
+        assert len(tools) == 29  # 28 prior + generate_structured_diagram (structural-IR diagram tool)
         tool_names = [t["name"] for t in tools]
         assert "generate_file" in tool_names
         assert "read_file" in tool_names

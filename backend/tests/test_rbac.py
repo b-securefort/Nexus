@@ -104,7 +104,7 @@ class TestFilters:
         skills = rbac.allowed_skills_for(_user("architect"))
         assert skills == {
             "kb-searcher", "chat-with-kb", "architect",
-            "drawio-diagrammer",
+            "drawio-diagrammer", "structured-diagrammer", "structured-architect",
         }
 
     def test_engineer_cannot_use_architect_only_tools(self, deployed_mode):
@@ -130,7 +130,7 @@ class TestFilters:
         skills = rbac.allowed_skills_for(_user("engineer", "architect"))
         assert skills == {
             "kb-searcher", "chat-with-kb", "architect",
-            "drawio-diagrammer",
+            "drawio-diagrammer", "structured-diagrammer", "structured-architect",
         }
 
 

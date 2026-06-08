@@ -40,7 +40,8 @@ class RoleAccess(TypedDict):
 # Tier intent (see DESIGN.md §5 entry 2026-05-17 "Consolidate shared skills"):
 #   __default__  → Default skill only, read-only tools
 #   engineer     → Default + Azure Engineer, full Azure execute access
-#   architect    → all 5 skills including both drawio specialists
+#   architect    → all shared skills, including both drawio specialists and the
+#                  structural-IR diagram persona + specialist
 DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
     "__default__": {
         "skills": ["kb-searcher"],
@@ -98,6 +99,8 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "chat-with-kb",
             "architect",
             "drawio-diagrammer",
+            "structured-diagrammer",
+            "structured-architect",
         ],
         "tools": [
             # Default + Engineer tiers
@@ -128,6 +131,8 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "ask_user",
             "render_drawio",
             "generate_drawio_from_python",
+            # structural-IR diagram engine (structured-diagrammer / -architect skills)
+            "generate_structured_diagram",
             # drawio-diagrammer specialist (hand-written XML + per-cell patch)
             "patch_drawio_cell",
         ],

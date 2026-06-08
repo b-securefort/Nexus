@@ -187,6 +187,7 @@ class Settings(BaseSettings):
     TOOL_RENDER_DRAWIO_ENABLED: bool = True
     TOOL_PYTHON_DIAGRAM_ENABLED: bool = True
     TOOL_DRAWIO_FROM_PYTHON_ENABLED: bool = True
+    TOOL_STRUCTURED_DIAGRAM_ENABLED: bool = True
     # Optional: HTTP endpoint of a drawio-image-export2 sidecar.
     # When set, render_drawio POSTs the XML to this URL instead of calling
     # the local draw.io desktop CLI. Use this for containerized deployments

@@ -124,6 +124,21 @@ def validate_ir(diagram: Diagram) -> IRValidation:
             v.warnings.append(f"duplicate edge {e.source}->{e.target}")
         pair_seen.add(key)
 
+    # align_to is a cosmetic hint — a broken ref just means "no alignment", so
+    # warn rather than block (unlike parent/edge refs, which are hard errors).
+    for b in (*diagram.containers, *diagram.nodes):
+        if b.align_to is not None:
+            if b.align_to not in boxes:
+                v.warnings.append(f"'{b.id}': align_to '{b.align_to}' does not exist (ignored)")
+            elif b.align_to == b.id:
+                v.warnings.append(f"'{b.id}': align_to points at itself (ignored)")
+            elif b.parent is not None and boxes[b.align_to].parent == b.parent:
+                v.warnings.append(
+                    f"'{b.id}': align_to '{b.align_to}' is a sibling in the same band "
+                    f"(ignored — it would stack them and collapse edges onto one line; "
+                    f"align_to is for a satellite in a DIFFERENT band)"
+                )
+
     return v
 
 

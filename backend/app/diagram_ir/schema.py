@@ -32,6 +32,10 @@ class Node:
     label: str
     icon: str
     parent: Optional[str] = None   # container id, or None = top-level (canvas)
+    # Author layout hint: id of a box whose cross-axis center this box should
+    # align over (a satellite service sitting above the element it relates to).
+    # Applied as a post-placement shift; NOT inferred from edges.
+    align_to: Optional[str] = None
     adornments: list[Adornment] = field(default_factory=list)
     # Geometry (absolute). Hand-set in the skeleton; engine-computed later.
     x: float = 0.0
@@ -56,6 +60,9 @@ class Container:
     # to layout="grid" (0 = auto ≈ sqrt(n)).
     layout: Literal["", "row", "column", "grid"] = ""
     grid_cols: int = 0
+    # See Node.align_to — same hint for a satellite container (e.g. a Storage
+    # account group that should sit above the resource it serves).
+    align_to: Optional[str] = None
     adornments: list[Adornment] = field(default_factory=list)
     x: float = 0.0
     y: float = 0.0

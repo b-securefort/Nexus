@@ -20,7 +20,7 @@ def build() -> Diagram:
                   children=["internet", "fd", "vnet", "data"]),
 
         Container(id="sa", label="Storage account", style="group", layout="row",
-                  parent="top_band", children=["blob"]),
+                  parent="top_band", children=["blob"], align_to="appsvc"),
 
         Container(id="vnet", label="10.0.0.0/16 (virtual network)", style="vnet", layout="row",
                   parent="main_band", children=["appsubnet", "pesubnet"],
@@ -44,7 +44,7 @@ def build() -> Diagram:
         Node(id="internet", label="Internet", icon="shape/cloud", parent="main_band"),
         Node(id="fd", label="Azure Front Door + WAF", icon="azure/front_doors", parent="main_band"),
         Node(id="blob", label="Azure Blob Storage", icon="azure/blob", parent="sa"),
-        Node(id="dns", label="Private DNS zone", icon="azure/dns_private_zones", parent="top_band"),
+        Node(id="dns", label="Private DNS zone", icon="azure/dns_private_zones", parent="top_band", align_to="vnet"),
         Node(id="appsvc", label="Azure App Service", icon="azure/app_services", parent="plan"),
         Node(id="pe", label="Private endpoint", icon="azure/private_endpoint", parent="pesubnet"),
         Node(id="mysql_primary", label="MySQL flexible (primary)", icon="azure/mysql", parent="primary_col"),

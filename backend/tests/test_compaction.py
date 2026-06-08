@@ -292,6 +292,57 @@ def test_compaction_persists_summary_and_advances_boundary(db_session):
     assert conv.summary_through_message_id > 0
 
 
+def test_compaction_preserves_older_user_messages_across_turns(db_session):
+    """Regression: once the watermark advances past an older user message, that
+    message's content must still reach the model on the NEXT turn via the
+    durable summary_text. Previously only assistant scaffold bullets were
+    cached, so intermediate user asks (and answers to ask_user) were silently
+    dropped after compaction and the agent re-asked them."""
+    conv = _seed_conversation(db_session)
+    base = datetime.now(timezone.utc)
+    msg_idx = 0
+    user_texts = []
+    for turn in range(5):
+        u = f"USERASK-{turn} remember region westus2"
+        user_texts.append(u)
+        _add_message(db_session, conv.id, "user", u,
+                     when=base + timedelta(seconds=msg_idx))
+        msg_idx += 1
+        for j in range(3):
+            tc_id = f"tc-{turn}-{j}"
+            _add_message(
+                db_session, conv.id, "assistant", f"a{turn}{j}",
+                tool_calls=[{"id": tc_id, "type": "function",
+                             "function": {"name": "f", "arguments": "{}"}}],
+                when=base + timedelta(seconds=msg_idx),
+            )
+            msg_idx += 1
+            _add_message(db_session, conv.id, "tool", f"r{turn}{j}",
+                         tool_call_id=tc_id, when=base + timedelta(seconds=msg_idx))
+            msg_idx += 1
+
+    client = _build_mock_client(scaffold_summary="- did stuff")
+    # Turn 1: triggers compaction, advances the watermark past the earliest asks.
+    load_compacted_history(db_session, conv.id, client, "gpt-test")
+    db_session.refresh(conv)
+    boundary = conv.summary_through_message_id
+    assert boundary and boundary > 0
+    # The earliest user asks fell behind the watermark and must now live in the
+    # durable summary cache, not just as scaffold bullets.
+    assert "USERASK-0" in (conv.summary_text or "")
+
+    # Turn 2: one new message, under threshold (no fresh compaction). The older
+    # user asks behind the watermark are only reachable via summary_text.
+    _add_message(db_session, conv.id, "user", "new follow-up",
+                 when=base + timedelta(seconds=999))
+    out, _ = load_compacted_history(db_session, conv.id, client, "gpt-test")
+    flat = "\n".join(
+        m.get("content", "") for m in out if isinstance(m.get("content"), str)
+    )
+    assert "USERASK-0" in flat
+    assert "USERASK-1" in flat
+
+
 def test_compaction_falls_back_to_uncompacted_if_scaffold_summarizer_fails(db_session):
     conv = _seed_conversation(db_session)
     base = datetime.now(timezone.utc)
@@ -554,6 +605,94 @@ def test_compress_older_scaffolding_preserves_user_messages():
         and m["content"].startswith("[Outcomes from intermediate tool work]")
     ]
     assert len(bullets) == 2
+
+
+def _ask_user_envelope(question, selected, notes=None):
+    """Build the tool-result envelope the orchestrator stores for an answered
+    ask_user call."""
+    answer = {"question": question, "selected": selected}
+    if notes:
+        answer["notes"] = notes
+    return json.dumps({
+        "status": "success",
+        "tool": "ask_user",
+        "data": {"status": "answered", "answers": [answer]},
+    })
+
+
+def test_extract_ask_user_qa_pulls_verbatim_choice():
+    from app.agent.compaction import _extract_ask_user_qa
+    env = _ask_user_envelope(
+        "Which region?", ["westus2"], notes="prod only",
+    )
+    qa = _extract_ask_user_qa(env)
+    assert qa is not None
+    assert "Which region?" in qa
+    assert "westus2" in qa
+    assert "prod only" in qa
+
+
+def test_extract_ask_user_qa_ignores_non_ask_user():
+    from app.agent.compaction import _extract_ask_user_qa
+    assert _extract_ask_user_qa('{"status":"success","tool":"az_cli","data":"ok"}') is None
+    assert _extract_ask_user_qa("plain text") is None
+    assert _extract_ask_user_qa(None) is None
+
+
+def test_compress_older_scaffolding_preserves_ask_user_answer_verbatim():
+    """An ask_user answer buried in scaffolding survives compaction verbatim,
+    not paraphrased by the lossy summarizer."""
+    older = [
+        {"role": "assistant", "content": "I need to know the region",
+         "tool_calls": [{"id": "q1", "function": {"name": "ask_user", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "q1",
+         "content": _ask_user_envelope("Which region?", ["westus2"])},
+    ]
+    # Summarizer would otherwise drop the specific "westus2" choice.
+    client = _build_mock_client(scaffold_summary="- asked a question")
+    out = _compress_older_scaffolding(older, client, "gpt-test")
+
+    flat = "\n".join(
+        m.get("content", "") for m in out if isinstance(m.get("content"), str)
+    )
+    assert "Which region?" in flat
+    assert "westus2" in flat
+
+
+def test_ask_user_answer_survives_compaction_into_summary(db_session):
+    """End-to-end: an ask_user answer that ages into the older portion is
+    carried into the durable summary_text (so it survives future turns)."""
+    conv = _seed_conversation(db_session)
+    base = datetime.now(timezone.utc)
+    msg_idx = 0
+    # First a normal user turn, then the ask_user Q&A, then enough scaffolding
+    # to push the Q&A behind the recent window and trigger compaction.
+    _add_message(db_session, conv.id, "user", "deploy something",
+                 when=base + timedelta(seconds=msg_idx)); msg_idx += 1
+    _add_message(
+        db_session, conv.id, "assistant", "which region?",
+        tool_calls=[{"id": "q1", "type": "function",
+                     "function": {"name": "ask_user", "arguments": "{}"}}],
+        when=base + timedelta(seconds=msg_idx)); msg_idx += 1
+    _add_message(
+        db_session, conv.id, "tool",
+        _ask_user_envelope("Which region?", ["westus2"]),
+        tool_call_id="q1", when=base + timedelta(seconds=msg_idx)); msg_idx += 1
+    # 32 more scaffolding messages so the Q&A lands in the older portion
+    for i in range(16):
+        tc_id = f"tc{i}"
+        _add_message(
+            db_session, conv.id, "assistant", f"step {i}",
+            tool_calls=[{"id": tc_id, "type": "function",
+                         "function": {"name": "f", "arguments": "{}"}}],
+            when=base + timedelta(seconds=msg_idx)); msg_idx += 1
+        _add_message(db_session, conv.id, "tool", f"res {i}",
+                     tool_call_id=tc_id, when=base + timedelta(seconds=msg_idx)); msg_idx += 1
+
+    client = _build_mock_client(scaffold_summary="- did steps")
+    load_compacted_history(db_session, conv.id, client, "gpt-test")
+    db_session.refresh(conv)
+    assert "westus2" in (conv.summary_text or "")
 
 
 def test_compress_older_scaffolding_no_user_messages():

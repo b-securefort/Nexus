@@ -51,6 +51,7 @@
 | **Risk assessment** | An advisory ✓ safe / ⚠ caution / ⛔ destructive verdict plus a plain-language command description, produced by a separate review LLM and floored by deterministic rules, rendered on the Approval card; it never gates execution by itself. | "risk score", "safety check", "approval reason" |
 | **Diagram IR** | The structural, coordinate-free description of a diagram (nested containers, nodes, edges, adornments, with style/layout tokens) consumed by the `diagram_ir` engine; positions are computed by its layout engine, not stated in the IR. | "diagram spec", "DSL", "drawio model" |
 | **Adornment** | A fixed-corner glyph/badge on a container or node (NSG on a subnet, WAF on a gateway) that the layout engine does not place on the grid. | "child icon", "decoration node" |
+| **`align_to` (layout hint)** | An optional Diagram-IR field naming another box whose center a satellite should sit over (a Storage account above the App Service it serves). Applied as a post-placement shift perpendicular to flow, with same-parent de-collision. It is an *author hint*, never inferred from edges — keeping the "positions never come from edges" rule intact. | "anchor", "pin above", "snap-to" |
 
 ---
 

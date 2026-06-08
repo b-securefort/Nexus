@@ -82,18 +82,100 @@ _ICON_STYLE = (
 )
 
 # Icon ref ("<provider>/<name>") → Azure2/AWS4 SVG path. Paths verified against
-# _drawio_emitter.py's _MINGRAMMER_TO_AZURE2 map and kb/drawio/azureicons_drawio.txt.
+# _drawio_emitter.py's _KIND_TO_SVG map and kb/drawio/azureicons_drawio.txt.
+# Keys use the snake_case Azure resource-type name; common singular/plural and
+# short-form aliases are included so the model's natural guess resolves rather
+# than silently falling back to a generic box.
 _ICON_IMAGES: dict[str, str] = {
+    # --- networking ---
     "azure/front_doors": "img/lib/azure2/networking/Front_Doors.svg",
-    "azure/app_services": "img/lib/azure2/app_services/App_Services.svg",
-    "azure/app_service_plans": "img/lib/azure2/app_services/App_Service_Plans.svg",
-    "azure/private_endpoint": "img/lib/azure2/networking/Private_Endpoint.svg",
-    "azure/dns_private_zones": "img/lib/azure2/networking/DNS_Private_Zones.svg",
+    "azure/front_door": "img/lib/azure2/networking/Front_Doors.svg",
+    "azure/application_gateways": "img/lib/azure2/networking/Application_Gateways.svg",
+    "azure/application_gateway": "img/lib/azure2/networking/Application_Gateways.svg",
+    "azure/app_gateway": "img/lib/azure2/networking/Application_Gateways.svg",
+    "azure/firewalls": "img/lib/azure2/networking/Firewalls.svg",
+    "azure/firewall": "img/lib/azure2/networking/Firewalls.svg",
+    "azure/load_balancers": "img/lib/azure2/networking/Load_Balancers.svg",
+    "azure/load_balancer": "img/lib/azure2/networking/Load_Balancers.svg",
+    "azure/nat_gateway": "img/lib/azure2/networking/NAT_Gateway.svg",
     "azure/virtual_networks": "img/lib/azure2/networking/Virtual_Networks.svg",
+    "azure/virtual_network_gateways": "img/lib/azure2/networking/Virtual_Network_Gateways.svg",
+    "azure/vpn_gateway": "img/lib/azure2/networking/Virtual_Network_Gateways.svg",
+    "azure/expressroute": "img/lib/azure2/networking/ExpressRoute_Circuits.svg",
     "azure/network_security_groups": "img/lib/azure2/networking/Network_Security_Groups.svg",
-    "azure/storage_accounts": "img/lib/azure2/storage/Storage_Accounts.svg",
-    "azure/blob": "img/lib/azure2/general/Blob_Block.svg",
+    "azure/private_endpoint": "img/lib/azure2/networking/Private_Endpoint.svg",
+    "azure/private_link": "img/lib/azure2/networking/Private_Link.svg",
+    "azure/dns_private_zones": "img/lib/azure2/networking/DNS_Private_Zones.svg",
+    "azure/dns_zones": "img/lib/azure2/networking/DNS_Zones.svg",
+    "azure/public_ip_addresses": "img/lib/azure2/networking/Public_IP_Addresses.svg",
+    "azure/public_ip": "img/lib/azure2/networking/Public_IP_Addresses.svg",
+    "azure/bastions": "img/lib/azure2/networking/Bastions.svg",
+    "azure/bastion": "img/lib/azure2/networking/Bastions.svg",
+    "azure/route_tables": "img/lib/azure2/networking/Route_Tables.svg",
+    "azure/subnet": "img/lib/azure2/networking/Subnet.svg",
+    "azure/web_application_firewall": "img/lib/azure2/networking/Web_Application_Firewall_Policies_WAF.svg",
+    # --- app / compute / containers ---
+    "azure/app_services": "img/lib/azure2/app_services/App_Services.svg",
+    "azure/app_service": "img/lib/azure2/app_services/App_Services.svg",
+    "azure/app_service_plans": "img/lib/azure2/app_services/App_Service_Plans.svg",
+    "azure/function_apps": "img/lib/azure2/compute/Function_Apps.svg",
+    "azure/functions": "img/lib/azure2/compute/Function_Apps.svg",
+    "azure/virtual_machine": "img/lib/azure2/compute/Virtual_Machine.svg",
+    "azure/vm": "img/lib/azure2/compute/Virtual_Machine.svg",
+    "azure/vm_scale_sets": "img/lib/azure2/compute/VM_Scale_Sets.svg",
+    "azure/vmss": "img/lib/azure2/compute/VM_Scale_Sets.svg",
+    "azure/kubernetes_services": "img/lib/azure2/compute/Kubernetes_Services.svg",
+    "azure/aks": "img/lib/azure2/compute/Kubernetes_Services.svg",
+    "azure/container_registries": "img/lib/azure2/containers/Container_Registries.svg",
+    "azure/acr": "img/lib/azure2/containers/Container_Registries.svg",
+    "azure/container_instances": "img/lib/azure2/compute/Container_Instances.svg",
+    "azure/container_apps": "img/lib/azure2/containers/Container_Instances.svg",
+    # --- databases ---
+    "azure/sql_database": "img/lib/azure2/databases/SQL_Database.svg",
+    "azure/sql_db": "img/lib/azure2/databases/SQL_Database.svg",
+    "azure/sql_managed_instance": "img/lib/azure2/databases/SQL_Managed_Instance.svg",
+    "azure/cosmos_db": "img/lib/azure2/databases/Azure_Cosmos_DB.svg",
+    "azure/cosmos": "img/lib/azure2/databases/Azure_Cosmos_DB.svg",
+    "azure/redis": "img/lib/azure2/databases/Cache_Redis.svg",
+    "azure/cache_redis": "img/lib/azure2/databases/Cache_Redis.svg",
+    "azure/postgresql": "img/lib/azure2/databases/Azure_Database_PostgreSQL_Server.svg",
     "azure/mysql": "img/lib/azure2/databases/Azure_Database_MySQL_Server.svg",
+    # --- storage ---
+    "azure/storage_accounts": "img/lib/azure2/storage/Storage_Accounts.svg",
+    "azure/storage_account": "img/lib/azure2/storage/Storage_Accounts.svg",
+    "azure/blob": "img/lib/azure2/general/Blob_Block.svg",
+    # --- identity / security ---
+    "azure/entra_id": "img/lib/azure2/identity/Azure_Active_Directory.svg",
+    "azure/azure_active_directory": "img/lib/azure2/identity/Azure_Active_Directory.svg",
+    "azure/managed_identities": "img/lib/azure2/identity/Managed_Identities.svg",
+    "azure/managed_identity": "img/lib/azure2/identity/Managed_Identities.svg",
+    "azure/key_vaults": "img/lib/azure2/security/Key_Vaults.svg",
+    "azure/key_vault": "img/lib/azure2/security/Key_Vaults.svg",
+    "azure/defender": "img/lib/azure2/security/Azure_Defender.svg",
+    "azure/sentinel": "img/lib/azure2/security/Azure_Sentinel.svg",
+    # --- monitoring / management ---
+    "azure/monitor": "img/lib/azure2/management_governance/Monitor.svg",
+    "azure/log_analytics": "img/lib/azure2/management_governance/Log_Analytics_Workspaces.svg",
+    "azure/log_analytics_workspaces": "img/lib/azure2/management_governance/Log_Analytics_Workspaces.svg",
+    "azure/application_insights": "img/lib/azure2/devops/Application_Insights.svg",
+    "azure/app_insights": "img/lib/azure2/devops/Application_Insights.svg",
+    "azure/policy": "img/lib/azure2/management_governance/Policy.svg",
+    # --- integration ---
+    "azure/api_management": "img/lib/azure2/integration/API_Management_Services.svg",
+    "azure/apim": "img/lib/azure2/integration/API_Management_Services.svg",
+    "azure/logic_apps": "img/lib/azure2/integration/Logic_Apps.svg",
+    "azure/service_bus": "img/lib/azure2/integration/Service_Bus.svg",
+    "azure/event_grid": "img/lib/azure2/integration/Event_Grid_Topics.svg",
+    "azure/event_hubs": "img/lib/azure2/analytics/Event_Hubs.svg",
+    "azure/app_configuration": "img/lib/azure2/integration/App_Configurations.svg",
+    # --- AI / data ---
+    "azure/openai": "img/lib/azure2/ai_machine_learning/Azure_OpenAI.svg",
+    "azure/cognitive_services": "img/lib/azure2/ai_machine_learning/Cognitive_Services.svg",
+    "azure/ai_search": "img/lib/azure2/ai_machine_learning/Cognitive_Search.svg",
+    "azure/machine_learning": "img/lib/azure2/ai_machine_learning/Machine_Learning_Studio_Workspaces.svg",
+    # --- general ---
+    "azure/subscriptions": "img/lib/azure2/general/Subscriptions.svg",
+    "azure/resource_groups": "img/lib/azure2/general/Resource_Groups.svg",
 }
 
 # Built-in draw.io shapes for generic / non-branded elements ("shape/<name>").

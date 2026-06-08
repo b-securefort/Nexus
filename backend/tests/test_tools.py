@@ -38,6 +38,7 @@ class TestToolRegistry:
             "patch_drawio_cell", "ask_user",
             "search_stack_overflow", "search_github", "search_azure_updates", "web_search",
             "generate_python_diagram", "generate_drawio_from_python",
+            "generate_structured_diagram",
         }
         assert set(TOOL_REGISTRY.keys()) == expected
         assert len(TOOL_REGISTRY) == len(expected)

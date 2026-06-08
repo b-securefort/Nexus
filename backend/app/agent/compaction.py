@@ -507,6 +507,55 @@ def _summarize_scaffold(
     return (resp.choices[0].message.content or "").strip()
 
 
+def _extract_ask_user_qa(content) -> str | None:
+    """If `content` is an `ask_user` tool-result envelope, return a compact
+    verbatim record of the question(s) and the option(s) the user chose;
+    otherwise None.
+
+    An `ask_user` answer is a real USER DECISION, not disposable scaffolding —
+    but the OpenAI API forces it to live as a `tool`-role message (it answers
+    the assistant's tool_call), so it would otherwise be swept into the lossy
+    scaffold summarizer and the specific choice could be paraphrased away. We
+    pull it out deterministically and preserve it verbatim instead, so the
+    agent never re-asks something the user already answered.
+
+    Envelope shape (set by the orchestrator):
+        {"status": "success", "tool": "ask_user",
+         "data": {"status": "answered", "answers": [{"question", "selected", "notes"?}, ...]}}
+    """
+    if not isinstance(content, str):
+        return None
+    try:
+        env = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(env, dict) or env.get("tool") != "ask_user":
+        return None
+    data = env.get("data")
+    if not isinstance(data, dict):
+        return None
+    answers = data.get("answers")
+    if not isinstance(answers, list) or not answers:
+        return None
+
+    lines = ["[User answered clarifying question(s)]"]
+    for a in answers:
+        if not isinstance(a, dict):
+            continue
+        question = str(a.get("question", "")).strip()
+        selected = a.get("selected")
+        if isinstance(selected, list):
+            chosen = ", ".join(str(s).strip() for s in selected if str(s).strip())
+        else:
+            chosen = str(selected).strip()
+        notes = str(a.get("notes", "")).strip()
+        line = f'- Q: "{question}" → chose: {chosen or "(no selection)"}'
+        if notes:
+            line += f" (note: {notes})"
+        lines.append(line)
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
 def _compress_older_scaffolding(
     older: list[dict],
     client: AzureOpenAI,
@@ -514,7 +563,9 @@ def _compress_older_scaffolding(
 ) -> list[dict]:
     """Walk older messages: preserve user messages verbatim, collapse each
     run of assistant + tool messages between user messages into one
-    synthetic assistant outcome message."""
+    synthetic assistant outcome message. Answers to `ask_user` prompts inside
+    the scaffolding are pulled out and preserved verbatim (they're user
+    decisions, not disposable tool chatter)."""
     if not older:
         return []
 
@@ -524,6 +575,12 @@ def _compress_older_scaffolding(
     def flush():
         if not scaffold:
             return
+        # Preserve any ask_user answers verbatim — they're user decisions the
+        # lossy summarizer must not paraphrase away.
+        qa_lines = [
+            qa for m in scaffold
+            if (qa := _extract_ask_user_qa(m.get("content"))) is not None
+        ]
         try:
             summary = _summarize_scaffold(scaffold, client, deployment)
         except Exception as e:
@@ -531,13 +588,14 @@ def _compress_older_scaffolding(
             result.extend(scaffold)
             scaffold.clear()
             return
-        if summary:
+        body_parts = qa_lines + ([summary] if summary else [])
+        if body_parts:
             result.append({
                 "role": "assistant",
-                "content": _SCAFFOLD_PREFIX + summary,
+                "content": _SCAFFOLD_PREFIX + "\n".join(body_parts),
             })
         else:
-            # Empty summary — fall back to verbatim so we don't lose the gap entirely
+            # Nothing salvaged — fall back to verbatim so we don't lose the gap.
             result.extend(scaffold)
         scaffold.clear()
 
@@ -552,6 +610,22 @@ def _compress_older_scaffolding(
 
 
 # ── Misc helpers ─────────────────────────────────────────────────────────
+
+def _content_to_text(content) -> str:
+    """Flatten a message's `content` to plain text. Strings pass through;
+    multipart content (text + image_url parts) keeps the text and marks
+    images with a placeholder. Used when persisting older user messages into
+    the durable summary cache."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            (p.get("text", "[image]") if p.get("type") == "text" else "[image]")
+            for p in content
+            if isinstance(p, dict)
+        )
+    return ""
+
 
 def _with_summary_prefix(
     summary_text: Optional[str], messages: list[dict]
@@ -680,15 +754,34 @@ def load_compacted_history(
     # folded into a summary need to be dropped.
     final = _clean_orphans(final)
 
-    # Cumulative outcome cache: extend (or set) the high-level summary so
-    # the next turn doesn't re-summarize the same older scaffolding.
-    cumulative_outcomes = "\n".join(
-        m.get("content", "").replace(_SCAFFOLD_PREFIX, "")
-        for m in compressed_older
-        if m.get("role") == "assistant"
-        and isinstance(m.get("content"), str)
-        and m["content"].startswith(_SCAFFOLD_PREFIX)
-    ).strip()
+    # Cumulative durable cache: carry the older portion forward across turns.
+    #
+    # CRITICAL: this MUST include the older USER messages verbatim, not just the
+    # assistant scaffold bullets. The watermark (summary_through_message_id) set
+    # below advances past every older row — including user messages — so the
+    # next turn's query (`Message.id > summary_through`) will never reload them.
+    # Anything not captured here is dropped from ALL future turns. The previous
+    # version cached only the scaffold bullets, so every intermediate user
+    # ask/answer (including answers to the agent's own ask_user prompts, stored
+    # as tool→summarized scaffolding) silently vanished once it fell behind the
+    # watermark — which made the agent re-ask things the user had already
+    # answered. Preserve user turns in order, interleaved with the outcome
+    # bullets, so the durable summary reflects the real older conversation.
+    cumulative_parts: list[str] = []
+    for m in compressed_older:
+        role = m.get("role")
+        content = m.get("content")
+        if role == "user":
+            text = _content_to_text(content).strip()
+            if text:
+                cumulative_parts.append(f"User said: {text}")
+        elif (
+            role == "assistant"
+            and isinstance(content, str)
+            and content.startswith(_SCAFFOLD_PREFIX)
+        ):
+            cumulative_parts.append(content.replace(_SCAFFOLD_PREFIX, ""))
+    cumulative_outcomes = "\n".join(cumulative_parts).strip()
 
     if cumulative_outcomes:
         prior = conv.summary_text or ""

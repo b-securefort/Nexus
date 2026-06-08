@@ -28,11 +28,26 @@ ICON_H = 56
 LABEL_H = 22      # space below an icon for its label
 CHAR_W = 6.2      # rough per-char width for label-width estimation
 LABEL_MAX = 170   # cap on label-driven footprint width
+LABEL_INSET = 12  # left+right text margin for a container's header label
+ADORN_CLEAR = 30  # glyph+gap a top-corner adornment steals from the header band
 
 
 def _label_w(label: str) -> float:
     longest = max((len(line) for line in label.splitlines()), default=0)
     return max(ICON_W, min(longest * CHAR_W, LABEL_MAX))
+
+
+def _container_label_min_w(box: Container) -> float:
+    """Min content width so a container never clips its own header label. The
+    label is uncapped (unlike node labels): a wide subnet name must fit. A
+    top-corner adornment shares the header band, so reserve the glyph width."""
+    if not box.label:
+        return 0.0
+    longest = max((len(line) for line in box.label.splitlines()), default=0)
+    inset = LABEL_INSET
+    if any("top" in a.corner for a in box.adornments):
+        inset += ADORN_CLEAR
+    return longest * CHAR_W + inset
 
 
 def _default_layout(box: Container, direction: str) -> str:
@@ -98,6 +113,7 @@ def layout_diagram(diagram: Diagram) -> Diagram:
         boxes[n.id] = n
 
     footprint: dict[str, tuple[float, float]] = {}
+    content_dims: dict[str, tuple[float, float]] = {}   # effective inner content w/h per container
 
     def measure(box: Container | Node) -> tuple[float, float]:
         if isinstance(box, Node):
@@ -105,6 +121,8 @@ def layout_diagram(diagram: Diagram) -> Diagram:
         else:
             sizes = [measure(boxes[cid]) for cid in box.children]
             _, cw, ch = _arrange(sizes, _default_layout(box, diagram.direction), box.grid_cols)
+            cw = max(cw, _container_label_min_w(box))   # never clip the container's own label
+            content_dims[box.id] = (cw, ch)
             fp = (cw + 2 * PAD, ch + _header_for(box) + PAD)
             box.w, box.h = fp           # container cell == its footprint
         footprint[box.id] = fp
@@ -120,8 +138,10 @@ def layout_diagram(diagram: Diagram) -> Diagram:
             return
         box.x, box.y = x, y
         sizes = [footprint[cid] for cid in box.children]
-        positions, _, _ = _arrange(sizes, _default_layout(box, diagram.direction), box.grid_cols)
-        ox, oy = x + PAD, y + _header_for(box)
+        positions, cw0, _ = _arrange(sizes, _default_layout(box, diagram.direction), box.grid_cols)
+        eff_cw, _ = content_dims[box.id]
+        shift = (eff_cw - cw0) / 2      # center the children block when a label widened the box
+        ox, oy = x + PAD + shift, y + _header_for(box)
         for cid, (rx, ry) in zip(box.children, positions):
             place(boxes[cid], ox + rx, oy + ry)
 
@@ -133,7 +153,72 @@ def layout_diagram(diagram: Diagram) -> Diagram:
     positions, _, _ = _arrange(top_sizes, "row" if diagram.direction == "LR" else "column", 0)
     for b, (rx, ry) in zip(top, positions):
         place(b, MARGIN + rx, MARGIN + ry)
+
+    _apply_alignments(diagram, boxes)
     return diagram
+
+
+def _translate(box: Container | Node, boxes: dict, dx: float, dy: float) -> None:
+    box.x += dx
+    box.y += dy
+    if isinstance(box, Container):
+        for cid in box.children:
+            _translate(boxes[cid], boxes, dx, dy)
+
+
+def _apply_alignments(diagram: Diagram, boxes: dict) -> None:
+    """Post-placement pass for `align_to` hints: shift a satellite so its center
+    sits over the target's center on the axis perpendicular to the main flow
+    (X for LR, Y for TB). The whole subtree moves together; bands draw nothing,
+    so a satellite leaving its layout band's bounds is invisible. Clamped to the
+    canvas margin so a target near the edge can't push the satellite off-canvas."""
+    perp_x = diagram.direction == "LR"
+    aligned: list[Container | Node] = []
+    for b in diagram.containers + diagram.nodes:
+        tgt = boxes.get(b.align_to) if b.align_to else None
+        if tgt is None or tgt is b:
+            continue
+        # align_to is for a satellite in ANOTHER band pointing at the main-flow
+        # element it serves. Aligning a same-parent sibling just stacks the two on
+        # the cross axis (they already share it) — that collapses any chain through
+        # them into one colinear line (the "parallel lines to the same place" look)
+        # and overlaps their labels. Ignore it; validate.py warns the author.
+        if b.parent is not None and b.parent == tgt.parent:
+            continue
+        if perp_x:
+            delta = (tgt.x + tgt.w / 2) - (b.x + b.w / 2)
+            delta = max(delta, MARGIN - b.x)        # don't cross the left margin
+            _translate(b, boxes, delta, 0)
+        else:
+            delta = (tgt.y + tgt.h / 2) - (b.y + b.h / 2)
+            delta = max(delta, MARGIN - b.y)        # don't cross the top margin
+            _translate(b, boxes, 0, delta)
+        aligned.append(b)
+    _spread_aligned(aligned, boxes, perp_x)
+
+
+def _spread_aligned(aligned: list, boxes: dict, perp_x: bool) -> None:
+    """When two satellites target nearby elements they land on top of each other.
+    Keep each as close to its aligned position as possible but enforce a GAP:
+    sweep siblings (same parent) in order and push later ones along the band."""
+    by_parent: dict = {}
+    for b in aligned:
+        by_parent.setdefault(b.parent, []).append(b)
+    for sibs in by_parent.values():
+        if len(sibs) < 2:
+            continue
+        if perp_x:
+            sibs.sort(key=lambda b: b.x)
+            for prev, cur in zip(sibs, sibs[1:]):
+                overlap = (prev.x + prev.w + GAP) - cur.x
+                if overlap > 0:
+                    _translate(cur, boxes, overlap, 0)
+        else:
+            sibs.sort(key=lambda b: b.y)
+            for prev, cur in zip(sibs, sibs[1:]):
+                overlap = (prev.y + prev.h + GAP) - cur.y
+                if overlap > 0:
+                    _translate(cur, boxes, 0, overlap)
 
 
 def _ordered_top(diagram: Diagram) -> list[Container | Node]:

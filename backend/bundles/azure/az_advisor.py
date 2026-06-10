@@ -21,7 +21,7 @@ class AzAdvisorTool(AzureToolBase):
     config_flag = "TOOL_AZ_ADVISOR_ENABLED"
     # Backstop in case the summary itself runs long; the orchestrator head/tail
     # trims above this (B4).
-    result_limit = 6_000
+    result_limit = 12_000
     description = (
         "Retrieve Azure Advisor recommendations for cost, security, reliability, "
         "performance, and operational excellence. Read-only — no approval needed."

@@ -11,10 +11,8 @@ from __future__ import annotations
 from xml.sax.saxutils import escape
 
 from .catalog import container_style, edge_style, icon_style
+from .labels import ADORN_PAD as _ADORN_PAD, ADORN_SIZE as _ADORN_SIZE
 from .schema import Adornment, Container, Diagram, Node
-
-_ADORN_SIZE = 24
-_ADORN_PAD = 6
 
 
 def _esc(s: str) -> str:
@@ -61,9 +59,21 @@ def emit_drawio(diagram: Diagram, routes=None) -> str:
             ay = _ADORN_PAD
         else:
             ay = owner.h - _ADORN_SIZE - _ADORN_PAD
+        style = icon_style(ad.icon)
+        # On a NODE the default below-glyph label lands straight on the owner's
+        # icon ('WAF' over Front Door). Push it to the side, pointing away from
+        # the icon; later duplicate style keys win in draw.io, so appending
+        # overrides the icon style's verticalLabelPosition=bottom. Containers
+        # keep the below-glyph label — it falls in the empty header band.
+        # labels.adornment_boxes mirrors this convention for the detectors.
+        if isinstance(owner, Node) and ad.label:
+            if "left" in ad.corner:
+                style += "labelPosition=left;align=right;verticalLabelPosition=middle;verticalAlign=middle;fontSize=10;"
+            else:
+                style += "labelPosition=right;align=left;verticalLabelPosition=middle;verticalAlign=middle;fontSize=10;"
         cells.append(
             f'<mxCell id="{_esc(owner.id)}__adorn_{_esc(ad.corner)}" value="{_esc(ad.label)}" '
-            f'style="{icon_style(ad.icon)}" vertex="1" parent="{_esc(owner.id)}">'
+            f'style="{style}" vertex="1" parent="{_esc(owner.id)}">'
             f'<mxGeometry x="{ax:g}" y="{ay:g}" width="{_ADORN_SIZE}" height="{_ADORN_SIZE}" as="geometry"/>'
             f"</mxCell>"
         )
@@ -111,11 +121,33 @@ def emit_drawio(diagram: Diagram, routes=None) -> str:
                         f'<Array as="points">{pts}</Array>'
                         "</mxGeometry>"
                     )
+        # Deterministic label placement (labels.place_edge_labels): when the
+        # route carries a computed position, the label moves to a child
+        # edgeLabel cell at that exact spot (with a white background so the
+        # line doesn't strike through the text) and the edge's own value stays
+        # empty — otherwise draw.io would render its default midpoint label on
+        # top of everything, which is exactly the defect being fixed.
+        label_t = getattr(routes[i], "label_t", None) if (routes is not None and routes[i] is not None) else None
+        edge_value = "" if (e.label and label_t is not None) else e.label
+        label_cell = ""
+        if e.label and label_t is not None:
+            ox, oy = routes[i].label_offset or (0.0, 0.0)
+            label_cell = (
+                f'<mxCell id="edge{i}_label" value="{_esc(e.label)}" '
+                f'style="edgeLabel;html=1;align=center;verticalAlign=middle;'
+                f'resizable=0;points=[];fontSize=10;'
+                f'labelBackgroundColor=#FFFFFF;" '
+                f'vertex="1" connectable="0" parent="edge{i}">'
+                f'<mxGeometry x="{label_t:g}" relative="1" as="geometry">'
+                f'<mxPoint x="{ox:g}" y="{oy:g}" as="offset"/>'
+                f"</mxGeometry></mxCell>"
+            )
         cells.append(
-            f'<mxCell id="edge{i}" value="{_esc(e.label)}" style="{style}" '
+            f'<mxCell id="edge{i}" value="{_esc(edge_value)}" style="{style}" '
             f'edge="1" parent="1" source="{_esc(e.source)}" target="{_esc(e.target)}">'
             f'{geometry}'
             f"</mxCell>"
+            + label_cell
         )
 
     title_cell = ""

@@ -76,7 +76,9 @@ def test_accepts_filename_as_stem_without_extension(tmp_path, monkeypatch):
     # Confirm the function actually opened our fake PNG and base64'd it.
     image_part = next(p for p in msg["content"] if p["type"] == "image_url")
     assert image_part["image_url"]["url"].startswith("data:image/png;base64,")
-    assert image_part["image_url"]["detail"] == "high"
+    # "auto", not "high": the Structure echo is authoritative for presence;
+    # the image is aesthetics-only, and "high" was 429 fuel on diagram turns.
+    assert image_part["image_url"]["detail"] == "auto"
     # And the encoded bytes are non-empty.
     encoded = image_part["image_url"]["url"].split(",", 1)[1]
     assert base64.b64decode(encoded) == b"\x00"

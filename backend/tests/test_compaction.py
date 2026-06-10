@@ -11,13 +11,25 @@ from app.agent import compaction
 from app.agent.compaction import (
     _clean_orphans,
     _compress_older_scaffolding,
-    _estimate_chars,
+    _estimate_tokens,
     _identify_latest_image_row_id,
     _identify_latest_user_row_id,
     _row_to_message,
     get_original_task,
     load_compacted_history,
 )
+
+
+@pytest.fixture(autouse=True)
+def _scaled_down_thresholds(monkeypatch):
+    """The scenarios in this file were written against the original
+    30-message / 12K-char triggers. Production now compacts on a token budget
+    (a fraction of the chat model's context window) with a much larger recent
+    window — scale the knobs down so the same small fixtures still exercise
+    every compaction path."""
+    monkeypatch.setattr(compaction, "COMPACT_THRESHOLD_TOKENS", 60)
+    monkeypatch.setattr(compaction, "RECENT_KEEP_COUNT", 15)
+    monkeypatch.setattr(compaction, "USER_PASTE_THRESHOLD", 3_000)
 from app.agent.orchestrator import (
     _compose_system_prompt,
     _strip_retry_messages_for_tool,
@@ -708,17 +720,29 @@ def test_compress_older_scaffolding_no_user_messages():
     assert out[0]["content"].startswith("[Outcomes from intermediate tool work]")
 
 
-# ── _estimate_chars ───────────────────────────────────────────────────────
+# ── _estimate_tokens ──────────────────────────────────────────────────────
 
-def test_estimate_chars_counts_text_and_multipart():
-    msgs = [
-        {"role": "user", "content": "abcd"},
+def test_estimate_tokens_counts_text_and_images():
+    text_only = [{"role": "user", "content": "list the storage accounts in westus2"}]
+    base = _estimate_tokens(text_only, "gpt-test")
+    assert base > 0
+
+    with_image = text_only + [
         {"role": "user", "content": [
             {"type": "text", "text": "hello"},
             {"type": "image_url", "image_url": {"url": "data:..."}},
         ]},
     ]
-    assert _estimate_chars(msgs) == 2009  # 4 + 5 + 2000
+    full = _estimate_tokens(with_image, "gpt-test")
+    # Image contributes the fixed per-image estimate on top of the text.
+    assert full >= base + compaction._IMAGE_TOKEN_ESTIMATE
+
+
+def test_estimate_tokens_counts_tool_calls():
+    msgs = [{"role": "assistant", "content": "",
+             "tool_calls": [{"id": "tc1", "type": "function",
+                             "function": {"name": "az_cli", "arguments": "{\"command\": \"az group list\"}"}}]}]
+    assert _estimate_tokens(msgs, "gpt-test") > 0
 
 
 # ── _truncate_tool_result ────────────────────────────────────────────────
@@ -728,8 +752,20 @@ def test_truncate_tool_result_below_limit_unchanged():
     assert _truncate_tool_result("az_cli", payload) == payload
 
 
-def test_truncate_tool_result_above_limit_keeps_head_and_tail():
-    big = json.dumps({"status": "success", "tool": "az_cli", "data": "x" * 10000})
+def test_truncate_tool_result_midsize_kept_verbatim():
+    """Outputs under the LLM-summarisation threshold AND the per-tool cap stay
+    verbatim — no lossy compression of affordable results (10 KB < az_cli's
+    12 KB result_limit)."""
+    mid = json.dumps({"status": "success", "tool": "az_cli", "data": "x" * 10000})
+    assert _truncate_tool_result("az_cli", mid) == mid
+
+
+def test_truncate_tool_result_above_limit_keeps_head_and_tail(monkeypatch):
+    from app.agent import orchestrator as orch
+    # Force the LLM-summarisation pass to fail so the head+tail fallback runs
+    # deterministically (no network attempt against the fake test endpoint).
+    monkeypatch.setattr(orch, "_summarize_tool_result_with_llm", lambda *a: None)
+    big = json.dumps({"status": "success", "tool": "az_cli", "data": "x" * 40000})
     out = _truncate_tool_result("az_cli", big)
     assert "[truncated" in out
     assert len(out) < len(big)
@@ -748,7 +784,9 @@ def test_truncate_tool_result_strips_drawio_xml_field():
     assert "XML omitted" in parsed["data"]["xml"]
 
 
-def test_truncate_tool_result_unknown_tool_returns_unchanged():
+def test_truncate_tool_result_unknown_tool_returns_unchanged(monkeypatch):
+    from app.agent import orchestrator as orch
+    monkeypatch.setattr(orch, "_summarize_tool_result_with_llm", lambda *a: None)
     payload = "x" * 20000
     assert _truncate_tool_result("ask_user", payload) == payload
 
@@ -828,7 +866,12 @@ def test_row_to_message_short_user_text_kept_verbatim(db_session):
 
 # ── End-to-end: cache avoids re-summarizing ──────────────────────────────
 
-def test_compaction_cache_avoids_resummarizing_on_next_turn(db_session):
+def test_compaction_cache_avoids_resummarizing_on_next_turn(db_session, monkeypatch):
+    # The first load must exceed the token budget (compacts, advances the
+    # watermark) while the second — only the recent verbatim window plus one
+    # new message — stays under it. Beefy OLDER tool results provide the bulk
+    # that compaction removes; the threshold sits between the two footprints.
+    monkeypatch.setattr(compaction, "COMPACT_THRESHOLD_TOKENS", 600)
     conv = _seed_conversation(db_session)
     base = datetime.now(timezone.utc)
     msg_idx = 0
@@ -845,8 +888,9 @@ def test_compaction_cache_avoids_resummarizing_on_next_turn(db_session):
                 when=base + timedelta(seconds=msg_idx),
             )
             msg_idx += 1
+            bulk = "filler-data " * 40 if turn < 3 else ""
             _add_message(
-                db_session, conv.id, "tool", f"r{turn}{j}",
+                db_session, conv.id, "tool", f"r{turn}{j} {bulk}",
                 tool_call_id=tc_id, when=base + timedelta(seconds=msg_idx),
             )
             msg_idx += 1

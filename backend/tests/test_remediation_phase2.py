@@ -279,12 +279,18 @@ class TestLlmTruncate:
         small = '{"status":"success","data":"ok"}'
         assert orch._truncate_tool_result("az_cli", small) == small
 
+    def test_midsize_output_kept_verbatim(self):
+        """8 KB is under both the LLM-summarisation threshold (16 KB) and
+        az_cli's per-tool cap (12 KB) — affordable results stay verbatim."""
+        mid = f'{{"status":"success","tool":"az_cli","data":"{"x" * 8_000}"}}'
+        assert orch._truncate_tool_result("az_cli", mid) == mid
+
     def test_summariser_failure_falls_back_to_head_tail(self, monkeypatch):
         # Force the LLM summariser to fail
         monkeypatch.setattr(
             orch, "_summarize_tool_result_with_llm", lambda *a, **kw: None,
         )
-        big_payload = "x" * 8_000
+        big_payload = "x" * 40_000  # over the 16 KB LLM threshold
         big = f'{{"status":"success","tool":"az_cli","data":"{big_payload}"}}'
         out = orch._truncate_tool_result("az_cli", big)
         assert "truncated" in out
@@ -313,7 +319,7 @@ class TestLlmTruncate:
             orch, "_summarize_tool_result_with_llm",
             lambda *a, **kw: "[LLM-compressed] short summary",
         )
-        big = f'{{"status":"success","data":"{"x" * 5000}"}}'
+        big = f'{{"status":"success","data":"{"x" * 40_000}"}}'
         out = orch._truncate_tool_result("az_cli", big)
         assert "[LLM-compressed]" in out
 

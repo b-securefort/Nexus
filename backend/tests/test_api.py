@@ -53,7 +53,7 @@ class TestSkillsAPI:
         assert resp.status_code == 200
         tools = resp.json()
         assert isinstance(tools, list)
-        assert len(tools) == 29  # 28 prior + generate_structured_diagram (structural-IR diagram tool)
+        assert len(tools) == 31  # 30 prior + sleep (rate-limit wait primitive)
         tool_names = [t["name"] for t in tools]
         assert "generate_file" in tool_names
         assert "read_file" in tool_names

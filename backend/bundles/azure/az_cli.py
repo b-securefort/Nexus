@@ -61,7 +61,7 @@ class AzCliTool(Tool):
     config_flag = "TOOL_AZ_CLI_ENABLED"
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
-    result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
+    result_limit = 12_000        # was orchestrator _TOOL_RESULT_LIMITS
 
     def retry_docs_query(self, func_args: dict, error_text: str) -> str | None:
         args = func_args.get("args", [])

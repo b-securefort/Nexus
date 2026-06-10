@@ -24,7 +24,7 @@ class TestSettings:
             ENTRA_API_CLIENT_ID="c",
         )
         assert s.APP_ENV == "dev"
-        assert s.AZURE_OPENAI_DEPLOYMENT == "gpt-5.4-mini"
+        assert s.AZURE_OPENAI_DEPLOYMENT == "gpt-4o-mini"
         assert s.KB_REPO_LOCAL_PATH == "./kb_data"
         assert s.CHAT_RATE_LIMIT_PER_MINUTE == 30
         assert s.TOOL_APPROVAL_TIMEOUT_SECONDS == 600

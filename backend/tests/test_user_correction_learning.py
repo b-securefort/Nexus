@@ -94,6 +94,12 @@ class TestTeachIntentGate:
         "note this for the future",
         "for future reference, traffic goes through F5",
         "make a note: app gateway integrates with the WAF policy",
+        # conv #350 regression: the most natural phrasing of all was missing
+        # and the user's rate-limit lesson was silently dropped.
+        "please learn that - Rate limit for `az_rest_api`. Maximum 10 calls per 60 seconds.",
+        "learn this: subnets need NSGs in prod",
+        "learn that the hub owns the private DNS zones",
+        "save this as a learning",
     ])
     def test_fires_on_explicit_teach_intent(self, msg):
         assert cap.looks_like_teach_intent(msg) is True
@@ -104,6 +110,7 @@ class TestTeachIntentGate:
         "I don't see the change, did you really do it?",
         "actually create a script for it",
         "why is there a second app gateway?",
+        "I want to learn more about Front Door",   # prose 'learn', not a teach
         "",
     ])
     def test_silent_on_task_redirects_and_noise(self, msg):

@@ -2,6 +2,8 @@
 display_name: Default
 description: Read-only assistant — KB search, Azure read queries, doc lookups, no write or CLI tools
 tools:
+  - search_conversation
+  - sleep
   - read_kb_file
   - search_kb
   - search_kb_hybrid

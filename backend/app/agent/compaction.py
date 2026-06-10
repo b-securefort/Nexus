@@ -45,16 +45,31 @@ from app.db.models import Conversation, Message
 logger = logging.getLogger(__name__)
 
 # Outer cap on how many rows past summary_through_message_id we ever pull.
-MAX_HISTORY_MESSAGES = 50
+# Sized so a single tool-heavy turn (up to 15 iterations × ~3 messages) plus
+# several earlier turns fit — rows beyond this cap are dropped UNsummarized,
+# so it must comfortably exceed the compaction trigger point.
+MAX_HISTORY_MESSAGES = 200
 # Target size of the recent verbatim window (in messages). Scaffolding
 # older than this gets compressed into outcome bullets.
-RECENT_KEEP_COUNT = 15
-# Compaction triggers when EITHER threshold is exceeded.
-COMPACT_THRESHOLD_MESSAGES = 30
-COMPACT_THRESHOLD_CHARS = 12_000
+RECENT_KEEP_COUNT = 40
+# Compaction triggers on TOKEN budget, not chars/message-count. The old
+# thresholds (30 messages / 12K chars ≈ 3K tokens) compacted almost every
+# tool-using conversation from turn two onward — the agent ran on lossy
+# 800-char summaries while >95% of the model's window sat empty. History may
+# now occupy this fraction of the chat model's context window before any
+# compression happens; the rest is headroom for system prompt, KB index,
+# tool schemas, and the next completion.
+COMPACT_THRESHOLD_FRACTION = 0.5
+# Test/operator override (absolute tokens). None → fraction of the window.
+COMPACT_THRESHOLD_TOKENS: int | None = None
 # User messages with text content longer than this get a high-quality LLM
 # summary (cached on Message.text_summary). Latest user message is exempt.
-USER_PASTE_THRESHOLD = 3_000
+# ~5K tokens: below that a verbatim paste is affordable and strictly better.
+USER_PASTE_THRESHOLD = 20_000
+# Durable cumulative-summary cache cap (chars). On overflow we LLM-recompress
+# (lossy), so the cap is generous — recompression should be rare, not a
+# per-turn meat grinder.
+CUMULATIVE_SUMMARY_MAX_CHARS = 12_000
 
 _SUMMARY_PREFIX = "[Summary of earlier conversation]\n"
 _SCAFFOLD_PREFIX = "[Outcomes from intermediate tool work]\n"
@@ -62,22 +77,38 @@ _SCAFFOLD_PREFIX = "[Outcomes from intermediate tool work]\n"
 
 # ── Estimation helpers ───────────────────────────────────────────────────
 
-def _estimate_chars(messages: list[dict]) -> int:
+# Conservative per-image token estimate (vision input at "auto" detail).
+_IMAGE_TOKEN_ESTIMATE = 800
+
+
+def _estimate_tokens(messages: list[dict], model: str) -> int:
+    """tiktoken-based footprint estimate of the loaded history. Drives the
+    compaction trigger, so it uses real token counts (via token_usage) rather
+    than a chars/4 heuristic — a 4x error here either strangles the context
+    or blows the window."""
+    from app.agent.token_usage import count_tokens
+
     total = 0
     for m in messages:
         c = m.get("content")
         if isinstance(c, str):
-            total += len(c)
+            total += count_tokens(c, model)
         elif isinstance(c, list):
             for part in c:
                 if isinstance(part, dict) and part.get("type") == "text":
-                    total += len(part.get("text", ""))
+                    total += count_tokens(part.get("text", ""), model)
                 elif isinstance(part, dict) and part.get("type") == "image_url":
-                    # Conservative estimate for an inlined image
-                    total += 2_000
+                    total += _IMAGE_TOKEN_ESTIMATE
         if m.get("tool_calls"):
-            total += len(json.dumps(m["tool_calls"]))
+            total += count_tokens(json.dumps(m["tool_calls"]), model)
     return total
+
+
+def _compact_threshold_tokens() -> int:
+    """History token budget before compaction kicks in."""
+    if COMPACT_THRESHOLD_TOKENS is not None:
+        return COMPACT_THRESHOLD_TOKENS
+    return int(get_settings().chat_context_window * COMPACT_THRESHOLD_FRACTION)
 
 
 # ── LLM-backed compression primitives ────────────────────────────────────
@@ -721,16 +752,12 @@ def load_compacted_history(
     messages = [m for _, m in id_messages]
     messages = _clean_orphans(messages)
 
-    over_count = len(messages) > COMPACT_THRESHOLD_MESSAGES
-    over_chars = _estimate_chars(messages) > COMPACT_THRESHOLD_CHARS
-
-    if not (over_count or over_chars):
+    if _estimate_tokens(messages, deployment) <= _compact_threshold_tokens():
         return _with_summary_prefix(conv.summary_text, messages), deferred
 
-    # Determine recent window size — keep at least RECENT_KEEP_COUNT
-    # messages verbatim. With many small messages we keep the count cap;
-    # with few but huge we still want to compress, so summarize older half.
-    if over_count:
+    # Over the token budget. Keep the most recent RECENT_KEEP_COUNT messages
+    # verbatim; with fewer-but-huge messages still compress the older half.
+    if len(messages) > RECENT_KEEP_COUNT:
         keep_n = RECENT_KEEP_COUNT
     else:
         keep_n = max(1, len(messages) // 2)
@@ -785,14 +812,16 @@ def load_compacted_history(
 
     if cumulative_outcomes:
         prior = conv.summary_text or ""
-        # Cap cumulative cache at ~3 KB so it stays compact across many turns
+        # Cap the cumulative cache. Recompression is lossy (LLM squeeze), so
+        # the cap is generous — full originals remain recoverable from the DB
+        # via the search_conversation tool.
         combined = (prior + "\n" + cumulative_outcomes).strip()
-        if len(combined) > 3000:
+        if len(combined) > CUMULATIVE_SUMMARY_MAX_CHARS:
             try:
                 combined = _summarize_long_paste(combined, client, deployment)
             except Exception as e:
                 logger.warning("Cumulative summary recompression failed: %s", e)
-                combined = combined[-3000:]
+                combined = combined[-CUMULATIVE_SUMMARY_MAX_CHARS:]
         conv.summary_text = combined
 
     if older_id_msgs:

@@ -19,7 +19,7 @@ class AzPolicyCheckTool(AzureToolBase):
     config_flag = "TOOL_AZ_POLICY_ENABLED"
     # Backstop in case the summary itself runs long; the orchestrator head/tail
     # trims above this (B4).
-    result_limit = 6_000
+    result_limit = 12_000
     description = (
         "Check Azure Policy compliance status. Read-only — no approval needed. "
         "List non-compliant resources, policy assignments, and compliance summaries."

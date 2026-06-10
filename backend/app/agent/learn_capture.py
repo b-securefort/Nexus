@@ -48,13 +48,20 @@ _EXPLICIT_TEACH_RE = re.compile(
     r"add (?:this|it|that)?\s*to (?:your )?learnings?"
     r"|add to (?:your )?learnings?"
     r"|as a learning"
+    # "please learn that X" / "learn this:" — the most natural teach phrasing
+    # of all, and the one conv #350 used; it was missing and the lesson was
+    # silently dropped. Anchored on a following this/that(/it/:) so prose like
+    # "I want to learn more about X" stays out.
+    r"|(?:please\s+)?learn (?:this|that|it)\b"
+    r"|learn:"
+    r"|save (?:this|that|it) as a learning"
     r"|remember this"
     r"|remember that"
     r"|for (?:the )?future(?: reference)?"
     r"|note (?:this |that )?for (?:the )?future"
     r"|make a note"
     r"|keep this in mind going forward"
-    r")\b",
+    r")",
     re.IGNORECASE,
 )
 

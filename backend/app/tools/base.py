@@ -237,6 +237,11 @@ class Tool(ABC):
     #                         (was orchestrator `_TOOL_RESULT_LIMITS`)
     #   is_diagram_tool     — drawio-family tool: strip echoed XML on truncation
     #                         (was orchestrator `_DRAWIO_TOOLS`)
+    #   attaches_render     — a successful call leaves a fresh PNG render on
+    #                         disk: the orchestrator inlines it for the model's
+    #                         vision review and attaches it to the final
+    #                         assistant message (was a hardcoded name tuple,
+    #                         which silently missed newly added diagram tools)
     #   requires_credentials— needs its bundle's per-request credential set up
     #                         (was orchestrator `isinstance(tool, AzureToolBase)`)
     #   config_flag         — Settings attribute name that enables/disables this
@@ -246,6 +251,7 @@ class Tool(ABC):
     learning_eligible: bool = False
     result_limit: int | None = None
     is_diagram_tool: bool = False
+    attaches_render: bool = False
     requires_credentials: bool = False
     config_flag: str | None = None
 

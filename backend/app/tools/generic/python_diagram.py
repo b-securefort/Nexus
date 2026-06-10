@@ -228,6 +228,7 @@ class GeneratePythonDiagramTool(Tool):
     name = "generate_python_diagram"
     config_flag = "TOOL_PYTHON_DIAGRAM_ENABLED"
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
+    attaches_render = True   # fresh PNG on success - orchestrator attaches + vision-reviews
     description = (
         "Render an architecture diagram from Python code using the `diagrams` "
         "library (mingrammer/diagrams). Unlike generate_file with .drawio, this "

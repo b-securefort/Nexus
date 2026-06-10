@@ -197,6 +197,7 @@ class RenderDrawioTool(Tool):
     name = "render_drawio"
     config_flag = "TOOL_RENDER_DRAWIO_ENABLED"
     is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
+    attaches_render = True   # fresh PNG on success - orchestrator attaches + vision-reviews
     description = (
         "Render a .drawio file in output/ to an image (PNG by default) so you can "
         "visually review the rendered diagram. generate_file already auto-renders "

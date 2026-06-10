@@ -11,7 +11,7 @@ Nexus is a self-hosted AI assistant for platform teams (Azure is the primary pla
 | Backend | Python 3.11, FastAPI, SQLModel, OpenAI SDK, GitPython, httpx |
 | Frontend | React 19, TypeScript 6, Vite 8, Tailwind CSS v4, zustand, @tanstack/react-query |
 | Database | SQLite (via SQLModel/SQLAlchemy) |
-| AI | Azure OpenAI (`gpt-5.4-mini`), streaming via SSE |
+| AI | Azure OpenAI — `gpt-5.4` (agent loop, via `AZURE_OPENAI_DEPLOYMENT_HIGH`) + `gpt-4o-mini` (aux: summaries, judge, risk review), streaming via SSE |
 | Auth | Microsoft Entra ID (MSAL) — bypassed in dev via `DEV_AUTH_BYPASS=true` |
 | Testing | Backend: pytest (~250 tests) · Frontend: vitest (~150 tests) |
 

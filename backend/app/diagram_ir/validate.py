@@ -15,11 +15,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .catalog import CONTAINER_STYLES, EDGE_STYLES, icon_known
+from .catalog import CONTAINER_STYLES, EDGE_STYLES, icon_known, suggest_icons
 from .schema import Container, Diagram, Node
 
 _LEGAL_LAYOUT = {"", "row", "column", "grid"}
 _LEGAL_CORNER = {"top-left", "top-right", "bottom-left", "bottom-right"}
+
+
+def _icon_hint(ref: str) -> str:
+    close = suggest_icons(ref)
+    if close:
+        return f" — did you mean: {', '.join(close)}?"
+    return " — use a 'shape/*' builtin as a fallback and tell the user the icon is missing"
 
 
 @dataclass
@@ -72,10 +79,15 @@ def validate_ir(diagram: Diagram) -> IRValidation:
             if ad.corner not in _LEGAL_CORNER:
                 v.errors.append(f"'{b.id}': adornment corner '{ad.corner}' invalid")
             if not icon_known(ad.icon):
-                v.errors.append(f"'{b.id}': adornment icon '{ad.icon}' not in catalog")
+                v.errors.append(
+                    f"'{b.id}': adornment icon '{ad.icon}' not in catalog"
+                    f"{_icon_hint(ad.icon)}"
+                )
     for n in diagram.nodes:
         if not icon_known(n.icon):
-            v.errors.append(f"node '{n.id}': icon '{n.icon}' not in catalog")
+            v.errors.append(
+                f"node '{n.id}': icon '{n.icon}' not in catalog{_icon_hint(n.icon)}"
+            )
     for e in diagram.edges:
         if e.type not in EDGE_STYLES:
             v.errors.append(f"edge {e.source}->{e.target}: unknown type '{e.type}'")

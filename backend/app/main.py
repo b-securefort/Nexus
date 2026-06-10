@@ -396,6 +396,56 @@ def _ensure_agent_learnings_vec(conn) -> None:
         )
 
 
+async def _preflight_aoai_deployments() -> None:
+    """Verify every configured Azure OpenAI deployment exists on the endpoint.
+
+    Best-effort and advisory: ERROR-logs each configured name missing from the
+    endpoint's deployment list; stays quiet on network failure (offline dev).
+    Never blocks startup."""
+    import httpx
+
+    settings = get_settings()
+    if not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_API_KEY:
+        return
+    configured = {
+        "AZURE_OPENAI_DEPLOYMENT": settings.AZURE_OPENAI_DEPLOYMENT,
+        "AZURE_OPENAI_EMBED_DEPLOYMENT": settings.AZURE_OPENAI_EMBED_DEPLOYMENT,
+    }
+    if settings.AZURE_OPENAI_DEPLOYMENT_HIGH:
+        configured["AZURE_OPENAI_DEPLOYMENT_HIGH"] = settings.AZURE_OPENAI_DEPLOYMENT_HIGH
+    url = (
+        settings.AZURE_OPENAI_ENDPOINT.rstrip("/")
+        + "/openai/deployments?api-version=2023-03-15-preview"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"api-key": settings.AZURE_OPENAI_API_KEY})
+        if resp.status_code != 200:
+            logger.warning("AOAI deployment preflight skipped (HTTP %s)", resp.status_code)
+            return
+        existing = {d.get("id") for d in resp.json().get("data", [])}
+    except Exception as e:  # noqa: BLE001 — preflight must never break startup
+        logger.warning("AOAI deployment preflight skipped: %s", str(e)[:120])
+        return
+    ok = True
+    for setting_name, deployment in configured.items():
+        if deployment and deployment not in existing:
+            ok = False
+            logger.error(
+                "%s=%r does NOT exist on %s (existing deployments: %s). Every call "
+                "to it will 404: the features routed there fail closed SILENTLY "
+                "(risk review, compaction summaries, learnings, KB vector search) "
+                "and repeated failures can open the shared circuit breaker and "
+                "block chat. Fix the value in backend/.env or create the deployment.",
+                setting_name, deployment,
+                settings.AZURE_OPENAI_ENDPOINT, sorted(existing),
+            )
+    if ok:
+        logger.info(
+            "AOAI deployment preflight OK: %s", sorted(v for v in configured.values() if v)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown tasks."""
@@ -456,6 +506,14 @@ async def lifespan(app: FastAPI):
     # Must run after both init_tools() and load_shared_skills() above.
     from app.skills.shared import audit_shared_skill_tool_allowlists
     audit_shared_skill_tool_allowlists()
+
+    # AOAI deployment preflight (background, non-blocking). A misconfigured
+    # deployment name doesn't break chat loudly — it silently degrades every
+    # call routed to it AND feeds the shared circuit breaker. Scream at startup
+    # instead (found 2026-06-10: base + embed deployments named ones that
+    # didn't exist on the endpoint; risk review, compaction summaries,
+    # learnings, and KB vector search had all been failing closed for days).
+    asyncio.create_task(_preflight_aoai_deployments())
 
     # Kick KB hybrid-retrieval reindex in background (non-blocking)
     from app.kb.reindex import reindex_all

@@ -42,6 +42,7 @@ class GenerateFileTool(Tool):
     name = "generate_file"
     config_flag = "TOOL_GENERATE_FILE_ENABLED"
     is_diagram_tool = True      # was orchestrator _DRAWIO_TOOLS
+    attaches_render = True   # fresh PNG on success - orchestrator attaches + vision-reviews
     description = (
         "Write generated content (Bicep, Terraform, scripts, configs, docs) to the "
         "output/ directory. Sandboxed — only writes to output/ so it's safe. "

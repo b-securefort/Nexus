@@ -19,7 +19,7 @@ class AzResourceGraphTool(AzureToolBase):
     config_flag = "TOOL_AZ_CLI_ENABLED"   # shares the az_cli toggle
     retry_eligible = True       # was orchestrator _COMMAND_TOOLS
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
-    result_limit = 4_000        # was orchestrator _TOOL_RESULT_LIMITS
+    result_limit = 12_000        # was orchestrator _TOOL_RESULT_LIMITS
     max_output_size = 16384
 
     @staticmethod

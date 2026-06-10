@@ -218,7 +218,7 @@ def _tool_control_outcome(approval_denied: bool, tool_result: str) -> tuple[str,
 _DEFERRED_ACTION_PATTERN = re.compile(
     r"\b("
     r"i\s?'?ll|i\s+will|i\s?'?m\s+going\s+to|i\s?'?m\s+about\s+to|"
-    r"let\s+me|next\s+i\s?'?ll|i\s?'?ll\s+now|i\s+can"
+    r"let\s+me|next\s+i\s?'?ll|i\s?'?ll\s+now"
     r")\s+"
     # Optional adverbial modifier between the intent and the verb:
     # "I'll NOW generate", "Let me FIRST render", "I will THEN write".
@@ -227,6 +227,9 @@ _DEFERRED_ACTION_PATTERN = re.compile(
     r"patch|add|build|draw|sketch|produce|emit|make)\b",
     re.IGNORECASE,
 )
+# NB: "i can" is deliberately NOT in the intent list above. "I can generate a
+# diagram if you'd like" is an OFFER awaiting user confirmation, not a deferred
+# action — nudging it turns an offer into an unrequested tool call.
 
 
 def _looks_like_deferred_action(text: str) -> bool:
@@ -264,10 +267,14 @@ def _tool_result_limit(tool_name: str) -> int | None:
 # Track 4D — threshold above which the head+tail truncation is replaced by
 # an LLM summarisation pass. The old head+tail split could leave the model
 # staring at half a JSON object and either truncate mid-value (parse error)
-# or duplicate keys (model confusion). Below the threshold, head+tail is
-# fine — JSON parse errors won't matter because the model only sees a tiny
-# snippet either way.
-_LLM_TRUNCATE_THRESHOLD = 2_048
+# or duplicate keys (model confusion).
+#
+# Raised 2 KB → 16 KB with the high-tier context window: a 16 KB tool result
+# is ~4K tokens — trivially affordable in a 400K window, and the verbatim
+# output is strictly better than a lossy summary (exact names, IDs, error
+# text survive). The LLM pass also cost 1-3s of latency per large result.
+# Only genuinely huge dumps (multi-hundred-KB CLI output) are summarised now.
+_LLM_TRUNCATE_THRESHOLD = 16_384
 
 
 def _summarize_tool_result_with_llm(tool_name: str, enveloped_result: str) -> str | None:
@@ -432,6 +439,66 @@ def _get_openai_client() -> AzureOpenAI:
         api_version=settings.AZURE_OPENAI_API_VERSION,
         timeout=float(settings.AOAI_TIMEOUT_SECONDS),
         max_retries=0,  # circuit breaker handles retry logic; don't double-count failures
+    )
+
+
+# 429 handling for the MAIN chat stream. The high-tier deployment has a modest
+# TPM quota and diagram turns are the heaviest thing Nexus does (long prompt +
+# a vision-review image per render), so transient throttles are normal — but
+# with max_retries=0 a single 429 previously killed the whole turn AND counted
+# toward opening the shared circuit breaker. Retry with the service-provided
+# Retry-After (capped), and only report failure when retries are exhausted.
+_RATE_LIMIT_MAX_ATTEMPTS = 4
+_RATE_LIMIT_MAX_SLEEP_SECONDS = 30.0
+
+
+def _retry_after_seconds(exc) -> float:
+    """Best-effort Retry-After from a RateLimitError; default 5s."""
+    try:
+        headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+        val = headers.get("retry-after") or headers.get("Retry-After")
+        if val:
+            return min(float(val), _RATE_LIMIT_MAX_SLEEP_SECONDS)
+    except (TypeError, ValueError):
+        pass
+    return 5.0
+
+
+def _create_stream_with_429_retry(client, create_kwargs: dict):
+    """`client.chat.completions.create(**kwargs)` with bounded 429 backoff.
+
+    Synchronous — runs on the stream worker thread, never the event loop.
+    Anything other than a rate limit propagates immediately.
+    """
+    from openai import RateLimitError
+
+    for attempt in range(1, _RATE_LIMIT_MAX_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(**create_kwargs)
+        except RateLimitError as exc:
+            if attempt == _RATE_LIMIT_MAX_ATTEMPTS:
+                raise
+            delay = _retry_after_seconds(exc)
+            logger.warning(
+                "429 from chat deployment (attempt %d/%d) — sleeping %.1fs then retrying",
+                attempt, _RATE_LIMIT_MAX_ATTEMPTS, delay,
+            )
+            time.sleep(delay)
+
+
+def _get_chat_client() -> AzureOpenAI:
+    """Client for the MAIN agent loop. Uses the high-tier deployment's API
+    version when AZURE_OPENAI_DEPLOYMENT_HIGH is configured; identical to
+    `_get_openai_client()` otherwise. Auxiliary calls (compaction summaries,
+    tool-output compression, judge, risk review) stay on the base client so
+    the strong model's quota is spent only on agent reasoning."""
+    settings = get_settings()
+    return AzureOpenAI(
+        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+        api_key=settings.AZURE_OPENAI_API_KEY,
+        api_version=settings.chat_api_version,
+        timeout=float(settings.AOAI_TIMEOUT_SECONDS),
+        max_retries=0,
     )
 
 
@@ -680,13 +747,15 @@ def _compose_system_prompt(
         # lives in the static cache-prefix and is ordered deterministically by
         # bundle name so the prompt-cache prefix stays byte-stable (§5 2026-06-05).
         + bundle_prompt_fragments()
-        + "## Thinking before acting\n"
-        "ALWAYS include a brief text explanation BEFORE making any tool call(s). "
-        "The user must see your reasoning. Specifically:\n"
-        "- **Before a tool call**: Explain what you're about to do and why (1-2 sentences).\n"
-        "- **Before a retry**: Explain what went wrong with the previous attempt and what you'll try differently.\n"
-        "- **Before multiple tool calls**: Explain why you need each one.\n"
-        "NEVER emit tool calls without accompanying text content in the same response.\n\n"
+        + "## Output style\n"
+        "Be concise. Lead with the answer or result; add detail only where it changes "
+        "what the user does next. Do NOT restate tool output the user can already see, "
+        "do NOT narrate routine tool calls, and do NOT summarize what you just did "
+        "unless asked. Prefer short prose; use a list only for genuinely enumerable "
+        "items, never as padding. When a tool call's purpose isn't obvious from "
+        "context (or you're retrying after a failure), say why in one short clause "
+        "first — otherwise just call it. Never end a reply announcing an action you "
+        "can take right now: take it.\n\n"
         "## Retry policy\n"
         "When a tool call fails, you MUST try at least 3 different approaches before giving up:\n"
         "1. **Fix the syntax** — Read the error carefully, check docs with `fetch_ms_docs`, and retry.\n"
@@ -695,9 +764,13 @@ def _compose_system_prompt(
         "## Learning policy\n"
         "Relevant learnings from past failures (if any) are retrieved automatically and "
         "shown below. You do NOT call any tool to record or read learnings — the orchestrator "
-        "records validated learnings automatically when you succeed after a failure. Your job "
-        "is to *use* the retrieved learnings: review them before executing, and if a "
-        "documented approach matches the current task, apply it.\n"
+        "records validated learnings automatically when you succeed after a failure, AND "
+        "when the user explicitly asks to remember something ('please learn that…', 'add "
+        "to learnings…'), it captures the lesson from their message automatically. When "
+        "that happens, acknowledge it will be recorded — do NOT claim you saved it "
+        "yourself, and do NOT say it cannot be saved. Your job is to *use* the retrieved "
+        "learnings: review them before executing, and if a documented approach matches "
+        "the current task, apply it.\n"
         "---"
     )
 
@@ -810,6 +883,28 @@ def _resolve_rendered_png(args: dict, func_name: str | None) -> tuple["Path | No
     return (Path("output") / filename).with_suffix(f".{fmt}"), filename, fmt
 
 
+# Tolerance for the stale-render check. The PNG is written right after its
+# .drawio source on a successful render, so "source newer than image by more
+# than this" can only mean the PNG belongs to a PREVIOUS iteration (this
+# iteration's export failed). Generous enough for slow sidecar renders.
+_RENDER_STALE_AFTER_SECONDS = 2.0
+
+
+def _render_is_stale(image_path) -> bool:
+    """True when a sibling .drawio source is newer than the rendered image —
+    i.e. the latest export failed and this PNG shows an OLDER version of the
+    diagram. Attaching it would have the model (and the user) reviewing a
+    picture that doesn't match the file that was just written. Tools without
+    a .drawio intermediate (generate_python_diagram) never report stale."""
+    src = image_path.with_suffix(".drawio")
+    try:
+        if not src.is_file():
+            return False
+        return src.stat().st_mtime - image_path.stat().st_mtime > _RENDER_STALE_AFTER_SECONDS
+    except OSError:
+        return False
+
+
 def _build_render_review_message(args: dict, func_name: str | None = None) -> dict | None:
     """If a render_drawio call produced an image, build a synthetic user message
     with the image inlined for the next model turn so the vision-capable model
@@ -828,6 +923,11 @@ def _build_render_review_message(args: dict, func_name: str | None = None) -> di
     try:
         if not image_path.is_file():
             return None
+        if _render_is_stale(image_path):
+            # The export for THIS iteration failed; the PNG on disk is a
+            # previous version. Reviewing it would mislead the model.
+            logger.warning("Skipping stale render review for %s", image_path)
+            return None
         data = image_path.read_bytes()
     except OSError:
         return None
@@ -836,26 +936,17 @@ def _build_render_review_message(args: dict, func_name: str | None = None) -> di
 
     mime = "image/png" if fmt == "png" else "image/jpeg"
     b64 = base64.b64encode(data).decode("ascii")
-    if func_name == "generate_python_diagram":
-        review_text = (
-            f"Rendered image of {display_name} for visual review. Check: "
-            "(1) container nesting matches the architecture, (2) edges connect "
-            "the right nodes with the right direction, (3) cluster labels read "
-            "correctly, (4) any edge flow labels are placed sensibly. If "
-            "something is wrong, edit the Python and re-run generate_python_diagram "
-            "with the same filename (it overwrites). If it looks good, tell the "
-            "user it's ready."
-        )
-    else:
-        review_text = (
-            f"Rendered image of {display_name} for visual review. Check: "
-            "(1) every edge label is readable and not overlapping any icon or "
-            "another label, (2) every numbered badge sits next to the connector "
-            "or icon it annotates, (3) connection lines do not pass through "
-            "unrelated icons or container titles, (4) bidirectional flows are "
-            "explicit. If you find issues, edit the .drawio with overwrite=true, "
-            "re-render, and review again. If it looks good, tell the user it's ready."
-        )
+    # One terse instruction for every diagram path. The skill owns the review
+    # workflow; this message only delivers the image and sets the brevity bar —
+    # a checklist here just produces a checklist-shaped essay per render.
+    review_text = (
+        f"Rendered image of {display_name}. Review it against what was agreed. "
+        "If something is wrong (wrong icon or nesting, clipped/colliding text, a "
+        "line through an icon, missing agreed structure), fix your source and "
+        "re-run with the same filename. If it looks right, present it to the "
+        "user in one or two sentences — mention only actual problems, never a "
+        "checklist of things that passed."
+    )
     return {
         "role": "user",
         "content": [
@@ -864,11 +955,53 @@ def _build_render_review_message(args: dict, func_name: str | None = None) -> di
                 "type": "image_url",
                 "image_url": {
                     "url": f"data:{mime};base64,{b64}",
-                    "detail": "high",
+                    # "auto", not "high": structure presence/absence comes from
+                    # the tool's authoritative Structure echo now — the image
+                    # is only for visual quality, and "high" multiplied the
+                    # input tokens of every diagram iteration (429 pressure on
+                    # the modest high-tier TPM quota).
+                    "detail": "auto",
                 },
             },
         ],
     }
+
+
+def _drop_stale_render_reviews(messages: list[dict], new_review: dict) -> int:
+    """Remove superseded in-memory render-review messages for the same file.
+
+    Each render of a filename queues a review message carrying a full base64
+    image; on an iterate-heavy turn those accumulated (5 renders = 5 stale
+    PNGs re-sent on every subsequent LLM call — pure 429 fuel). Only the
+    LATEST render of a given file is worth reviewing, so drop earlier ones.
+    These are synthetic in-memory messages, never persisted to DB.
+    Returns the number removed.
+    """
+    try:
+        new_text = new_review["content"][0]["text"]
+        prefix = new_text.split(".", 1)[0]  # "Rendered image of <name>"
+    except (KeyError, IndexError, TypeError):
+        return 0
+    if not prefix.startswith("Rendered image of"):
+        return 0
+    kept: list[dict] = []
+    removed = 0
+    for m in messages:
+        content = m.get("content")
+        if (
+            m.get("role") == "user"
+            and isinstance(content, list)
+            and content
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "text"
+            and str(content[0].get("text", "")).startswith(prefix + ".")
+        ):
+            removed += 1
+            continue
+        kept.append(m)
+    if removed:
+        messages[:] = kept
+    return removed
 
 
 def _attachment_for_rendered_png(args: dict, func_name: str | None = None) -> dict | None:
@@ -890,6 +1023,11 @@ def _attachment_for_rendered_png(args: dict, func_name: str | None = None) -> di
     except OSError:
         return None
     if not image_path.is_file() or stat.st_size == 0:
+        return None
+    if _render_is_stale(image_path):
+        # Failed export this iteration — don't show the user an old render
+        # under the new description.
+        logger.warning("Skipping stale render attachment for %s", image_path)
         return None
 
     png_name = image_path.name
@@ -1419,8 +1557,10 @@ def _execute_tool_streaming(
             )
             err = (
                 f"Error: Rate limit exceeded for `{tool.name}`. Maximum "
-                f"{tool.rate_limit_calls} calls per {window} seconds. Please "
-                "wait or use a different strategy."
+                f"{tool.rate_limit_calls} calls per {window} seconds. Call the "
+                f"`sleep` tool (e.g. sleep {window}s) to wait out the window, "
+                "then retry the SAME action — or answer from data you already "
+                "have. Throttling is not a reason to switch tools."
             )
             chunk_sink.append(err)
             return err
@@ -1487,9 +1627,17 @@ async def handle_chat(
     # can enforce skill-scoped behaviour that the LLM keeps ignoring in the
     # system prompt (see generate_file's .drawio guard).
     set_skill_name(skill.name)
+    # Two clients: `chat_client` (high-tier deployment when configured) drives
+    # the agent loop; `client` (base/mini deployment) serves the cheap
+    # auxiliary work — compaction summaries, tool-output compression.
     client = _get_openai_client()
-    messages, _deferred_compaction = load_compacted_history(
-        session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT
+    chat_client = _get_chat_client()
+    # load_compacted_history can make synchronous LLM calls (scaffold
+    # summarisation on a compaction turn) and DB reads — run it off the event
+    # loop so it can't stall other users' SSE streams / approval POSTs.
+    messages, _deferred_compaction = await asyncio.to_thread(
+        load_compacted_history,
+        session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT,
     )
     original_task = get_original_task(session, conversation.id)
     system_prompt, retrieved_learning_ids, prompt_segments = _compose_system_prompt(
@@ -1509,13 +1657,20 @@ async def handle_chat(
     if settings.LEARN_FROM_USER_CORRECTIONS:
         from app.agent.learn_capture import looks_like_teach_intent
         if looks_like_teach_intent(user_message):
-            prior_action = _build_prior_action_context(messages)
-            if prior_action:
-                _schedule_user_correction_capture(
-                    user_message=user_message,
-                    prior_action=prior_action,
-                    originating_conversation_id=conversation.id,
-                )
+            # A teach turn can OPEN a conversation ("please learn that …" as
+            # the first message — conv #350) with no prior agent action to
+            # correct. The extractor treats prior_action as context, not a
+            # requirement, so pass an explicit placeholder instead of silently
+            # dropping the user's instruction.
+            prior_action = _build_prior_action_context(messages) or (
+                "(none — standalone teaching instruction; no prior agent "
+                "action in this conversation)"
+            )
+            _schedule_user_correction_capture(
+                user_message=user_message,
+                prior_action=prior_action,
+                originating_conversation_id=conversation.id,
+            )
 
     iteration = 0
 
@@ -1576,7 +1731,7 @@ async def handle_chat(
             api_messages = [{"role": "system", "content": system_prompt}] + messages
 
             create_kwargs = {
-                "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                "model": settings.chat_deployment,
                 "messages": api_messages,
                 "stream": True,
                 "stream_options": {"include_usage": True},
@@ -1599,7 +1754,7 @@ async def handle_chat(
             def _consume_openai_stream():
                 try:
                     cb_check()
-                    s = client.chat.completions.create(**create_kwargs)
+                    s = _create_stream_with_429_retry(chat_client, create_kwargs)
                     for c in s:
                         chunk_queue.put_nowait(c)
                     cb_success()
@@ -1698,14 +1853,12 @@ async def handle_chat(
                     # sent — this turn's assistant reply and tool outputs have not
                     # been appended yet. The displayed payload is overwritten at
                     # turn end (see the `not tool_calls` branch).
-                    from app.agent.token_usage import (
-                        build_segments, context_window_for_model, raw_total_tokens,
-                    )
+                    from app.agent.token_usage import build_segments, raw_total_tokens
                     raw_total_start = raw_total_tokens(
                         system_segments=prompt_segments,
                         tool_schemas=tool_schemas,
                         messages=messages,
-                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                        model=settings.chat_deployment,
                     )
                     if raw_total_start > 0 and prompt_tokens > 0:
                         usage_calibration = prompt_tokens / raw_total_start
@@ -1713,18 +1866,17 @@ async def handle_chat(
                         system_segments=prompt_segments,
                         tool_schemas=tool_schemas,
                         messages=messages,
-                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                        model=settings.chat_deployment,
                         prompt_tokens=prompt_tokens,
                     )
                     resting_usage = {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "cached_tokens": cached,
-                        "context_window": context_window_for_model(
-                            settings.AZURE_OPENAI_DEPLOYMENT,
-                            settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
-                        ),
-                        "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                        # Explicit config wins over the substring table — see
+                        # Settings.chat_context_window.
+                        "context_window": settings.chat_context_window,
+                        "model": settings.chat_deployment,
                         "segments": segments,
                     }
 
@@ -1792,17 +1944,19 @@ async def handle_chat(
                 # prompt_tokens is available, so scale the tiktoken total by the
                 # calibration ratio captured on the first call.
                 try:
-                    from app.agent.token_usage import (
-                        build_segments, context_window_for_model, raw_total_tokens,
-                    )
-                    resting_messages, _discard = load_compacted_history(
+                    from app.agent.token_usage import build_segments, raw_total_tokens
+                    # Off the event loop: a fresh compaction pass here can make
+                    # synchronous LLM summarisation calls (same reason as the
+                    # turn-start load).
+                    resting_messages, _discard = await asyncio.to_thread(
+                        load_compacted_history,
                         session, conversation.id, client, settings.AZURE_OPENAI_DEPLOYMENT,
                     )
                     raw_resting = raw_total_tokens(
                         system_segments=prompt_segments,
                         tool_schemas=tool_schemas,
                         messages=resting_messages,
-                        model=settings.AZURE_OPENAI_DEPLOYMENT,
+                        model=settings.chat_deployment,
                     )
                     est_prompt_tokens = (
                         round(raw_resting * usage_calibration)
@@ -1813,16 +1967,13 @@ async def handle_chat(
                             "prompt_tokens": est_prompt_tokens,
                             "completion_tokens": 0,
                             "cached_tokens": 0,
-                            "context_window": context_window_for_model(
-                                settings.AZURE_OPENAI_DEPLOYMENT,
-                                settings.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS,
-                            ),
-                            "model": settings.AZURE_OPENAI_DEPLOYMENT,
+                            "context_window": settings.chat_context_window,
+                            "model": settings.chat_deployment,
                             "segments": build_segments(
                                 system_segments=prompt_segments,
                                 tool_schemas=tool_schemas,
                                 messages=resting_messages,
-                                model=settings.AZURE_OPENAI_DEPLOYMENT,
+                                model=settings.chat_deployment,
                                 prompt_tokens=est_prompt_tokens,
                             ),
                         }
@@ -2129,19 +2280,22 @@ async def handle_chat(
                 # The UI gets the raw text for streaming/display, but can also parse the enveloped result if needed
                 yield sse_tool_result(call_id, func_name, tool_result)
 
-                # Whenever a .drawio diagram has been (re)written or rendered,
-                # queue a synthetic user message that inlines the PNG so the
-                # model can visually review the result on the next iteration.
-                # generate_file auto-renders the PNG, so this fires on every
-                # diagram generation - not just explicit render_drawio calls.
+                # Whenever a diagram has been (re)written or rendered, queue a
+                # synthetic user message that inlines the PNG so the model can
+                # visually review the result on the next iteration. Driven by
+                # the `attaches_render` capability on the tool — the previous
+                # hardcoded name tuple silently missed generate_structured_diagram,
+                # so structured renders never reached the model or the user.
                 # Defer the append until all tool_call_ids are answered to keep
                 # API ordering valid.
-                if not is_error and func_name in (
-                    "render_drawio", "generate_file", "patch_drawio_cell",
-                    "generate_drawio_from_python", "generate_python_diagram",
-                ):
+                if not is_error and _tool_has(func_name, "attaches_render"):
                     review_msg = _build_render_review_message(func_args, func_name)
                     if review_msg is not None:
+                        # Only the latest render of a file deserves review —
+                        # purge superseded review images from earlier
+                        # iterations (in-memory only) before queueing this one.
+                        _drop_stale_render_reviews(messages, review_msg)
+                        _drop_stale_render_reviews(post_iteration_messages, review_msg)
                         post_iteration_messages.append(review_msg)
                         logger.info(
                             "Queued rendered-image review message for %s (%s)",
@@ -2219,7 +2373,11 @@ async def handle_chat(
                     # diagram-as-code tools) have their own recovery paths — we
                     # still track their failures so a later success is learnable.
                     if _tool_has(func_name, "retry_eligible"):
-                        strategy = _get_retry_strategy(count, func_name, func_args, tool_result)
+                        # Off the event loop: strategy 1 auto-fetches MS Learn
+                        # docs (a synchronous HTTP call) to enrich the hint.
+                        strategy = await asyncio.to_thread(
+                            _get_retry_strategy, count, func_name, func_args, tool_result,
+                        )
                         if strategy:
                             messages.append({"role": "system", "content": strategy})
                             logger.info(

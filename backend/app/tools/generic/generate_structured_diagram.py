@@ -30,7 +30,14 @@ from pathlib import Path
 
 from app.auth.models import User
 from app.diagram_ir.emit import emit_drawio
-from app.diagram_ir.geometry import check_edge_crossings, check_edge_overlaps
+from app.diagram_ir.geometry import (
+    check_edge_crossings,
+    check_edge_overlaps,
+    check_flow_placement,
+    check_label_collisions,
+    check_line_over_labels,
+)
+from app.diagram_ir.labels import place_edge_labels
 from app.diagram_ir.layout import layout_diagram
 from app.diagram_ir.loader import IRSchemaError, load_ir
 from app.diagram_ir.routing import route_edges_gutter
@@ -61,6 +68,7 @@ class GenerateStructuredDiagramTool(Tool):
     name = "generate_structured_diagram"
     config_flag = "TOOL_STRUCTURED_DIAGRAM_ENABLED"
     is_diagram_tool = True          # strip echoed XML if the result is truncated
+    attaches_render = True   # fresh PNG on success - orchestrator attaches + vision-reviews
     learning_eligible = True
     description = (
         "Render a Microsoft-reference-style cloud architecture diagram from a "
@@ -88,11 +96,59 @@ class GenerateStructuredDiagramTool(Tool):
         "  - edges[]: {source, target, type?, label?}  "
         "type ∈ flow|private|dns|telemetry|replication\n"
         "  - direction ∈ LR|TB (default LR), title\n\n"
-        "Use invisible 'band' containers with layout=row/column to express 2D "
-        "arrangements a single-axis flow can't (e.g. a satellite row over the "
-        "main flow). Every container needs its children listed AND each child's "
-        "parent set to that container (they must agree). A broken IR is rejected "
-        "with a precise error; fix and retry with the same filename to overwrite."
+        "Edge-label discipline: labels are placed deterministically to avoid "
+        "collisions, but fewer/shorter is always better. Keep labels ≤3 words and "
+        "factual ('HTTPS', 'API calls') — never hedging ('likely main path'). OMIT "
+        "the label when the edge type already conveys it (private/dns/telemetry "
+        "render as distinct dashed styles), and never draw an edge that restates "
+        "containment (a private endpoint inside a subnet needs no 'private "
+        "placement' arrow).\n\n"
+        "Layout doctrine (what makes it read like a reference architecture): give "
+        "the flow a head and a tail — the OUTER container's layout runs WITH "
+        "direction (row for LR, column for TB), children ordered by traffic "
+        "position, each stage a cross-axis cluster; commit to one axis, no "
+        "hybrids. ORDER STAGES BY TRAFFIC POSITION, NOT CATEGORY: the container "
+        "hosting hop N of the flow sits between the stages hosting hops N-1 and "
+        "N+1 — e.g. a VNet whose subnet holds an internal APIM (hop 3) is a "
+        "MIDDLE stage between the web tier and the API tier, never a "
+        "'networking' block parked at the end (that turns every hop through it "
+        "into a canvas-crossing round trip). If one stage's members sit at very "
+        "different flow positions (web=hop 2, database=hop 6), SPLIT it into "
+        "two stages. Put the most-connected hub in the middle of its tier so "
+        "straight connectors radiate. For 2D inside a stage, nest invisible "
+        "'band' containers (a satellite row over the main flow = a column band "
+        "of two row bands). align_to is for a satellite in ANOTHER band only — "
+        "a same-band align_to is ignored with a warning.\n\n"
+        "Icon catalog — azure/: front_doors, application_gateways, firewalls, "
+        "load_balancers, nat_gateway, virtual_networks, virtual_network_gateways, "
+        "expressroute, network_security_groups, private_endpoint, private_link, "
+        "dns_private_zones, dns_zones, public_ip_addresses, bastions, "
+        "route_tables, subnet, web_application_firewall, app_services, "
+        "app_service_plans, function_apps, virtual_machine, vm_scale_sets, "
+        "kubernetes_services (aks), container_registries (acr), "
+        "container_instances, container_apps, sql_database, sql_managed_instance, "
+        "cosmos_db, redis, postgresql, mysql, storage_accounts, blob, entra_id, "
+        "managed_identities, key_vaults, defender, sentinel, monitor, "
+        "log_analytics, application_insights, policy, api_management (apim), "
+        "logic_apps, service_bus, event_grid, event_hubs, app_configuration, "
+        "openai, cognitive_services, ai_search, machine_learning. "
+        "aws/: route_53, cloudfront, waf, application_load_balancer, nat_gateway, "
+        "vpc, api_gateway, ecs, eks, lambda, ec2, aurora, rds, dynamodb, "
+        "elasticache, s3, secrets_manager, iam. "
+        "shape/ (non-branded only): cloud, cylinder, process, subprocess, "
+        "decision, terminator, document, datastore, queue, actor. "
+        "Always use the real azure/aws icon for a branded service; if one is "
+        "truly missing, use the closest match or a shape/* fallback and tell the "
+        "user. Unknown refs are rejected with close-match suggestions.\n\n"
+        "Every container lists its children AND each child's parent points back "
+        "(they must agree); style may be omitted (inferred: subnet inside "
+        "vnet/vpc, else group). A broken IR is rejected with a precise error; "
+        "fix and retry with the same filename to overwrite.\n\n"
+        "Iteration contract: pass the full `diagram` on the FIRST call only. "
+        "Every later change goes through `edits` (small delta ops against the "
+        "stored IR of the last render) — never re-send the whole diagram. The "
+        "result's 'Structure' echo is the authoritative list of what the "
+        "diagram contains; judge presence/absence from it, not from the image."
     )
     parameters_schema = {
         "type": "object",
@@ -105,9 +161,47 @@ class GenerateStructuredDiagramTool(Tool):
                     "output/<filename>.png."
                 ),
             },
+            "edits": {
+                "type": "array",
+                "description": (
+                    "Incremental changes to the LAST successfully rendered IR for "
+                    "this filename (stored server-side). STRONGLY preferred over "
+                    "re-sending `diagram` after the first render — re-emitting the "
+                    "full IR from memory is how nodes silently get lost between "
+                    "iterations. Parent/children stay in sync automatically. Ops: "
+                    "{op:'set', title?, direction?} | "
+                    "{op:'upsert_node', node:{id,...}} | {op:'remove_node', id} | "
+                    "{op:'upsert_container', container:{id,...}} (children, when "
+                    "given, REPLACES the list and re-parents) | "
+                    "{op:'remove_container', id} (must be empty) | "
+                    "{op:'upsert_edge', edge:{source,target,type?,label?}} | "
+                    "{op:'remove_edge', source, target}"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "op": {"type": "string",
+                               "enum": ["set", "upsert_node", "remove_node",
+                                        "upsert_container", "remove_container",
+                                        "upsert_edge", "remove_edge"]},
+                        "node": {"type": "object"},
+                        "container": {"type": "object"},
+                        "edge": {"type": "object"},
+                        "id": {"type": "string"},
+                        "source": {"type": "string"},
+                        "target": {"type": "string"},
+                        "title": {"type": "string"},
+                        "direction": {"type": "string", "enum": ["LR", "TB"]},
+                    },
+                    "required": ["op"],
+                },
+            },
             "diagram": {
                 "type": "object",
-                "description": "The structural Diagram IR.",
+                "description": (
+                    "The full structural Diagram IR. Required on the FIRST call "
+                    "for a filename; on every later call prefer `edits`."
+                ),
                 "properties": {
                     "title": {"type": "string"},
                     "direction": {"type": "string", "enum": ["LR", "TB"]},
@@ -167,13 +261,15 @@ class GenerateStructuredDiagramTool(Tool):
                 },
             },
         },
-        "required": ["filename", "diagram"],
+        "required": ["filename"],
     }
     requires_approval = False
 
     def execute(self, args: dict, user: User) -> str:
+        import json
+
         if not isinstance(args, dict):
-            return "Error: invalid arguments - expected an object with filename and diagram"
+            return "Error: invalid arguments - expected an object with filename and diagram/edits"
 
         filename = (args.get("filename") or args.get("name") or "").strip()
         if not filename:
@@ -187,13 +283,36 @@ class GenerateStructuredDiagramTool(Tool):
 
         ir = args.get("diagram")
         if isinstance(ir, str):
-            import json
             try:
                 ir = json.loads(ir)
             except json.JSONDecodeError as e:
                 return f"Error: `diagram` was a string but not valid JSON: {e}"
+
+        edits = args.get("edits")
+        sidecar = (_OUTPUT_DIR / f"{stem}.ir.json").resolve()
         if not isinstance(ir, dict):
-            return "Error: `diagram` is required and must be the IR object (containers/nodes/edges)."
+            if edits:
+                # Edits-only call: base is the IR of the last successful render.
+                if not sidecar.is_file():
+                    return (
+                        f"Error: no stored IR for '{stem}' — the first call for a "
+                        "filename must pass the full `diagram`; `edits` works from "
+                        "the second call on."
+                    )
+                try:
+                    ir = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as e:
+                    return f"Error: stored IR for '{stem}' unreadable ({e}) — pass the full `diagram`."
+            else:
+                return (
+                    "Error: pass `diagram` (the full IR — first call) or `edits` "
+                    "(changes to the stored IR — every later call)."
+                )
+        if edits:
+            from app.diagram_ir.edits import apply_edits
+            ir, edit_err = apply_edits(ir, edits)
+            if edit_err is not None:
+                return f"Error: {edit_err}"
 
         # Stage 1 — schema load (precise field-level errors).
         try:
@@ -214,16 +333,37 @@ class GenerateStructuredDiagramTool(Tool):
                 f"  - {w}" for w in v.warnings
             )
 
-        # Stage 3 — layout + route + emit (all deterministic, geometry computed).
+        # Stage 3 — layout + route + place labels + emit (all deterministic).
+        # Text-aware auto-iteration: when the first pass leaves a line through
+        # label text (B) or a label collision (D), retry routing once with
+        # more obstacle clearance and keep whichever pass scores fewer total
+        # defects — engine CPU instead of a chat round-trip + vision review.
         try:
             layout_diagram(diagram)
             routes = route_edges_gutter(diagram)
+            place_edge_labels(diagram, routes)
+            a = check_edge_crossings(diagram, routes)
+            b = check_line_over_labels(diagram, routes)
+            c = check_edge_overlaps(diagram, routes)
+            d = check_label_collisions(diagram, routes)
+            if b or d:
+                routes2 = route_edges_gutter(diagram, clearance=18.0)
+                place_edge_labels(diagram, routes2)
+                a2 = check_edge_crossings(diagram, routes2)
+                b2 = check_line_over_labels(diagram, routes2)
+                c2 = check_edge_overlaps(diagram, routes2)
+                d2 = check_label_collisions(diagram, routes2)
+                if len(a2) + len(b2) + len(c2) + len(d2) < len(a) + len(b) + len(c) + len(d):
+                    routes, a, b, c, d = routes2, a2, b2, c2, d2
             xml = emit_drawio(diagram, routes=routes)
         except Exception as e:  # engine bug, not user error — surface it
             logger.exception("Structured diagram engine failed for %s", user.email)
             return f"Error: layout/route/emit failed unexpectedly: {e}"
 
-        # Stage 4 — write the .drawio.
+        # Stage 4 — write the .drawio + persist the accepted IR as the sidecar
+        # `edits` works against. The sidecar always matches the .drawio on disk,
+        # so an incremental call can never base itself on structure that was
+        # never rendered.
         sandbox = _OUTPUT_DIR.resolve()
         sandbox.mkdir(parents=True, exist_ok=True)
         drawio_path = sandbox / f"{stem}.drawio"
@@ -231,42 +371,72 @@ class GenerateStructuredDiagramTool(Tool):
             drawio_path.write_text(xml, encoding="utf-8")
         except OSError as e:
             return f"Error writing {stem}.drawio: {e}"
+        try:
+            (sandbox / f"{stem}.ir.json").write_text(
+                json.dumps(ir, indent=2, ensure_ascii=False), encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("Could not persist IR sidecar for %s", stem)
 
-        # Stage 5 — scorecard (A = line over icon, C = arrow hidden behind arrow).
-        a = check_edge_crossings(diagram, routes)
-        c = check_edge_overlaps(diagram, routes)
-        score = f"layout scorecard: A(line-over-icon)={len(a)}  C(arrow-hidden)={len(c)}"
+        # Structural echo — the authoritative answer to "what does the diagram
+        # contain". The model must verify presence/absence HERE; the rendered
+        # image (small icons, downscaled for vision) is only for visual quality.
+        # Conv #352 burned 4 renders chasing nodes the vision pass hallucinated
+        # as missing.
+        echo = (
+            "Structure (authoritative — check presence/absence here, NOT in the image):\n"
+            f"  containers ({len(diagram.containers)}): "
+            + (", ".join(c.id for c in diagram.containers) or "—") + "\n"
+            f"  nodes ({len(diagram.nodes)}): "
+            + (", ".join(n.id for n in diagram.nodes) or "—") + "\n"
+            f"  edges ({len(diagram.edges)}): "
+            + (", ".join(f"{e.source}->{e.target}" for e in diagram.edges) or "—")
+        )
+
+        # Stage 5 — scorecard. A/C = icon/arrow defects; B/D = the text defects
+        # (line through label text, label on label) that dominated real renders.
+        score = (
+            f"layout scorecard: A(line-over-icon)={len(a)}  "
+            f"B(line-over-label)={len(b)}  C(arrow-hidden)={len(c)}  "
+            f"D(label-collision)={len(d)}"
+        )
         score_detail = ""
-        if a or c:
-            score_detail = "\n" + "\n".join(f"  - {m}" for m in (*a, *c))
+        if a or b or c or d:
+            score_detail = "\n" + "\n".join(f"  - {m}" for m in (*a, *b, *c, *d))
+
+        # Placement advisory — consecutive flow hops drawn far apart because a
+        # mid-flow component was parked in the wrong stage. The router can't
+        # fix authoring; this tells the author (the model) HOW to fix it.
+        placement = check_flow_placement(diagram)
+        if placement:
+            score_detail += "\nPlacement advisory (fix via `edits`, then re-render):\n" + \
+                "\n".join(f"  - {m}" for m in placement)
 
         # Stage 6 — render to PNG (reuses the sidecar/CLI pipeline; non-fatal on failure).
         out_path, mode, err = render_drawio_to_disk(f"{stem}.drawio", "png")
         if err is not None or out_path is None:
             return (
                 f"Diagram IR validated and written: output/{stem}.drawio\n"
-                f"{score}{score_detail}{warnings_note}\n\n"
+                f"{score}{score_detail}{warnings_note}\n{echo}\n\n"
                 f"NOTE: PNG render failed — the .drawio is valid and openable, but "
                 f"no image preview was produced: {err}"
             )
 
         size_kb = out_path.stat().st_size // 1024
         logger.info(
-            "Rendered structured diagram: %s.png (%d KB, A=%d C=%d) via %s for %s",
-            stem, size_kb, len(a), len(c), mode, user.email,
+            "Rendered structured diagram: %s.png (%d KB, A=%d B=%d C=%d D=%d) via %s for %s",
+            stem, size_kb, len(a), len(b), len(c), len(d), mode, user.email,
         )
         return (
             f"Diagram rendered: output/{out_path.name} ({size_kb} KB, via {mode})\n"
             f"Source: output/{stem}.drawio\n"
-            f"{score}{score_detail}{warnings_note}\n\n"
-            "The rendered image is being attached to your next turn for visual "
-            "review. Inspect it and check:\n"
-            "  - Container nesting matches the architecture (subnets inside the VNet, etc.)\n"
-            "  - No label is clipped and icons sit centered under their labels\n"
-            "  - Satellite services sit over the element they relate to (use align_to if not)\n"
-            "  - Edges connect the right nodes with sensible routing\n\n"
-            "If something is wrong, adjust the IR and re-run with the same filename "
-            "(it overwrites). A non-zero A or C above means a connector crosses an "
-            "icon or hides behind another — usually fixed by spreading nodes or "
-            "adding an invisible 'band' to change the arrangement."
+            f"{score}{score_detail}{warnings_note}\n{echo}\n\n"
+            "The rendered image is attached to your next turn. Review it against "
+            "the agreed structure; if something is wrong, fix it with a small "
+            "`edits` call against the same filename — do NOT re-send the full "
+            "diagram (re-emitting it from memory is how structure gets lost). "
+            "Non-zero A/C = a connector crosses an icon or hides behind another "
+            "(spread nodes or add a 'band'); non-zero B/D = text problems "
+            "(shorten or DROP edge labels first). If it looks right, present it "
+            "to the user in one or two sentences."
         )

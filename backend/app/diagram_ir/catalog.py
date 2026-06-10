@@ -247,6 +247,26 @@ def icon_known(ref: str) -> bool:
     return ref in _ICON_IMAGES
 
 
+def suggest_icons(ref: str, limit: int = 3) -> list[str]:
+    """Closest catalog refs to an unknown one, same provider preferred.
+
+    Backs the validator's icon error so a near-miss like
+    'azure/api_management_services' costs one corrected retry instead of the
+    author needing the full catalog in their prompt."""
+    import difflib
+
+    provider, _, _name = ref.partition("/")
+    if provider == "shape":
+        pool = [f"shape/{k}" for k in _BUILTIN_SHAPES]
+    elif provider == "aws":
+        pool = list(_AWS_ICONS)
+    elif provider == "azure":
+        pool = list(_ICON_IMAGES)
+    else:
+        pool = [*(f"shape/{k}" for k in _BUILTIN_SHAPES), *_AWS_ICONS, *_ICON_IMAGES]
+    return difflib.get_close_matches(ref, pool, n=limit, cutoff=0.5)
+
+
 def container_style(token: str) -> str:
     return CONTAINER_STYLES.get(token, CONTAINER_STYLES["group"])
 

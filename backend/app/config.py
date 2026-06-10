@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # Azure OpenAI
     AZURE_OPENAI_ENDPOINT: str = ""
     AZURE_OPENAI_API_KEY: str = ""
-    AZURE_OPENAI_DEPLOYMENT: str = "gpt-5.4-mini"
+    AZURE_OPENAI_DEPLOYMENT: str = "gpt-4o-mini"
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
     AZURE_OPENAI_EMBED_DEPLOYMENT: str = "text-embedding-3-small"
     AZURE_OPENAI_EMBED_API_VERSION: str = "2023-05-15"
@@ -54,6 +54,42 @@ class Settings(BaseSettings):
     # via the `done` SSE event so the chat UI can show "X / Y tokens (Z%)".
     # Update alongside AZURE_OPENAI_DEPLOYMENT when the underlying model changes.
     AZURE_OPENAI_CONTEXT_WINDOW_TOKENS: int = 128000
+
+    # High-tier chat deployment (optional). When set, the MAIN agent loop runs
+    # on this deployment; every cheap auxiliary call (compaction summaries,
+    # tool-output compression, learning judge/extractor, risk review, greeting,
+    # KB rerank) stays on AZURE_OPENAI_DEPLOYMENT so the strong model's quota
+    # is spent only where reasoning quality matters. Empty = single-model mode.
+    AZURE_OPENAI_DEPLOYMENT_HIGH: str = ""
+    AZURE_OPENAI_API_VERSION_HIGH: str = ""
+    AZURE_OPENAI_CONTEXT_WINDOW_TOKENS_HIGH: int = 400000
+
+    @property
+    def chat_deployment(self) -> str:
+        """Deployment the main agent loop should use."""
+        return self.AZURE_OPENAI_DEPLOYMENT_HIGH or self.AZURE_OPENAI_DEPLOYMENT
+
+    @property
+    def chat_api_version(self) -> str:
+        """API version matching `chat_deployment`."""
+        if self.AZURE_OPENAI_DEPLOYMENT_HIGH:
+            return self.AZURE_OPENAI_API_VERSION_HIGH or self.AZURE_OPENAI_API_VERSION
+        return self.AZURE_OPENAI_API_VERSION
+
+    @property
+    def chat_context_window(self) -> int:
+        """Context window (tokens) of `chat_deployment`.
+
+        The explicit *_HIGH config wins over the substring table in
+        token_usage.py — deployment names like "gpt-5.4" would otherwise match
+        the base-model entry and report the wrong window.
+        """
+        if self.AZURE_OPENAI_DEPLOYMENT_HIGH:
+            return self.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS_HIGH
+        from app.agent.token_usage import context_window_for_model
+        return context_window_for_model(
+            self.AZURE_OPENAI_DEPLOYMENT, self.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS
+        )
 
     # Entra ID
     ENTRA_TENANT_ID: str = ""

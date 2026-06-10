@@ -39,6 +39,7 @@ class TestToolRegistry:
             "search_stack_overflow", "search_github", "search_azure_updates", "web_search",
             "generate_python_diagram", "generate_drawio_from_python",
             "generate_structured_diagram",
+            "search_conversation", "sleep",
         }
         assert set(TOOL_REGISTRY.keys()) == expected
         assert len(TOOL_REGISTRY) == len(expected)
@@ -1468,3 +1469,38 @@ class TestWebSearchTool:
         assert "site:azure.microsoft.com" in sent_q
         assert "blog" in sent_q
         assert "site:azure.microsoft.com/blog" not in sent_q
+
+
+class TestSleepTool:
+    """The rate-limit wait primitive: bounded, no approval, honest about capping."""
+
+    def _tool(self):
+        from app.tools.generic.sleep_tool import SleepTool
+        return SleepTool()
+
+    def test_registered_no_approval(self):
+        t = TOOL_REGISTRY.get("sleep")
+        assert t is not None and t.requires_approval is False
+
+    def test_sleeps_and_reports(self, monkeypatch):
+        from app.tools.generic import sleep_tool as mod
+        slept = []
+        monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+        out = self._tool().execute({"seconds": 30, "reason": "az_rest_api window"}, _USER)
+        assert slept == [30.0]
+        data = json.loads(out)
+        assert data["status"] == "slept" and data["seconds"] == 30.0
+        assert "retry the rate-limited action" in data["note"]
+
+    def test_caps_long_sleeps(self, monkeypatch):
+        from app.tools.generic import sleep_tool as mod
+        slept = []
+        monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+        out = self._tool().execute({"seconds": 600}, _USER)
+        assert slept == [mod.MAX_SLEEP_SECONDS]
+        assert "capped" in json.loads(out)["note"]
+
+    def test_rejects_nonpositive_and_garbage(self):
+        assert self._tool().execute({"seconds": 0}, _USER).startswith("Error")
+        assert self._tool().execute({"seconds": -5}, _USER).startswith("Error")
+        assert self._tool().execute({"seconds": "soon"}, _USER).startswith("Error")

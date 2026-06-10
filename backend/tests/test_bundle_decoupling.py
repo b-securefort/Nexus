@@ -33,6 +33,7 @@ def test_learning_eligible_tools():
         "az_cli", "execute_script", "az_resource_graph",
         "az_rest_api", "az_devops",
         "generate_drawio_from_python", "generate_python_diagram",
+        "generate_structured_diagram",
     }
     # Invariant: every retry-eligible tool is also learning-eligible.
     assert _names_where(lambda t: t.retry_eligible) <= _names_where(
@@ -47,15 +48,19 @@ def test_result_limit_tools():
         for name, tool in TOOL_REGISTRY.items()
         if tool.result_limit is not None
     }
+    # Limits raised 2026-06-09 alongside the token-budget compaction rework:
+    # with a 400K-window chat deployment, verbatim results are affordable and
+    # strictly better than truncation for the values the agent acts on.
     assert derived == {
-        "az_cli": 4_000,
-        "az_resource_graph": 4_000,
-        "execute_script": 4_000,
-        "read_kb_file": 6_000,
-        "read_file": 6_000,
-        "search_kb_hybrid": 4_000,
-        "az_advisor": 6_000,
-        "az_policy_check": 6_000,
+        "az_cli": 12_000,
+        "az_resource_graph": 12_000,
+        "execute_script": 12_000,
+        "read_kb_file": 24_000,
+        "read_file": 24_000,
+        "search_kb_hybrid": 12_000,
+        "az_advisor": 12_000,
+        "az_policy_check": 12_000,
+        "search_conversation": 24_000,
     }
 
 
@@ -63,6 +68,19 @@ def test_is_diagram_tool_tools():
     # Drawio-family tools (was _DRAWIO_TOOLS).
     assert _names_where(lambda t: t.is_diagram_tool) == {
         "render_drawio", "validate_drawio", "generate_file", "patch_drawio_cell",
+        "generate_structured_diagram",
+    }
+
+
+def test_attaches_render_tools():
+    # Tools whose success leaves a fresh PNG the orchestrator must attach +
+    # vision-review (was a hardcoded name tuple that silently missed
+    # generate_structured_diagram). validate_drawio is deliberately absent —
+    # it renders nothing new.
+    assert _names_where(lambda t: t.attaches_render) == {
+        "render_drawio", "generate_file", "patch_drawio_cell",
+        "generate_drawio_from_python", "generate_python_diagram",
+        "generate_structured_diagram",
     }
 
 
@@ -98,6 +116,7 @@ def test_config_flag_matrix():
         "search_github": "TOOL_SEARCH_GITHUB_ENABLED",
         "search_azure_updates": "TOOL_SEARCH_AZURE_UPDATES_ENABLED",
         "web_search": "TOOL_WEB_SEARCH_ENABLED",
+        "generate_structured_diagram": "TOOL_STRUCTURED_DIAGRAM_ENABLED",
     }
 
 

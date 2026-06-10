@@ -203,6 +203,7 @@ class GenerateDrawioFromPythonTool(Tool):
     name = "generate_drawio_from_python"
     config_flag = "TOOL_DRAWIO_FROM_PYTHON_ENABLED"
     learning_eligible = True    # was orchestrator _LEARNING_ELIGIBLE_TOOLS
+    attaches_render = True   # fresh PNG on success - orchestrator attaches + vision-reviews
     description = (
         "Generate an editable `.drawio` architecture diagram by describing it "
         "in mingrammer `diagrams` Python — same DSL as `generate_python_diagram`. "

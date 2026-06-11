@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { isAllowedAttachmentUrl, resolveAttachmentUrl } from '../components/MessageBubble';
+import {
+  drawioSiblingUrl,
+  isAllowedAttachmentUrl,
+  resolveAttachmentUrl,
+} from '../components/MessageBubble';
 
 // VITE_API_BASE_URL in tests defaults to http://localhost:8000 (see
 // frontend/.env). These tests confirm that:
@@ -61,5 +65,32 @@ describe('resolveAttachmentUrl', () => {
   it('passes allowed absolute URLs through unchanged', () => {
     const url = 'http://localhost:8000/api/output/diagram.png';
     expect(resolveAttachmentUrl(url)).toBe(url);
+  });
+});
+
+// The download affordance on a rendered diagram offers the editable .drawio
+// source next to the PNG. Only output-sandbox renders qualify.
+describe('drawioSiblingUrl', () => {
+  it('maps an output render to its .drawio sibling', () => {
+    expect(drawioSiblingUrl('/api/output/diagram.png')).toBe('/api/output/diagram.drawio');
+    expect(drawioSiblingUrl('http://localhost:8000/api/output/d.svg')).toBe(
+      'http://localhost:8000/api/output/d.drawio',
+    );
+  });
+
+  it('drops cache-bust query strings', () => {
+    expect(drawioSiblingUrl('/api/output/d.png?v=abc')).toBe('/api/output/d.drawio');
+  });
+
+  it('returns null for uploads, previews, and external URLs', () => {
+    expect(drawioSiblingUrl('/api/uploads/photo.png')).toBeNull();
+    expect(drawioSiblingUrl('blob:http://localhost:5173/123')).toBeNull();
+    expect(drawioSiblingUrl('https://attacker.example/api/output/x.png')).toBeNull();
+    expect(drawioSiblingUrl('')).toBeNull();
+  });
+
+  it('returns null for non-image output files', () => {
+    expect(drawioSiblingUrl('/api/output/script.ps1')).toBeNull();
+    expect(drawioSiblingUrl('/api/output/already.drawio')).toBeNull();
   });
 });

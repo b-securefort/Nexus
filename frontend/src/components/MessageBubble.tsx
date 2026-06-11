@@ -64,6 +64,19 @@ export function resolveAttachmentUrl(url: string): string | null {
   return `${API_BASE}${url}`;
 }
 
+/** The editable `.drawio` source sitting next to a rendered diagram in the
+ *  output sandbox: `/api/output/<stem>.png` → `/api/output/<stem>.drawio`.
+ *  Only output renders qualify — uploads, local previews, and external URLs
+ *  return null; a render without a sibling (generate_python_diagram) 404s on
+ *  fetch and the .drawio button simply doesn't appear. Query strings
+ *  (cache-bust) are dropped. */
+export function drawioSiblingUrl(url: string): string | null {
+  if (!url || url.startsWith("blob:") || !isAllowedAttachmentUrl(url)) return null;
+  const noQuery = url.split("?")[0];
+  const m = noQuery.match(/^(.*\/api\/output\/[^/]+)\.(png|jpe?g|svg)$/i);
+  return m ? `${m[1]}.drawio` : null;
+}
+
 interface Props {
   message: Message;
   toolCalls: ToolCallDisplay[];
@@ -261,7 +274,12 @@ function AttachmentImage({
 }) {
   const allowed = isAllowedAttachmentUrl(att.url);
   const { src, error } = useAuthedBlobUrl(allowed ? att.url : null);
+  // Diagram renders ship an editable .drawio next to the PNG; when the
+  // sibling exists the download affordance offers both formats.
+  const sourceUrl = drawioSiblingUrl(att.url);
+  const source = useAuthedBlobUrl(sourceUrl);
   const name = att.original_name || att.filename || "attachment";
+  const drawioName = name.replace(/\.[^.]+$/, "") + ".drawio";
 
   if (!allowed) {
     // Disallowed origin — render the raw URL as inert text so the user can
@@ -303,16 +321,32 @@ function AttachmentImage({
           loading="lazy"
         />
       </button>
-      <a
-        href={src}
-        download={name}
-        onClick={(e) => e.stopPropagation()}
-        title={`Download ${name}`}
-        aria-label={`Download ${name}`}
-        className="absolute bottom-1 right-1 w-7 h-7 rounded-md bg-base-900/80 hover:bg-base-800 border border-base-700/60 text-base-200 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-      >
-        <Download className="w-4 h-4" />
-      </a>
+      <div className="absolute bottom-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        <a
+          href={src}
+          download={name}
+          onClick={(e) => e.stopPropagation()}
+          title={`Download ${name}`}
+          aria-label={`Download ${name}`}
+          className="h-7 min-w-7 px-1 rounded-md bg-base-900/80 hover:bg-base-800 border border-base-700/60 text-base-200 flex items-center justify-center gap-0.5"
+        >
+          <Download className="w-4 h-4" />
+          {source.src && <span className="text-[10px] leading-none">PNG</span>}
+        </a>
+        {source.src && (
+          <a
+            href={source.src}
+            download={drawioName}
+            onClick={(e) => e.stopPropagation()}
+            title={`Download ${drawioName}`}
+            aria-label={`Download ${drawioName}`}
+            className="h-7 px-1 rounded-md bg-base-900/80 hover:bg-base-800 border border-base-700/60 text-base-200 flex items-center justify-center gap-0.5"
+          >
+            <Download className="w-4 h-4" />
+            <span className="text-[10px] leading-none">.drawio</span>
+          </a>
+        )}
+      </div>
     </div>
   );
 }

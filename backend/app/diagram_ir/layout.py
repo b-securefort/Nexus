@@ -169,7 +169,13 @@ def _apply_alignments(diagram: Diagram, boxes: dict) -> None:
     sits over the target's center on the axis perpendicular to the main flow
     (X for LR, Y for TB). The whole subtree moves together; bands draw nothing,
     so a satellite leaving its layout band's bounds is invisible. Clamped to the
-    canvas margin so a target near the edge can't push the satellite off-canvas."""
+    canvas margin so a target near the edge can't push the satellite off-canvas.
+
+    A shift that would land the satellite ON another box is REVERTED: the
+    packer never overlaps boxes, so align_to was the only way to draw one icon
+    on another (conv #360 chained four align_to hints and stacked the frontend
+    onto the App Gateway and Postgres onto the backend). An align that can't
+    be honored cleanly is dropped, not half-applied."""
     perp_x = diagram.direction == "LR"
     aligned: list[Container | Node] = []
     for b in diagram.containers + diagram.nodes:
@@ -187,12 +193,62 @@ def _apply_alignments(diagram: Diagram, boxes: dict) -> None:
             delta = (tgt.x + tgt.w / 2) - (b.x + b.w / 2)
             delta = max(delta, MARGIN - b.x)        # don't cross the left margin
             _translate(b, boxes, delta, 0)
+            if _align_collides(b, diagram, boxes):
+                _translate(b, boxes, -delta, 0)
+                continue
         else:
             delta = (tgt.y + tgt.h / 2) - (b.y + b.h / 2)
             delta = max(delta, MARGIN - b.y)        # don't cross the top margin
             _translate(b, boxes, 0, delta)
+            if _align_collides(b, diagram, boxes):
+                _translate(b, boxes, 0, -delta)
+                continue
         aligned.append(b)
     _spread_aligned(aligned, boxes, perp_x)
+
+
+# A graze under this many px on either axis isn't a visible stack.
+_ALIGN_TOL = 6.0
+
+
+def _visual_rect(b: Container | Node) -> tuple[float, float, float, float]:
+    """The box plus, for nodes, the caption strip below the icon — captions are
+    what visibly collide first when two icons approach each other."""
+    if isinstance(b, Node) and b.label:
+        lw = _label_w(b.label)
+        x1 = min(b.x, b.x + (b.w - lw) / 2)
+        x2 = max(b.x + b.w, b.x + (b.w + lw) / 2)
+        return (x1, b.y, x2, b.y + b.h + LABEL_H)
+    return (b.x, b.y, b.x + b.w, b.y + b.h)
+
+
+def _align_collides(b: Container | Node, diagram: Diagram, boxes: dict) -> bool:
+    """Would `b` (post-shift) visibly overlap any box outside its own subtree
+    and ancestry? Invisible bands aren't obstacles; their children are."""
+    skip = {b.id}
+    if isinstance(b, Container):
+        frontier = list(b.children)
+        while frontier:
+            cid = frontier.pop()
+            skip.add(cid)
+            kid = boxes.get(cid)
+            if isinstance(kid, Container):
+                frontier.extend(kid.children)
+    cur = b
+    while cur.parent and cur.parent in boxes:
+        skip.add(cur.parent)
+        cur = boxes[cur.parent]
+
+    r = _visual_rect(b)
+    for o in (*diagram.containers, *diagram.nodes):
+        if o.id in skip or (isinstance(o, Container) and o.style == "band"):
+            continue
+        ro = _visual_rect(o)
+        ox = min(r[2], ro[2]) - max(r[0], ro[0])
+        oy = min(r[3], ro[3]) - max(r[1], ro[1])
+        if ox > _ALIGN_TOL and oy > _ALIGN_TOL:
+            return True
+    return False
 
 
 def _spread_aligned(aligned: list, boxes: dict, perp_x: bool) -> None:

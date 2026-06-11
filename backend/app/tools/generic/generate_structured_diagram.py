@@ -342,6 +342,8 @@ class GenerateStructuredDiagramTool(Tool):
         # defects — engine CPU instead of a chat round-trip + vision review.
         try:
             layout_diagram(diagram)
+            from app.diagram_ir.geometry import check_box_overlaps
+            boxes_overlap = check_box_overlaps(diagram)   # route-independent
             routes = route_edges_gutter(diagram)
             place_edge_labels(diagram, routes)
             a = check_edge_crossings(diagram, routes)
@@ -403,11 +405,12 @@ class GenerateStructuredDiagramTool(Tool):
         score = (
             f"layout scorecard: A(line-over-icon)={len(a)}  "
             f"B(line-over-label)={len(b)}  C(arrow-hidden)={len(c)}  "
-            f"D(label-collision)={len(d)}"
+            f"D(label-collision)={len(d)}  E(box-overlap)={len(boxes_overlap)}"
         )
         score_detail = ""
-        if a or b or c or d:
-            score_detail = "\n" + "\n".join(f"  - {m}" for m in (*a, *b, *c, *d))
+        if a or b or c or d or boxes_overlap:
+            score_detail = "\n" + "\n".join(
+                f"  - {m}" for m in (*a, *b, *c, *d, *boxes_overlap))
 
         # Placement advisory — consecutive flow hops drawn far apart because a
         # mid-flow component was parked in the wrong stage. The router can't

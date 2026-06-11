@@ -304,6 +304,52 @@ def check_flow_placement(diagram: Diagram) -> list[str]:
         )
     return out
 
+# --- E detector: box drawn on box --------------------------------------------
+#
+# The packer never overlaps boxes, so a box-on-box stack can only come from
+# hand-set geometry or (historically) an align_to shift — conv #360 stacked
+# the frontend onto the App Gateway and Postgres onto the backend, and the
+# A–D scorecard scored the dominant defect ZERO because every detector
+# covers lines and text, never box vs box. The layout guard now reverts
+# overlapping align shifts; this detector is the scorecard's safety net so a
+# regression (or a hand-geometry IR) can never look clean while icons stack.
+
+def check_box_overlaps(diagram: Diagram) -> list[str]:
+    from .layout import _ALIGN_TOL, _visual_rect
+
+    boxes: dict = {c.id: c for c in diagram.containers}
+    boxes.update({n.id: n for n in diagram.nodes})
+
+    def lineage(b) -> set:
+        out, cur = set(), b
+        while cur.parent and cur.parent in boxes:
+            out.add(cur.parent)
+            cur = boxes[cur.parent]
+        return out
+
+    visible = [b for b in (*diagram.containers, *diagram.nodes)
+               if not (isinstance(b, Container) and b.style == "band")]
+    rects = {b.id: _visual_rect(b) for b in visible}
+    ancestry = {b.id: lineage(b) for b in visible}
+
+    out: list[str] = []
+    for i, a in enumerate(visible):
+        for b in visible[i + 1:]:
+            if a.id in ancestry[b.id] or b.id in ancestry[a.id]:
+                continue
+            ra, rb = rects[a.id], rects[b.id]
+            ox = min(ra[2], rb[2]) - max(ra[0], rb[0])
+            oy = min(ra[3], rb[3]) - max(ra[1], rb[1])
+            if ox > _ALIGN_TOL and oy > _ALIGN_TOL:
+                hint = next((f" — drop or retarget '{x.id}'.align_to" for x in (a, b)
+                             if getattr(x, "align_to", None)), " — restructure or spread the layout")
+                out.append(
+                    f"[box-overlap] {a.id} overlaps {b.id} ({ox:.0f}x{oy:.0f}px); "
+                    f"boxes must never sit on each other{hint}."
+                )
+    return out
+
+
 # --- Backward-hop advisory: the flow chain reverses reading direction -------
 #
 # Conv #359: "all private endpoints in one box" was authored BEFORE the app

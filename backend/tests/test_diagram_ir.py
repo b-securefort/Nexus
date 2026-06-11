@@ -407,3 +407,88 @@ def test_transversal_crossing_not_flagged_as_overlap():
         Node(id="e", label="E", icon="azure/mysql", x=200, y=300, w=56, h=56),
     ], edges=[Edge("a", "b", "flow"), Edge("c", "e", "flow")])
     assert check_edge_overlaps(d) == []
+
+
+# --- align_to overlap guard + E detector (conv #360) ------------------------
+
+class TestAlignOverlapGuard:
+    """align_to shifts that would stack boxes get REVERTED: conv #360 chained
+    four aligns and drew the frontend on the App Gateway and Postgres on the
+    backend — and the A-D scorecard scored the dominant defect zero."""
+
+    @staticmethod
+    def _scene(align: bool) -> Diagram:
+        # LR spine: subnet(agw) | apps(front, back). front.align_to=agw would
+        # drag it leftward onto the subnet box.
+        return Diagram(direction="LR", containers=[
+            Container(id="spine", label="", style="band", layout="row", children=["sub", "apps"]),
+            Container(id="sub", label="Subnet", style="subnet", layout="column",
+                      parent="spine", children=["agw"]),
+            Container(id="apps", label="Apps", style="group", layout="column",
+                      parent="spine", children=["front", "back"]),
+        ], nodes=[
+            Node(id="agw", label="App Gateway", icon="azure/application_gateways", parent="sub"),
+            Node(id="front", label="Frontend", icon="azure/app_services", parent="apps",
+                 align_to="agw" if align else None),
+            Node(id="back", label="Backend", icon="azure/app_services", parent="apps"),
+        ])
+
+    def test_overlapping_align_reverted_not_half_applied(self):
+        from app.diagram_ir.geometry import check_box_overlaps
+        d, base = self._scene(align=True), self._scene(align=False)
+        layout_diagram(d)
+        layout_diagram(base)
+        front = next(n for n in d.nodes if n.id == "front")
+        base_front = next(n for n in base.nodes if n.id == "front")
+        assert front.x == base_front.x          # shift dropped entirely
+        assert check_box_overlaps(d) == []
+
+    def test_clean_align_still_applies(self):
+        # Satellite in its own band below the flow, free space underneath the
+        # target -> the align is honored exactly.
+        d = Diagram(direction="LR", containers=[
+            Container(id="outer", label="", style="band", layout="column", children=["row", "lane"]),
+            Container(id="row", label="", style="band", layout="row", parent="outer",
+                      children=["s1", "s2", "s3"]),
+            Container(id="s1", label="One", style="group", layout="column", parent="row", children=["a"]),
+            Container(id="s2", label="Two", style="group", layout="column", parent="row", children=["b"]),
+            Container(id="s3", label="Three", style="group", layout="column", parent="row", children=["c"]),
+            Container(id="lane", label="", style="band", layout="row", parent="outer", children=["sat"]),
+        ], nodes=[
+            Node(id="a", label="A", icon="azure/mysql", parent="s1"),
+            Node(id="b", label="B", icon="azure/mysql", parent="s2"),
+            Node(id="c", label="C", icon="azure/mysql", parent="s3"),
+            Node(id="sat", label="Sat", icon="azure/key_vaults", parent="lane", align_to="c"),
+        ])
+        layout_diagram(d)
+        sat = next(n for n in d.nodes if n.id == "sat")
+        c = next(n for n in d.nodes if n.id == "c")
+        assert abs((sat.x + sat.w / 2) - (c.x + c.w / 2)) < 1.0
+
+
+class TestBoxOverlapDetector:
+    def test_hand_geometry_stack_flagged(self):
+        from app.diagram_ir.geometry import check_box_overlaps
+        d = Diagram(nodes=[
+            Node(id="a", label="A", icon="azure/mysql", x=100, y=100),
+            Node(id="b", label="B", icon="azure/mysql", x=120, y=110),
+        ])
+        out = check_box_overlaps(d)
+        assert len(out) == 1 and "a overlaps b" in out[0]
+
+    def test_align_to_named_in_hint(self):
+        from app.diagram_ir.geometry import check_box_overlaps
+        d = Diagram(nodes=[
+            Node(id="a", label="A", icon="azure/mysql", x=100, y=100, align_to="b"),
+            Node(id="b", label="B", icon="azure/mysql", x=120, y=110),
+        ])
+        out = check_box_overlaps(d)
+        assert "'a'.align_to" in out[0]
+
+    def test_nesting_and_bands_exempt(self):
+        from app.diagram_ir.geometry import check_box_overlaps
+        d = Diagram(containers=[
+            Container(id="z", label="Zone", style="zone", x=0, y=0, w=300, h=200, children=["n"]),
+            Container(id="band", label="", style="band", x=0, y=0, w=600, h=400),
+        ], nodes=[Node(id="n", label="N", icon="azure/mysql", parent="z", x=50, y=50)])
+        assert check_box_overlaps(d) == []

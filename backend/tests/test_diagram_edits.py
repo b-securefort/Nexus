@@ -40,6 +40,65 @@ def _base_ir() -> dict:
 
 # ── apply_edits unit tests ─────────────────────────────────────────────────
 
+class TestAttachPreservesSiblingOrder:
+    """Conv #359: a reorder op followed by a same-parent upsert in ONE batch —
+    the upsert's parent re-attach must not bounce the child to the end of the
+    sibling list (it silently undid the agent's correct far-hop fix, twice)."""
+
+    def _spine_ir(self) -> dict:
+        return {
+            "title": "t", "direction": "LR",
+            "containers": [
+                {"id": "root", "style": "band", "layout": "row",
+                 "children": ["clients", "spoke", "external", "hub"]},
+                {"id": "clients", "style": "zone", "parent": "root", "children": ["u"]},
+                {"id": "spoke", "style": "vnet", "parent": "root", "children": ["a"]},
+                {"id": "external", "style": "zone", "parent": "root", "children": ["x"]},
+                {"id": "hub", "style": "zone", "parent": "root", "children": ["f"]},
+            ],
+            "nodes": [
+                {"id": "u", "icon": "shape/actor", "parent": "clients"},
+                {"id": "a", "icon": "azure/app_services", "parent": "spoke"},
+                {"id": "x", "icon": "shape/cloud", "parent": "external"},
+                {"id": "f", "icon": "azure/firewalls", "parent": "hub"},
+            ],
+            "edges": [],
+        }
+
+    def test_same_parent_upsert_keeps_reordered_position(self):
+        # The exact conv #359 batch shape: reorder root, then touch hub.
+        ir, err = apply_edits(self._spine_ir(), [
+            {"op": "upsert_container",
+             "container": {"id": "root",
+                           "children": ["clients", "hub", "spoke", "external"]}},
+            {"op": "upsert_container",
+             "container": {"id": "hub", "label": "Hub", "parent": "root"}},
+        ])
+        assert err is None
+        root = next(c for c in ir["containers"] if c["id"] == "root")
+        assert root["children"] == ["clients", "hub", "spoke", "external"]
+
+    def test_same_parent_node_upsert_keeps_position(self):
+        ir, err = apply_edits(self._spine_ir(), [
+            {"op": "upsert_container",
+             "container": {"id": "clients", "children": ["u"]}},
+            {"op": "upsert_node", "node": {"id": "u", "label": "User", "parent": "clients"}},
+        ])
+        assert err is None
+        clients = next(c for c in ir["containers"] if c["id"] == "clients")
+        assert clients["children"] == ["u"]
+
+    def test_actual_reparent_still_moves(self):
+        ir, err = apply_edits(self._spine_ir(), [
+            {"op": "upsert_container", "container": {"id": "hub", "parent": "spoke"}},
+        ])
+        assert err is None
+        root = next(c for c in ir["containers"] if c["id"] == "root")
+        spoke = next(c for c in ir["containers"] if c["id"] == "spoke")
+        assert "hub" not in root["children"]
+        assert spoke["children"] == ["a", "hub"]
+
+
 class TestApplyEdits:
     def test_upsert_new_node_syncs_parent(self):
         ir, err = apply_edits(_base_ir(), [

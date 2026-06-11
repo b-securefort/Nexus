@@ -53,15 +53,24 @@ def _detach_from_parents(ir: dict, child_id: str) -> None:
 
 def _attach(ir: dict, child_id: str, parent_id: str | None) -> str | None:
     """Point both sides of the parent/children relationship at `parent_id`
-    (None = top-level). Returns an error string or None."""
-    _detach_from_parents(ir, child_id)
-    if not parent_id:
-        return None
-    parent = _find(ir["containers"], parent_id)
-    if parent is None:
-        return f"parent '{parent_id}' is not an existing container"
-    parent.setdefault("children", [])
-    if child_id not in parent["children"]:
+    (None = top-level). Returns an error string or None.
+
+    A child already under `parent_id` keeps its POSITION among its siblings:
+    re-asserting an unchanged parent must not reorder them. (Conv #359: an
+    `upsert_container hub {parent: root}` later in the batch detached hub and
+    re-appended it LAST in root's children — silently undoing the explicit
+    reorder an earlier op in the same batch had just applied, twice.)"""
+    parent = None
+    if parent_id:
+        parent = _find(ir["containers"], parent_id)
+        if parent is None:
+            return f"parent '{parent_id}' is not an existing container"
+        parent.setdefault("children", [])
+    for c in ir["containers"]:
+        kids = c.get("children")
+        if kids and child_id in kids and c is not parent:
+            kids.remove(child_id)
+    if parent is not None and child_id not in parent["children"]:
         parent["children"].append(child_id)
     return None
 

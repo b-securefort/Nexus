@@ -29,6 +29,11 @@ class RouteInfo:
     # clean, drag-to-edit straight segment. Set together by the straight-first pass.
     straight: bool = False
     floating: bool = False
+    # bundled = this edge is part of a fan-out/fan-in trunk (the human "-E"
+    # comb): its shared run is EXACTLY colinear with its group siblings by
+    # construction, so lane separation must not tear it apart and the C
+    # detector must not flag the intentional overlap.
+    bundled: bool = False
     # Edge-label placement (set by labels.place_edge_labels; None = no label or
     # placement not run → draw.io's default midpoint). label_t is the draw.io
     # relative position along the edge in [-1, 1]; label_offset the absolute
@@ -48,11 +53,23 @@ def _center(b):
     return (b.x + b.w / 2, b.y + b.h / 2)
 
 
+# Flow-axis port bias (human heuristic, 2026-06-10): on the primary flow, a
+# reader follows the diagram's direction — an LR hop whose next icon sits
+# slightly more below than rightward should still leave right→enter left, not
+# flip to bottom→top mid-story. Applied only to forward-pointing flow-like
+# edges (never creates a backward hairpin) and only stretches the dominant-axis
+# tie-break by _FLOW_AXIS_BIAS; a genuinely vertical drop still routes vertical.
+_FLOW_AXIS_BIAS = 1.6
+_FLOW_AXIS_MIN = 40.0
+_FLOW_BIAS_TYPES = ("flow", "private")
+
+
 def route_edges(diagram: Diagram, spread: bool = True) -> list[RouteInfo | None]:
     boxes: dict[str, Container | Node] = {c.id: c for c in diagram.containers}
     boxes.update({n.id: n for n in diagram.nodes})
 
-    # Pass 1 — choose a face per endpoint from dominant axis.
+    # Pass 1 — choose a face per endpoint from dominant axis (flow-axis biased).
+    flow_axis_x = diagram.direction == "LR"
     faces: list[tuple | None] = []
     for e in diagram.edges:
         s, t = boxes.get(e.source), boxes.get(e.target)
@@ -62,7 +79,13 @@ def route_edges(diagram: Diagram, spread: bool = True) -> list[RouteInfo | None]
         scx, scy = _center(s)
         tcx, tcy = _center(t)
         dx, dy = tcx - scx, tcy - scy
-        if abs(dx) >= abs(dy):
+        horizontal = abs(dx) >= abs(dy)
+        if e.type in _FLOW_BIAS_TYPES:
+            if flow_axis_x and dx > _FLOW_AXIS_MIN:
+                horizontal = abs(dx) * _FLOW_AXIS_BIAS >= abs(dy)
+            elif not flow_axis_x and dy > _FLOW_AXIS_MIN:
+                horizontal = abs(dx) > abs(dy) * _FLOW_AXIS_BIAS
+        if horizontal:
             exit_face = "R" if dx >= 0 else "L"
             entry_face = "L" if dx >= 0 else "R"
         else:
@@ -444,6 +467,143 @@ def _simplify(pts):
     return out
 
 
+# --- Fan-out / fan-in trunk bundling (the human "-E" comb) ------------------
+#
+# A 1→N fan routed as N independent edges becomes N parallel wires that the
+# congestion penalty + lane separation deliberately spread apart — right for
+# UNRELATED edges sharing a corridor, wrong for a true fan, where a human
+# draws ONE trunk leaving the box that splits comb-style into the targets.
+# Bundle when edges share an endpoint, a type, NO label, and the same face
+# pair: one trunk to a split line just before the branch faces, then exactly
+# colinear branches — renders as a single line forking. Groups whose every
+# member is straight-clear stay straight (the straight-first contract wins);
+# groups that can't route their comb obstacle-free fall back to individual
+# routing.
+
+_BUNDLE_GAP = 18.0     # split line sits this far before the branch faces
+_BUNDLE_MIN = 2        # smallest fan worth a trunk
+
+
+def _face_of(nx: float, ny: float) -> str:
+    if nx == 1.0:
+        return "R"
+    if nx == 0.0:
+        return "L"
+    return "B" if ny == 1.0 else "T"
+
+
+def _abs_face_point(box, face: str, t: float) -> tuple[float, float]:
+    nx, ny = _face_point(face, t)
+    return (box.x + nx * box.w, box.y + ny * box.h)
+
+
+def _bundle_fan_routes(diagram, base, boxes, icon_boxes, union_boxes,
+                       header_boxes, clearance, straight_ok) -> dict[int, RouteInfo]:
+    """Returns {edge_index: RouteInfo(bundled=True)} for every fan that can
+    route its trunk+comb obstacle-free. Omitted edges route individually."""
+    out_groups: dict[tuple, list[int]] = {}
+    in_groups: dict[tuple, list[int]] = {}
+    for i, (e, info) in enumerate(zip(diagram.edges, base)):
+        if info is None or e.label:
+            continue
+        ef = _face_of(info.exitX, info.exitY)
+        nf = _face_of(info.entryX, info.entryY)
+        out_groups.setdefault((e.source, e.type, ef, nf), []).append(i)
+        in_groups.setdefault((e.target, e.type, ef, nf), []).append(i)
+
+    routes: dict[int, RouteInfo] = {}
+    taken: set[int] = set()
+
+    def _try_group(key: tuple, idxs: list[int], shared_src: bool) -> None:
+        idxs = [i for i in idxs if i not in taken]
+        if len(idxs) < _BUNDLE_MIN:
+            return
+        if all(straight_ok[i] for i in idxs):
+            return                          # clean straight fan beats a trunk
+        _, _, ef, nf = key
+        horizontal = ef in ("R", "L")
+
+        # Shared endpoint connection point: mean of the spread positions so the
+        # trunk leaves roughly where the individual edges would have.
+        def _t_of(info, exit_side: bool) -> float:
+            if exit_side:
+                return info.exitY if horizontal else info.exitX
+            return info.entryY if horizontal else info.entryX
+
+        shared_box = boxes[key[0]]
+        mean_t = sum(_t_of(base[i], shared_src) for i in idxs) / len(idxs)
+        shared_face = ef if shared_src else nf
+        S = _abs_face_point(shared_box, shared_face, mean_t)
+
+        branch: dict[int, tuple[float, float]] = {}
+        for i in idxs:
+            e = diagram.edges[i]
+            other = boxes[e.target if shared_src else e.source]
+            other_face = nf if shared_src else ef
+            branch[i] = _abs_face_point(other, other_face, _t_of(base[i], not shared_src))
+
+        # Split line: just before the branch faces, on the trunk's travel axis.
+        # Travel direction comes from the face the trunk leaves/enters: a fan
+        # leaving R or entering L travels +x; leaving B or entering T, +y.
+        axis = 0 if horizontal else 1
+        toward_positive = (shared_face in ("R", "B")) if shared_src \
+            else (nf in ("L", "T"))
+        coords = [p[axis] for p in branch.values()]
+        if shared_src:
+            # Trunk S→split must have room; branches sit beyond split by
+            # construction (split = nearest branch face minus the gap).
+            split = (min(coords) - _BUNDLE_GAP) if toward_positive \
+                else (max(coords) + _BUNDLE_GAP)
+            ok = (split - S[axis] > 4) if toward_positive else (S[axis] - split > 4)
+        else:
+            # Trunk split→S is the gap by construction; every branch source
+            # must sit before the split or its comb segment would double back.
+            split = (S[axis] - _BUNDLE_GAP) if toward_positive \
+                else (S[axis] + _BUNDLE_GAP)
+            ok = all((split - c > 4) if toward_positive else (c - split > 4)
+                     for c in coords)
+        if not ok:
+            return
+
+        polys: dict[int, list[tuple[float, float]]] = {}
+        for i, P in branch.items():
+            if shared_src:
+                a, b = S, P
+            else:
+                a, b = P, S
+            if horizontal:
+                pts = [a, (split, a[1]), (split, b[1]), b]
+            else:
+                pts = [a, (a[0], split), (b[0], split), b]
+            polys[i] = _simplify(pts)
+
+        # Every member's comb must clear its own obstacle set, else no bundle.
+        for i, pts in polys.items():
+            obs = _route_obstacles(diagram.edges[i], icon_boxes, union_boxes,
+                                   header_boxes, clearance)
+            if not all(_seg_free(pts[k], pts[k + 1], obs) for k in range(len(pts) - 1)):
+                return
+
+        shared_nx, shared_ny = _face_point(shared_face, mean_t)
+        for i, pts in polys.items():
+            info = base[i]
+            if shared_src:
+                exit_xy = (shared_nx, shared_ny)
+                entry_xy = (info.entryX, info.entryY)
+            else:
+                exit_xy = (info.exitX, info.exitY)
+                entry_xy = (shared_nx, shared_ny)
+            routes[i] = RouteInfo(exit_xy[0], exit_xy[1], entry_xy[0], entry_xy[1],
+                                  points=pts, waypoints=pts[1:-1], bundled=True)
+            taken.add(i)
+
+    for key in sorted(out_groups):
+        _try_group(key, out_groups[key], shared_src=True)
+    for key in sorted(in_groups):
+        _try_group(key, in_groups[key], shared_src=False)
+    return routes
+
+
 def route_edges_gutter(diagram: Diagram, clearance: float = _CLEARANCE) -> list[RouteInfo | None]:
     """Route every edge with the grid A*; falls back to the step-2 L-route when
     no obstacle-free path is found. Keeps step-2 exit/entry points as endpoints.
@@ -470,23 +630,49 @@ def route_edges_gutter(diagram: Diagram, clearance: float = _CLEARANCE) -> list[
         gutter_coords_x.update((x1 - _GUTTER, x2 + _GUTTER))
         gutter_coords_y.update((y1 - _GUTTER, y2 + _GUTTER))
 
-    out: list[RouteInfo | None] = []
-    used_segs: list[tuple] = []   # axis-aligned segments of already-routed edges
+    # Per-edge foreign-container sets + straight-clearance, precomputed once:
+    # the bundling pass needs straight verdicts BEFORE the main loop (an
+    # all-straight fan stays straight; a blocked fan bundles as one trunk).
+    foreigns: list[tuple] = []
+    straight_ok: list[bool] = []
     for e, info in zip(diagram.edges, base):
         if info is None:
-            out.append(None)
+            foreigns.append(())
+            straight_ok.append(False)
             continue
         allowed = _ancestor_ids(e.source, boxes) | _ancestor_ids(e.target, boxes)
         foreign = tuple(r for cid, r in visible.items() if cid not in allowed)
+        foreigns.append(foreign)
         # Straight-first: a direct center→center line that clears every other
         # icon, caption, and container title — AND doesn't spend long inside
         # an unrelated container (a diagonal through someone else's box reads
         # as a relationship with that box) — becomes a clean, waypoint-free,
-        # floating connector. Otherwise fall back to the gutter route below.
+        # floating connector. Otherwise the gutter route below.
         s, t = boxes[e.source], boxes[e.target]
         sc, tc = _center(s), _center(t)
-        if _straight_clear(sc, tc, union_boxes, header_boxes, e.source, e.target) \
-           and sum(_transit_len(sc, tc, r) for r in foreign) <= _STRAIGHT_FOREIGN_MAX:
+        straight_ok.append(
+            _straight_clear(sc, tc, union_boxes, header_boxes, e.source, e.target)
+            and sum(_transit_len(sc, tc, r) for r in foreign) <= _STRAIGHT_FOREIGN_MAX
+        )
+
+    bundled = _bundle_fan_routes(diagram, base, boxes, icon_boxes, union_boxes,
+                                 header_boxes, clearance, straight_ok)
+
+    out: list[RouteInfo | None] = []
+    used_segs: list[tuple] = []   # axis-aligned segments of already-routed edges
+    for r in bundled.values():    # trunks claim their corridors first
+        used_segs.extend(_axis_segs(r.points))
+    for ei, (e, info) in enumerate(zip(diagram.edges, base)):
+        if info is None:
+            out.append(None)
+            continue
+        if ei in bundled:
+            out.append(bundled[ei])
+            continue
+        foreign = foreigns[ei]
+        s, t = boxes[e.source], boxes[e.target]
+        sc, tc = _center(s), _center(t)
+        if straight_ok[ei]:
             out.append(RouteInfo(info.exitX, info.exitY, info.entryX, info.entryY,
                                  points=[sc, tc], waypoints=[],
                                  straight=True, floating=True))
@@ -573,7 +759,9 @@ def _separate_lanes(routes, diagram, icon_boxes, union_boxes, header_boxes,
     so A (icon-crossing) can never regress."""
     segs: list[tuple] = []   # (ridx, k, orient, coord, lo, hi)
     for ridx, r in enumerate(routes):
-        if r is None or r.straight:      # never bend a straight line back into lanes
+        # Never bend a straight line back into lanes; never tear a bundle's
+        # trunk apart — its colinearity is the whole point.
+        if r is None or r.straight or r.bundled:
             continue
         for k in range(len(r.points) - 1):
             (ax, ay), (bx, by) = r.points[k], r.points[k + 1]

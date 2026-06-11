@@ -17,12 +17,17 @@ Ops (each `{"op": ..., ...}`):
   remove_node       {id}               drops it, its edges, and child refs
   upsert_container  {container: {...}} id required; merges; children REPLACE +
                                        re-parent when provided
-  remove_container  {id}               must be empty (move/remove children first)
+  remove_container  {id}               dissolves it: children re-parent to ITS
+                                       parent (top-level when none)
   upsert_edge       {edge: {...}}      replaces first source->target match, else appends
   remove_edge       {source, target}   removes ALL matching
 
 Parent/children stay in sync automatically — an upsert never needs the caller
 to also patch the other side of the relationship.
+
+Order within a batch doesn't matter for existence: an upsert_container may list
+`children` that a LATER upsert in the same batch creates. The batch is treated
+as one transaction (conv #355: forward references cost 3 failed iterations).
 """
 
 from __future__ import annotations
@@ -79,6 +84,28 @@ def apply_edits(ir: dict, edits: list) -> tuple[dict | None, str | None]:
     ir.setdefault("containers", [])
     ir.setdefault("nodes", [])
     ir.setdefault("edges", [])
+
+    # Pre-pass — forward references. Create an empty shell for every id this
+    # batch upserts that doesn't exist yet, so an earlier edit may reference a
+    # container/node a later edit defines. The real upsert merges its fields
+    # into the shell; ids nothing in the batch defines still error normally.
+    # Node shells require the icon up front so the "new node needs an icon"
+    # gate keeps working (icon-less new nodes take the unshelled error path).
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        if edit.get("op") == "upsert_container":
+            cont = edit.get("container")
+            if (isinstance(cont, dict) and cont.get("id")
+                    and _find(ir["containers"], cont["id"]) is None
+                    and _find(ir["nodes"], cont["id"]) is None):
+                ir["containers"].append({"id": cont["id"], "children": []})
+        elif edit.get("op") == "upsert_node":
+            node = edit.get("node")
+            if (isinstance(node, dict) and node.get("id") and node.get("icon")
+                    and _find(ir["nodes"], node["id"]) is None
+                    and _find(ir["containers"], node["id"]) is None):
+                ir["nodes"].append({"id": node["id"], "icon": node["icon"]})
 
     for i, edit in enumerate(edits):
         if not isinstance(edit, dict) or "op" not in edit:
@@ -173,14 +200,26 @@ def apply_edits(ir: dict, edits: list) -> tuple[dict | None, str | None]:
             cont = _find(ir["containers"], cont_id) if cont_id else None
             if cont is None:
                 err = f"remove_container: no container '{cont_id}'"
-            elif cont.get("children"):
-                err = (f"container '{cont_id}' still has children "
-                       f"({', '.join(cont['children'])}) — move or remove them first")
             else:
-                ir["containers"] = [c for c in ir["containers"] if c["id"] != cont_id]
-                _detach_from_parents(ir, cont_id)
-                ir["edges"] = [e for e in ir["edges"]
-                               if cont_id not in (e.get("source"), e.get("target"))]
+                # Dissolve, don't block: surviving children re-parent to the
+                # removed container's parent (top-level when none). Requiring
+                # the model to empty the box first cost 2 iterations per
+                # attempt (conv #355: 4 such errors) for what is always the
+                # same intent — "remove the box, keep its contents".
+                grandparent = cont.get("parent") or None
+                for kid_id in list(cont.get("children") or []):
+                    err = _attach(ir, kid_id, grandparent)
+                    if err:
+                        break
+                    kid = (_find(ir["nodes"], kid_id)
+                           or _find(ir["containers"], kid_id))
+                    if kid is not None:
+                        kid["parent"] = grandparent
+                if err is None:
+                    ir["containers"] = [c for c in ir["containers"] if c["id"] != cont_id]
+                    _detach_from_parents(ir, cont_id)
+                    ir["edges"] = [e for e in ir["edges"]
+                                   if cont_id not in (e.get("source"), e.get("target"))]
 
         elif op == "upsert_edge":
             edge = edit.get("edge")

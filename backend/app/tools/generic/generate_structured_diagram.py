@@ -172,8 +172,10 @@ class GenerateStructuredDiagramTool(Tool):
                     "{op:'set', title?, direction?} | "
                     "{op:'upsert_node', node:{id,...}} | {op:'remove_node', id} | "
                     "{op:'upsert_container', container:{id,...}} (children, when "
-                    "given, REPLACES the list and re-parents) | "
-                    "{op:'remove_container', id} (must be empty) | "
+                    "given, REPLACES the list and re-parents; may name ids a "
+                    "later op in the SAME batch creates) | "
+                    "{op:'remove_container', id} (dissolves: children re-parent "
+                    "to its parent automatically) | "
                     "{op:'upsert_edge', edge:{source,target,type?,label?}} | "
                     "{op:'remove_edge', source, target}"
                 ),
@@ -408,6 +410,8 @@ class GenerateStructuredDiagramTool(Tool):
         # mid-flow component was parked in the wrong stage. The router can't
         # fix authoring; this tells the author (the model) HOW to fix it.
         placement = check_flow_placement(diagram)
+        from app.diagram_ir.geometry import check_side_lane
+        placement += check_side_lane(diagram)
         if placement:
             score_detail += "\nPlacement advisory (fix via `edits`, then re-render):\n" + \
                 "\n".join(f"  - {m}" for m in placement)

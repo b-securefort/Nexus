@@ -147,7 +147,7 @@ def check_edge_overlaps(diagram: Diagram, routes=None) -> list[str]:
     boxes: dict[str, Container | Node] = {c.id: c for c in diagram.containers}
     boxes.update({n.id: n for n in diagram.nodes})
 
-    seg_routes: list[tuple[object, list]] = []
+    seg_routes: list[tuple[object, list, object]] = []
     for ei, e in enumerate(diagram.edges):
         src, tgt = boxes.get(e.source), boxes.get(e.target)
         if src is None or tgt is None:
@@ -156,15 +156,21 @@ def check_edge_overlaps(diagram: Diagram, routes=None) -> list[str]:
             r = routes[ei]
             if r is None:
                 continue
-            seg_routes.append((e, _segs_from_points(r.points)))
+            seg_routes.append((e, _segs_from_points(r.points), r))
         else:
-            seg_routes.append((e, _route_segments(_bbox(src), _bbox(tgt))))
+            seg_routes.append((e, _route_segments(_bbox(src), _bbox(tgt)), None))
 
     out: list[str] = []
     for i in range(len(seg_routes)):
-        ei, si = seg_routes[i]
+        ei, si, ri = seg_routes[i]
         for j in range(i + 1, len(seg_routes)):
-            ej, sj = seg_routes[j]
+            ej, sj, rj = seg_routes[j]
+            # A fan bundle's trunk is exactly colinear BY DESIGN — two bundled
+            # edges sharing an endpoint render as one line forking, not as one
+            # arrow hiding another. Don't flag the intentional overlap.
+            if (getattr(ri, "bundled", False) and getattr(rj, "bundled", False)
+                    and (ei.source == ej.source or ei.target == ej.target)):
+                continue
             if _segments_overlap(si, sj):
                 out.append(
                     f"[edge-overlap] edges {ei.source}->{ei.target} and "
@@ -297,6 +303,64 @@ def check_flow_placement(diagram: Diagram) -> list[str]:
             "children / parent moves) and re-render."
         )
     return out
+# --- Side-lane advisory: shared service buried in a flow stage --------------
+#
+# Human-diagrammer heuristic (2026-06-10): a node with many to/fro edges that
+# is NOT itself a hop on the primary flow (DNS, identity, a shared firewall
+# zone) gets pulled OUT of the flow and parked beside it, so its edge fan
+# doesn't cross the main path. The engine never moves boxes (load-bearing
+# no-edge-driven-placement rule), so — like check_flow_placement — this is an
+# advisory that tells the author the structural fix: an invisible `band`
+# beside the spine plus `align_to` its busiest counterpart.
+# (Conv #355 burned ~6 iterations re-arranging a Private DNS Zones node that
+# this advisory would have side-laned in one edit.)
+
+_SIDE_LANE_MIN_DEGREE = 3
+
+
+def check_side_lane(diagram: Diagram) -> list[str]:
+    """Advisory: off-flow node with _SIDE_LANE_MIN_DEGREE+ edges spanning 2+
+    other stages, buried in a stage that also hosts primary-flow nodes."""
+    boxes: dict = {c.id: c for c in diagram.containers}
+    boxes.update({n.id: n for n in diagram.nodes})
+    ranks = _flow_ranks(diagram)
+
+    degree: dict[str, int] = {}
+    counterparties: dict[str, set[str]] = {}
+    for e in diagram.edges:
+        for me, other in ((e.source, e.target), (e.target, e.source)):
+            degree[me] = degree.get(me, 0) + 1
+            counterparties.setdefault(me, set()).add(other)
+
+    # Which perceived stages host primary-flow nodes (rank ≠ None)?
+    flow_stages = {_spine_stage(n.id, boxes) for n in diagram.nodes
+                   if ranks.get(n.id) is not None}
+
+    out: list[str] = []
+    for n in diagram.nodes:
+        if degree.get(n.id, 0) < _SIDE_LANE_MIN_DEGREE:
+            continue
+        if ranks.get(n.id) is not None:
+            continue                      # on the primary flow — it IS a hop
+        my_stage = _spine_stage(n.id, boxes)
+        if my_stage not in flow_stages:
+            continue                      # already a satellite zone of its own
+        other_stages = {_spine_stage(c, boxes) for c in counterparties.get(n.id, ())
+                        if c in boxes} - {my_stage}
+        if len(other_stages) < 2:
+            continue
+        busiest = max(counterparties[n.id], key=lambda c: degree.get(c, 0), default=None)
+        out.append(
+            f"[side-lane] '{n.id}' has {degree[n.id]} connections across "
+            f"{len(other_stages) + 1} stages but sits inside flow stage "
+            f"'{my_stage}' — its edge fan will cross the main path. Pull it "
+            f"into a side lane: add an invisible `band` container beside the "
+            f"spine, move '{n.id}' there, and `align_to` its busiest "
+            f"counterpart (e.g. '{busiest}'). One edit, not per-node nudges."
+        )
+    return out
+
+
 #
 # A and C only see icons and arrows, so a render where every defect is TEXT
 # (edge labels on node captions, lines through container titles) still scores

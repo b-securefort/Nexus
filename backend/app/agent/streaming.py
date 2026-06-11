@@ -117,6 +117,18 @@ def sse_error(message: str) -> str:
     return sse_event("error", {"message": message})
 
 
+def sse_iteration_limit(conversation_id: int, max_iterations: int) -> str:
+    """The turn used its whole tool-iteration budget and ended with a wrap-up
+    summary instead of completing naturally. Emitted BEFORE `done` so the UI
+    can offer a one-click "continue" affordance — a follow-up user message of
+    "continue" resumes from the persisted history. Not an error: the turn's
+    tool results and final summary are all saved."""
+    return sse_event(
+        "iteration_limit",
+        {"conversation_id": conversation_id, "max_iterations": max_iterations},
+    )
+
+
 def sse_token_refresh_required(
     *, conversation_id: int, tool_name: str, status: str
 ) -> str:

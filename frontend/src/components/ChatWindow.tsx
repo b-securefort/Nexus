@@ -42,6 +42,10 @@ const greetingPromise = fetchGreeting()
 
 export function ChatWindow() {
   const [input, setInput] = useState("");
+  // Set when the backend ends a turn via `iteration_limit` (tool budget used
+  // up, wrap-up summary persisted). Renders a "Continue" affordance instead
+  // of the old dead-end error banner.
+  const [iterationLimitHit, setIterationLimitHit] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +217,12 @@ export function ChatWindow() {
           setIsStreaming(false);
           break;
 
+        case "iteration_limit":
+          // Not an error: tool results + a wrap-up summary are persisted.
+          // Offer one-click resumption (a plain "continue" message).
+          setIterationLimitHit(true);
+          break;
+
         case "token_refresh_required": {
           const info = d as unknown as TokenRefreshRequired;
           // Silently acquire a fresh ARM token via MSAL and POST it back
@@ -268,6 +278,7 @@ export function ChatWindow() {
     const hasText = input.trim().length > 0;
     const hasFiles = currentAttachments.length > 0;
     if ((!hasText && !hasFiles) || isStreaming) return;
+    setIterationLimitHit(false);
     if (!conversationId && !selectedSkillId) {
       setError("Please select a skill to start a new conversation");
       return;
@@ -324,6 +335,38 @@ export function ChatWindow() {
         if (files.length > 0) {
           for (const f of files) addPendingAttachment(f);
         }
+      }
+      setIsStreaming(false);
+    }
+  };
+
+  // One-click resumption after an iteration_limit turn end. The turn's tool
+  // results and wrap-up summary are already persisted, so a plain "continue"
+  // user message resumes from that checkpoint with full history.
+  const sendContinue = async () => {
+    if (isStreaming || !conversationId) return;
+    setIterationLimitHit(false);
+    setError(null);
+    setStreamingContent("");
+    clearToolCalls();
+    setIsStreaming(true);
+    addMessage({
+      id: Date.now(),
+      role: "user",
+      content: "continue",
+      created_at: new Date().toISOString(),
+      attachments_json: null,
+    });
+    abortRef.current = new AbortController();
+    try {
+      await sendChatMessage(
+        { conversation_id: conversationId, message: "continue" },
+        handleSSEEvent,
+        abortRef.current.signal
+      );
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        setError((err as Error).message);
       }
       setIsStreaming(false);
     }
@@ -571,6 +614,22 @@ export function ChatWindow() {
         {error && (
           <div className="bg-red-950/40 border border-red-800/40 rounded-xl px-4 py-3 text-red-300 text-sm animate-fade-in-up">
             {error}
+          </div>
+        )}
+
+        {/* Iteration budget used up — offer one-click resumption */}
+        {iterationLimitHit && !isStreaming && (
+          <div className="bg-amber-950/40 border border-amber-800/40 rounded-xl px-4 py-3 text-amber-200 text-sm animate-fade-in-up flex items-center justify-between gap-3">
+            <span>
+              I used my full tool budget for this turn. Progress is saved —
+              want me to keep going?
+            </span>
+            <button
+              onClick={sendContinue}
+              className="shrink-0 bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+            >
+              Continue
+            </button>
           </div>
         )}
 

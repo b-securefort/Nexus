@@ -79,9 +79,47 @@ class TestApplyEdits:
         snet = next(c for c in ir["containers"] if c["id"] == "snet")
         assert "pe" not in snet["children"]
 
-    def test_remove_container_with_children_refuses(self):
+    def test_remove_container_dissolves_children_to_grandparent(self):
+        # conv #355: "still has children" errors cost 2 iterations per attempt;
+        # the intent is always "remove the box, keep its contents".
         ir, err = apply_edits(_base_ir(), [{"op": "remove_container", "id": "snet"}])
-        assert ir is None and "still has children" in err
+        assert err is None
+        assert all(c["id"] != "snet" for c in ir["containers"])
+        vnet = next(c for c in ir["containers"] if c["id"] == "vnet")
+        assert "pe" in vnet["children"]          # child climbed to grandparent
+        pe = next(n for n in ir["nodes"] if n["id"] == "pe")
+        assert pe["parent"] == "vnet"
+
+    def test_remove_top_level_container_children_become_top_level(self):
+        ir, err = apply_edits(_base_ir(), [{"op": "remove_container", "id": "vnet"}])
+        assert err is None
+        snet = next(c for c in ir["containers"] if c["id"] == "snet")
+        assert snet["parent"] is None
+        assert "pe" in snet["children"]          # its own children untouched
+
+    def test_children_may_reference_containers_created_later_in_batch(self):
+        # conv #355: forward references within one batch failed 3 times with
+        # "children not found" — the model thinks of the batch as a transaction.
+        ir, err = apply_edits(_base_ir(), [
+            {"op": "upsert_container",
+             "container": {"id": "vnet", "children": ["snet", "band"]}},
+            {"op": "upsert_container",
+             "container": {"id": "band", "label": "Band", "style": "band",
+                           "children": []}},
+        ])
+        assert err is None
+        band = next(c for c in ir["containers"] if c["id"] == "band")
+        assert band["label"] == "Band"           # later upsert merged into shell
+        assert band["parent"] == "vnet"
+        vnet = next(c for c in ir["containers"] if c["id"] == "vnet")
+        assert "band" in vnet["children"]
+
+    def test_children_referencing_id_nothing_defines_still_errors(self):
+        ir, err = apply_edits(_base_ir(), [
+            {"op": "upsert_container",
+             "container": {"id": "vnet", "children": ["snet", "ghost"]}},
+        ])
+        assert ir is None and "children not found" in err
 
     def test_upsert_edge_replaces_matching_pair(self):
         ir, err = apply_edits(_base_ir(), [

@@ -146,3 +146,167 @@ class TestFlowPlacementAdvisory:
         d = dun_prod.build()
         layout_diagram(d)
         assert check_flow_placement(d) == []
+
+
+class TestSideLaneAdvisory:
+    """check_side_lane: a high-degree off-flow node buried in a flow stage
+    (the conv #355 Private DNS Zones pattern) gets the band+align_to recipe;
+    on-path hubs and dedicated satellite zones stay silent."""
+
+    def _hub_spoke(self) -> Diagram:
+        # hub holds fw (on the primary flow) and dns (off-flow, 3 dns edges
+        # to nodes living in three other stages).
+        return Diagram(
+            containers=[
+                Container(id="hub", label="Hub", style="zone",
+                          children=["fw", "dns"]),
+                Container(id="s1", label="Spoke 1", style="zone", children=["n1"]),
+                Container(id="s2", label="Spoke 2", style="zone", children=["n2"]),
+                Container(id="s3", label="Spoke 3", style="zone", children=["n3"]),
+            ],
+            nodes=[
+                Node(id="user", label="User", icon="azure/mysql"),
+                Node(id="fw", label="FW", icon="azure/firewalls", parent="hub"),
+                Node(id="dns", label="DNS", icon="azure/dns_zones", parent="hub"),
+                Node(id="n1", label="N1", icon="azure/mysql", parent="s1"),
+                Node(id="n2", label="N2", icon="azure/mysql", parent="s2"),
+                Node(id="n3", label="N3", icon="azure/mysql", parent="s3"),
+            ],
+            edges=[
+                Edge(source="user", target="fw"),
+                Edge(source="fw", target="n1"),
+                Edge(source="fw", target="n2"),
+                Edge(source="dns", target="n1", type="dns"),
+                Edge(source="dns", target="n2", type="dns"),
+                Edge(source="dns", target="n3", type="dns"),
+            ],
+        )
+
+    def test_buried_offflow_hub_is_flagged(self):
+        from app.diagram_ir.geometry import check_side_lane
+        msgs = check_side_lane(self._hub_spoke())
+        assert len(msgs) == 1
+        assert "'dns'" in msgs[0] and "band" in msgs[0] and "align_to" in msgs[0]
+
+    def test_onpath_hub_is_silent(self):
+        # fw has degree 3 but carries the primary flow — it IS a hop.
+        from app.diagram_ir.geometry import check_side_lane
+        msgs = check_side_lane(self._hub_spoke())
+        assert not any("'fw'" in m for m in msgs)
+
+    def test_dedicated_satellite_zone_is_silent(self):
+        # Log Analytics alone in its own monitoring container: high degree,
+        # off-flow, but already side-laned — no advisory.
+        from app.diagram_ir.geometry import check_side_lane
+        d = self._hub_spoke()
+        d.containers.append(Container(id="mon", label="Monitoring",
+                                      style="monitoring", children=["la"]))
+        d.nodes.append(Node(id="la", label="Logs",
+                            icon="azure/log_analytics_workspaces", parent="mon"))
+        d.edges += [Edge(source=n, target="la", type="telemetry")
+                    for n in ("n1", "n2", "n3")]
+        assert not any("'la'" in m for m in check_side_lane(d))
+
+    def test_dun_fixture_stays_clean(self):
+        from app.diagram_ir.geometry import check_side_lane
+        d = dun_prod.build()
+        layout_diagram(d)
+        assert check_side_lane(d) == []
+
+
+class TestTrunkBundling:
+    """Fan-out/fan-in trunk bundling (the human '-E' comb): a blocked fan
+    routes as ONE trunk that splits, exactly colinear on the shared run;
+    all-straight fans stay straight; the C detector ignores the intentional
+    overlap."""
+
+    def _fan_out(self, with_blocker: bool) -> Diagram:
+        nodes = [
+            Node(id="hub", label="Hub", icon="azure/mysql", x=0, y=200),
+            Node(id="t1", label="T1", icon="azure/mysql", x=600, y=0),
+            Node(id="t2", label="T2", icon="azure/mysql", x=600, y=200),
+            Node(id="t3", label="T3", icon="azure/mysql", x=600, y=400),
+        ]
+        if with_blocker:
+            # Sits on the hub→t1 diagonal so that member can't go straight.
+            nodes.append(Node(id="blk", label="Blk", icon="azure/mysql",
+                              x=300, y=100))
+        return Diagram(nodes=nodes, edges=[
+            Edge(source="hub", target="t1"),
+            Edge(source="hub", target="t2"),
+            Edge(source="hub", target="t3"),
+        ])
+
+    def test_blocked_fan_bundles_into_shared_trunk(self):
+        d = self._fan_out(with_blocker=True)
+        routes = route_edges_gutter(d)
+        fan = routes[:3]
+        assert all(r is not None and r.bundled for r in fan)
+        # One trunk: every member leaves from the SAME point.
+        assert len({r.points[0] for r in fan}) == 1
+
+    def test_bundle_overlap_not_flagged_as_hidden_arrow(self):
+        from app.diagram_ir.geometry import check_edge_overlaps
+        d = self._fan_out(with_blocker=True)
+        routes = route_edges_gutter(d)
+        assert check_edge_overlaps(d, routes) == []
+
+    def test_clean_straight_fan_stays_straight(self):
+        d = self._fan_out(with_blocker=False)
+        routes = route_edges_gutter(d)
+        assert all(r.straight and not r.bundled for r in routes)
+
+    def test_fan_in_bundles_at_shared_target(self):
+        d = Diagram(nodes=[
+            Node(id="s1", label="S1", icon="azure/mysql", x=0, y=0),
+            Node(id="s2", label="S2", icon="azure/mysql", x=0, y=200),
+            Node(id="s3", label="S3", icon="azure/mysql", x=0, y=400),
+            Node(id="sink", label="Sink", icon="azure/mysql", x=600, y=200),
+            Node(id="blk", label="Blk", icon="azure/mysql", x=300, y=100),
+        ], edges=[
+            Edge(source="s1", target="sink"),
+            Edge(source="s2", target="sink"),
+            Edge(source="s3", target="sink"),
+        ])
+        routes = route_edges_gutter(d)
+        assert all(r is not None and r.bundled for r in routes)
+        # One trunk INTO the target: every member arrives at the SAME point.
+        assert len({r.points[-1] for r in routes}) == 1
+
+    def test_labeled_edges_never_bundle(self):
+        d = self._fan_out(with_blocker=True)
+        for e in d.edges:
+            e.label = "calls"
+        routes = route_edges_gutter(d)
+        assert not any(r.bundled for r in routes if r is not None)
+
+
+class TestFlowAxisPortBias:
+    """Forward flow edges in the ambiguous-angle band keep the diagram's
+    reading axis (LR: right→left ports) instead of flipping vertical; non-flow
+    edges and backward edges keep the plain dominant-axis choice."""
+
+    def _pair(self, edge_type: str) -> Diagram:
+        # Centers 100px apart in x, 130px in y: |dy| > |dx| but within the
+        # 1.6× bias band.
+        return Diagram(direction="LR", nodes=[
+            Node(id="a", label="A", icon="azure/mysql", x=0, y=0),
+            Node(id="b", label="B", icon="azure/mysql", x=100, y=130),
+        ], edges=[Edge(source="a", target="b", type=edge_type)])
+
+    def test_forward_flow_edge_keeps_reading_axis(self):
+        from app.diagram_ir.routing import route_edges
+        r = route_edges(self._pair("flow"))[0]
+        assert r.exitX == 1.0 and r.entryX == 0.0      # R → L
+
+    def test_nonflow_edge_keeps_dominant_axis(self):
+        from app.diagram_ir.routing import route_edges
+        r = route_edges(self._pair("dns"))[0]
+        assert r.exitY == 1.0 and r.entryY == 0.0      # B → T
+
+    def test_backward_flow_edge_not_biased(self):
+        from app.diagram_ir.routing import route_edges
+        d = self._pair("flow")
+        d.edges[0] = Edge(source="b", target="a", type="flow")
+        r = route_edges(d)[0]
+        assert r.exitY == 0.0 and r.entryY == 1.0      # T → B (dominant axis)

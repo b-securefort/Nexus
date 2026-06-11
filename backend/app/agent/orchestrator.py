@@ -25,6 +25,7 @@ from app.agent.streaming import (
     sse_approval_required,
     sse_done,
     sse_error,
+    sse_iteration_limit,
     sse_message_saved,
     sse_question_answered,
     sse_question_required,
@@ -905,10 +906,25 @@ def _render_is_stale(image_path) -> bool:
         return False
 
 
-def _build_render_review_message(args: dict, func_name: str | None = None) -> dict | None:
+# Convergence governor for the render-review loop (conv #355: 21 consecutive
+# successful renders, each reviewed into "actual problems", until the iteration
+# cap killed the turn — the open-ended review text never says "good enough").
+# From _REVIEW_SOFT_CAP successful renders of the same file in one turn the
+# review message demands semantic-only fixes and global-spacing-over-nudges;
+# from _REVIEW_HARD_CAP it instructs the model to present the render as-is.
+_REVIEW_SOFT_CAP = 3
+_REVIEW_HARD_CAP = 5
+
+
+def _build_render_review_message(
+    args: dict, func_name: str | None = None, render_count: int = 1
+) -> dict | None:
     """If a render_drawio call produced an image, build a synthetic user message
     with the image inlined for the next model turn so the vision-capable model
     can review the rendered output.
+
+    `render_count` is how many successful renders this filename has had this
+    turn (including this one); it selects the convergence-governor tier.
 
     Returns None if the file doesn't exist, can't be read, or the format isn't
     something the vision API accepts. Not persisted to DB - lives only in the
@@ -939,14 +955,37 @@ def _build_render_review_message(args: dict, func_name: str | None = None) -> di
     # One terse instruction for every diagram path. The skill owns the review
     # workflow; this message only delivers the image and sets the brevity bar —
     # a checklist here just produces a checklist-shaped essay per render.
-    review_text = (
-        f"Rendered image of {display_name}. Review it against what was agreed. "
-        "If something is wrong (wrong icon or nesting, clipped/colliding text, a "
-        "line through an icon, missing agreed structure), fix your source and "
-        "re-run with the same filename. If it looks right, present it to the "
-        "user in one or two sentences — mention only actual problems, never a "
-        "checklist of things that passed."
-    )
+    # The text escalates with render_count: an open-ended "fix what's wrong"
+    # never converges, because a vision review can ALWAYS find a cosmetic flaw.
+    if render_count >= _REVIEW_HARD_CAP:
+        review_text = (
+            f"Rendered image of {display_name} (render {render_count} this "
+            "turn). STOP iterating on this diagram. Present this render to the "
+            "user now in one or two sentences, noting any remaining "
+            "imperfections as caveats. Do not call the diagram tool again this "
+            "turn unless the user asks for a change."
+        )
+    elif render_count >= _REVIEW_SOFT_CAP:
+        review_text = (
+            f"Rendered image of {display_name} (render {render_count} this "
+            "turn — diminishing returns). Re-render ONLY for a semantic error: "
+            "wrong icon, wrong nesting, missing agreed structure, or a label "
+            "that misstates the architecture. Cosmetic imperfection is not a "
+            "reason to re-render. If text or lines still collide, make ONE "
+            "global fix (increase spacing) instead of nudging individual "
+            "nodes — per-node nudges shift neighbours and create new "
+            "collisions. Otherwise present it to the user in one or two "
+            "sentences."
+        )
+    else:
+        review_text = (
+            f"Rendered image of {display_name}. Review it against what was agreed. "
+            "If something is wrong (wrong icon or nesting, clipped/colliding text, a "
+            "line through an icon, missing agreed structure), fix your source and "
+            "re-run with the same filename. If it looks right, present it to the "
+            "user in one or two sentences — mention only actual problems, never a "
+            "checklist of things that passed."
+        )
     return {
         "role": "user",
         "content": [
@@ -1688,6 +1727,11 @@ async def handle_chat(
     # give up after 3-4 failed validate cycles even when iterations remain.
     drawio_attempt_count: dict[str, int] = {}
 
+    # Successful renders per filename this turn — drives the review-loop
+    # convergence governor (_REVIEW_SOFT_CAP/_REVIEW_HARD_CAP) so visual
+    # polishing can't consume the whole iteration budget.
+    render_review_count: dict[str, int] = {}
+
     # PNGs produced by diagram tools during this turn. Attached to the
     # terminating assistant message (the one with no tool_calls) so the user
     # sees the rendered diagram inline alongside the agent's description.
@@ -2289,7 +2333,12 @@ async def handle_chat(
                 # Defer the append until all tool_call_ids are answered to keep
                 # API ordering valid.
                 if not is_error and _tool_has(func_name, "attaches_render"):
-                    review_msg = _build_render_review_message(func_args, func_name)
+                    review_key = f"{func_name}:{func_args.get('filename', '')}"
+                    render_review_count[review_key] = render_review_count.get(review_key, 0) + 1
+                    review_msg = _build_render_review_message(
+                        func_args, func_name,
+                        render_count=render_review_count[review_key],
+                    )
                     if review_msg is not None:
                         # Only the latest render of a file deserves review —
                         # purge superseded review images from earlier
@@ -2468,5 +2517,65 @@ async def handle_chat(
             yield sse_error(str(e))
             return
 
-    # Exceeded max iterations
-    yield sse_error("Maximum tool call iterations exceeded")
+    # Exceeded max iterations — graceful wrap-up, not a dead error. The turn's
+    # tool results are already persisted; what a hard error loses is (a) the
+    # latest diagram render (attachments only ship on a final assistant
+    # message, which never happened) and (b) a model-written checkpoint that a
+    # follow-up "continue" turn can resume from. One last call with tools
+    # disabled produces both. (Conv #355: two consecutive turns died at the
+    # cap with a red banner and no render shown.)
+    logger.warning(
+        "Iteration budget (%d) exhausted for conversation %s — wrapping up",
+        MAX_TOOL_ITERATIONS, conversation.id,
+    )
+    messages.append({
+        "role": "system",
+        "content": (
+            "[iteration budget exhausted] You have used every tool iteration "
+            "available this turn; tools are now disabled. In a few sentences, "
+            "tell the user: what was accomplished, what (if anything) is still "
+            "wrong or unfinished, and the exact next step you would take. If "
+            "you produced a diagram, its latest render is attached to your "
+            "reply automatically — do not apologize for it. Close by telling "
+            "the user they can say 'continue' to let you resume."
+        ),
+    })
+    wrap_content = ""
+    try:
+        def _wrap_call():
+            return chat_client.chat.completions.create(
+                model=settings.chat_deployment,
+                messages=[{"role": "system", "content": system_prompt}] + messages,
+                max_completion_tokens=2048,
+            )
+        resp = await asyncio.to_thread(_wrap_call)
+        wrap_content = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        logger.exception("Iteration-cap wrap-up call failed")
+    if not wrap_content:
+        # The wrap-up call itself failed — still end the turn usable.
+        wrap_content = (
+            "I ran out of tool iterations for this turn before finishing. "
+            "Everything done so far is saved — say 'continue' and I'll pick "
+            "up where I left off."
+        )
+    yield sse_token(wrap_content)
+    attachments_json = None
+    if pending_render_attachments:
+        attachments_json = json.dumps(list(pending_render_attachments.values()))
+        pending_render_attachments.clear()
+    assistant_msg = _save_message(
+        session,
+        conversation.id,
+        role="assistant",
+        content=wrap_content,
+        attachments_json=attachments_json,
+    )
+    yield sse_message_saved(assistant_msg.id, "assistant")
+    yield sse_iteration_limit(conversation.id, MAX_TOOL_ITERATIONS)
+    yield sse_done(conversation.id, usage=resting_usage)
+    for _work_fn in _deferred_compaction:
+        asyncio.ensure_future(asyncio.to_thread(_work_fn))
+    _deferred_compaction.clear()
+    _clear_lease(session, conversation.id)
+    clear_arm_token_override(conversation.id)

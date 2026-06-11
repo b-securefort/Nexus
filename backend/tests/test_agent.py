@@ -160,6 +160,61 @@ class TestStaleRenderGuard:
         assert _attachment_for_rendered_png({"filename": "flow"}, "generate_python_diagram") is not None
 
 
+class TestReviewConvergenceGovernor:
+    """The render-review message must escalate with the per-file render count
+    (conv #355: 21 successful renders, each reviewed into 'actual problems',
+    until the iteration cap killed the turn)."""
+
+    def _fresh_render_args(self, tmp_path, monkeypatch) -> dict:
+        monkeypatch.chdir(tmp_path)
+        out = tmp_path / "output"
+        out.mkdir()
+        (out / "arch.png").write_bytes(b"\x89PNG\r\n\x1a\nfakebytes")
+        (out / "arch.drawio").write_text("<mxfile/>")
+        return {"filename": "arch"}
+
+    def _text(self, msg: dict) -> str:
+        return msg["content"][0]["text"]
+
+    def test_early_renders_use_open_review(self, tmp_path, monkeypatch):
+        from app.agent.orchestrator import _build_render_review_message
+        args = self._fresh_render_args(tmp_path, monkeypatch)
+        msg = _build_render_review_message(args, "generate_structured_diagram",
+                                           render_count=1)
+        assert "Review it against what was agreed" in self._text(msg)
+
+    def test_soft_cap_demands_semantic_only(self, tmp_path, monkeypatch):
+        from app.agent.orchestrator import _build_render_review_message
+        args = self._fresh_render_args(tmp_path, monkeypatch)
+        msg = _build_render_review_message(args, "generate_structured_diagram",
+                                           render_count=3)
+        text = self._text(msg)
+        assert "diminishing returns" in text
+        assert "ONE global fix" in text
+
+    def test_hard_cap_instructs_stop(self, tmp_path, monkeypatch):
+        from app.agent.orchestrator import _build_render_review_message
+        args = self._fresh_render_args(tmp_path, monkeypatch)
+        msg = _build_render_review_message(args, "generate_structured_diagram",
+                                           render_count=5)
+        assert "STOP iterating" in self._text(msg)
+
+    def test_governor_text_still_matches_stale_drop_prefix(self, tmp_path, monkeypatch):
+        """Escalated review messages must still be purged by
+        _drop_stale_render_reviews when a newer render supersedes them."""
+        from app.agent.orchestrator import (
+            _build_render_review_message, _drop_stale_render_reviews,
+        )
+        args = self._fresh_render_args(tmp_path, monkeypatch)
+        old = _build_render_review_message(args, "generate_structured_diagram",
+                                           render_count=3)
+        new = _build_render_review_message(args, "generate_structured_diagram",
+                                           render_count=4)
+        messages = [old]
+        assert _drop_stale_render_reviews(messages, new) == 1
+        assert messages == []
+
+
 class TestRateLimitRetry:
     """A 429 on the main chat stream must retry with backoff, not kill the turn."""
 

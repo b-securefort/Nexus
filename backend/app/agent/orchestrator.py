@@ -961,9 +961,10 @@ def _build_render_review_message(
         review_text = (
             f"Rendered image of {display_name} (render {render_count} this "
             "turn). STOP iterating on this diagram. Present this render to the "
-            "user now in one or two sentences, noting any remaining "
-            "imperfections as caveats. Do not call the diagram tool again this "
-            "turn unless the user asks for a change."
+            "user now in one or two sentences — and if the scorecard or "
+            "advisories were non-zero, name each remaining defect as a caveat "
+            "(never call a defective render ready). Do not call the diagram "
+            "tool again this turn unless the user asks for a change."
         )
     elif render_count >= _REVIEW_SOFT_CAP:
         review_text = (
@@ -975,7 +976,9 @@ def _build_render_review_message(
             "global fix (increase spacing) instead of nudging individual "
             "nodes — per-node nudges shift neighbours and create new "
             "collisions. Otherwise present it to the user in one or two "
-            "sentences."
+            "sentences — and if the scorecard or advisories were non-zero, "
+            "name each remaining defect as a caveat instead of calling the "
+            "diagram ready."
         )
     else:
         review_text = (

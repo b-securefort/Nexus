@@ -12,6 +12,7 @@ from app.diagram_ir.archetypes import load_archetypes
 from app.diagram_ir.emit import emit_drawio
 from app.diagram_ir.geometry import (
     check_backward_hop,
+    check_box_overlaps,
     check_edge_crossings,
     check_edge_overlaps,
     check_flow_placement,
@@ -28,8 +29,8 @@ from app.diagram_ir.validate import validate_ir
 ARCHETYPES = load_archetypes()
 
 EXPECTED = {
-    "n-tier-web-app", "hub-spoke-network", "event-driven",
-    "rag-ai-app", "cicd-flow", "landing-zone",
+    "n-tier-web-app", "hub-spoke-network", "hub-spoke-workload",
+    "event-driven", "rag-ai-app", "cicd-flow", "landing-zone",
 }
 
 
@@ -52,6 +53,7 @@ def test_archetype_skeleton_is_detector_clean(slug):
     assert check_line_over_labels(d, routes) == []
     assert check_edge_overlaps(d, routes) == []
     assert check_label_collisions(d, routes) == []
+    assert check_box_overlaps(d) == []
     # ...and no placement advisories: a template must not ship with the
     # structural smells it exists to prevent.
     assert check_flow_placement(d) == []

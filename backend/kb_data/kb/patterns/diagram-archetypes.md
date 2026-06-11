@@ -276,3 +276,60 @@ zone per landing zone; `vm`/`webapp` stand for each zone's workload plane.
   ]
 }
 ```
+
+## hub-spoke-workload — one workload drawn end-to-end through hub-spoke connectivity
+
+**Use when:** the ask is BOTH the connectivity story (on-prem/users through hub
+NVA into a spoke) AND the workload inside that spoke — the most common "draw my
+app on our network" request. The spoke VNet box reads as its own left-to-right
+mini-spine: `gateway subnet | app tier | private endpoints | data`. This is the
+team-approved reference shape. **Slots:** `lb`/`fw` are the hub inspection
+chain; `web`/`api` the app tier; `db` the data slot with its private endpoint
+in the `pe_col` column. If the API itself is private-endpoint-fronted, add its
+PE beside the api node (accept the one short backward hop the advisory will
+note, or split the app tier into web | pe | api columns). Private DNS stays in
+the hub, one `dns` edge to the spoke.
+
+```json
+{
+  "title": "Hub-spoke workload",
+  "direction": "LR",
+  "containers": [
+    {"id": "spine", "style": "band", "layout": "row", "children": ["clients", "hub", "spoke"]},
+    {"id": "clients", "label": "Users", "style": "zone", "layout": "column", "parent": "spine", "children": ["user"]},
+    {"id": "hub", "label": "Hub", "style": "zone", "layout": "column", "parent": "spine", "children": ["hub_services"]},
+    {"id": "hub_services", "label": "Shared services", "style": "group", "layout": "column", "parent": "hub", "children": ["lb", "dns", "fw"]},
+    {"id": "spoke", "label": "Spoke VNet", "style": "vnet", "layout": "row", "parent": "spine", "children": ["agw_subnet", "apps", "pe_col", "data"]},
+    {"id": "agw_subnet", "label": "App Gateway subnet", "style": "subnet", "layout": "column", "parent": "spoke", "children": ["agw"]},
+    {"id": "apps", "label": "Application tier", "style": "group", "layout": "column", "parent": "spoke", "children": ["web", "api"]},
+    {"id": "pe_col", "label": "Private endpoints / integration", "style": "subnet", "layout": "column", "parent": "spoke", "children": ["pe_db", "integration"]},
+    {"id": "data", "label": "Data", "style": "group", "layout": "column", "parent": "spoke", "children": ["db"]}
+  ],
+  "nodes": [
+    {"id": "user", "label": "User", "icon": "shape/actor", "parent": "clients"},
+    {"id": "lb", "label": "Load balancer", "icon": "azure/load_balancers", "parent": "hub_services"},
+    {"id": "dns", "label": "Private DNS", "icon": "azure/dns_private_zones", "parent": "hub_services"},
+    {"id": "fw", "label": "Firewall / NVA", "icon": "azure/firewalls", "parent": "hub_services"},
+    {"id": "agw", "label": "Application Gateway", "icon": "azure/application_gateways", "parent": "agw_subnet",
+     "adornments": [{"icon": "azure/web_application_firewall", "corner": "top-right", "label": "WAF"}]},
+    {"id": "web", "label": "Web app", "icon": "azure/app_services", "parent": "apps"},
+    {"id": "api", "label": "API app", "icon": "azure/app_services", "parent": "apps"},
+    {"id": "pe_db", "label": "pe-db", "icon": "azure/private_endpoint", "parent": "pe_col"},
+    {"id": "integration", "label": "Integration subnet", "icon": "azure/subnet", "parent": "pe_col"},
+    {"id": "db", "label": "Database", "icon": "azure/sql_database", "parent": "data"}
+  ],
+  "edges": [
+    {"source": "user", "target": "lb", "type": "flow", "label": "HTTPS"},
+    {"source": "lb", "target": "fw", "type": "flow", "label": "inspect"},
+    {"source": "fw", "target": "agw", "type": "flow"},
+    {"source": "agw", "target": "web", "type": "flow", "label": "HTTPS"},
+    {"source": "web", "target": "api", "type": "flow"},
+    {"source": "api", "target": "pe_db", "type": "private"},
+    {"source": "pe_db", "target": "db", "type": "private"},
+    {"source": "web", "target": "integration", "type": "private"},
+    {"source": "api", "target": "integration", "type": "private"},
+    {"source": "dns", "target": "spoke", "type": "dns"},
+    {"source": "hub", "target": "spoke", "type": "private", "label": "peering"}
+  ]
+}
+```

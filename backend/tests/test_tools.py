@@ -873,22 +873,16 @@ class TestRunAzShellFalse:
 
 
 class TestGenerateFileAdversarial:
-    """Adversarial inputs for generate_file. Sandbox is output/. Every path
-    that could escape the sandbox or crash the tool must return a clean
-    error string."""
+    """Adversarial inputs for generate_file. Every path that could escape the
+    sandbox or crash the tool must return a clean error string.
 
-    _OUTPUT_DIR = None  # set per-test via pytest tmp swap
+    The sandbox is a tmp_path monkeypatch — never clean the real ./output,
+    which holds real conversation artifacts (diagram sidecars, renders)."""
 
-    def setup_method(self):
-        # Each test starts with a clean output/ directory.
-        import os
-        import shutil
-        out = os.path.join(os.getcwd(), "output")
-        if os.path.exists(out):
-            try:
-                shutil.rmtree(out)
-            except OSError:
-                pass
+    @pytest.fixture(autouse=True)
+    def _sandbox(self, tmp_path, monkeypatch):
+        from app.tools.generic import generate_file as genfile_mod
+        monkeypatch.setattr(genfile_mod, "_OUTPUT_DIR", tmp_path)
 
     def test_args_is_none(self):
         """G1: args=None — must not crash with AttributeError."""

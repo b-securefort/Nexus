@@ -717,19 +717,18 @@ class TestAzRestApiTool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestGenerateFileTool:
-    """Tests for generate_file tool with real filesystem writes to a temp sandbox."""
+    """Tests for generate_file tool with real filesystem writes to a temp sandbox.
 
-    _OUTPUT_DIR = os.path.join(os.getcwd(), "output")
+    The sandbox MUST be a tmp_path monkeypatch, never the real ./output —
+    a prior version rmtree'd cwd/output in setup/teardown, which destroyed
+    real conversation artifacts (diagram .ir.json sidecars, renders) every
+    time the suite ran from backend/."""
 
-    def setup_method(self):
-        """Clean output/ before each test."""
-        if os.path.exists(self._OUTPUT_DIR):
-            shutil.rmtree(self._OUTPUT_DIR)
-
-    def teardown_method(self):
-        """Clean output/ after each test."""
-        if os.path.exists(self._OUTPUT_DIR):
-            shutil.rmtree(self._OUTPUT_DIR)
+    @pytest.fixture(autouse=True)
+    def _sandbox(self, tmp_path, monkeypatch):
+        from app.tools.generic import generate_file as genfile_mod
+        monkeypatch.setattr(genfile_mod, "_OUTPUT_DIR", tmp_path)
+        self._OUTPUT_DIR = str(tmp_path)
 
     def test_write_simple_file(self):
         tool = get_tool("generate_file")

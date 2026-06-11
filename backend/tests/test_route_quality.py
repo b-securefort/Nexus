@@ -310,3 +310,67 @@ class TestFlowAxisPortBias:
         d.edges[0] = Edge(source="b", target="a", type="flow")
         r = route_edges(d)[0]
         assert r.exitY == 0.0 and r.entryY == 1.0      # T → B (dominant axis)
+
+
+class TestBackwardHopAdvisory:
+    """check_backward_hop: a rank-adjacent flow hop drawn AGAINST the reading
+    axis, where the target continues the flow onward, gets the reorder recipe.
+    Born from conv #359: "all private endpoints in one box" authored before
+    the app tier it serves made every private hop a right-left-right zigzag,
+    and no detector said a word (check_flow_placement only measures distance)."""
+
+    @staticmethod
+    def _zigzag_ir() -> dict:
+        # agw | PE column | apps — chain agw->app1->pe1->app2 reverses at pe1.
+        return {
+            "direction": "LR",
+            "containers": [
+                {"id": "spine", "style": "band", "layout": "row",
+                 "children": ["ingress", "pes", "apps"]},
+                {"id": "ingress", "label": "Ingress", "style": "group",
+                 "layout": "column", "parent": "spine", "children": ["agw"]},
+                {"id": "pes", "label": "Private endpoints", "style": "subnet",
+                 "layout": "column", "parent": "spine", "children": ["pe1"]},
+                {"id": "apps", "label": "Apps", "style": "group",
+                 "layout": "column", "parent": "spine", "children": ["app1", "app2"]},
+            ],
+            "nodes": [
+                {"id": "agw", "label": "App Gateway", "icon": "azure/application_gateways", "parent": "ingress"},
+                {"id": "pe1", "label": "PE", "icon": "azure/private_endpoint", "parent": "pes"},
+                {"id": "app1", "label": "Frontend", "icon": "azure/app_services", "parent": "apps"},
+                {"id": "app2", "label": "Backend", "icon": "azure/app_services", "parent": "apps"},
+            ],
+            "edges": [
+                {"source": "agw", "target": "app1", "type": "flow"},
+                {"source": "app1", "target": "pe1", "type": "private"},
+                {"source": "pe1", "target": "app2", "type": "private"},
+            ],
+        }
+
+    def test_zigzag_transit_hop_flagged_with_reorder_recipe(self):
+        from app.diagram_ir.geometry import check_backward_hop
+        from app.diagram_ir.loader import load_ir
+        d = load_ir(self._zigzag_ir())
+        layout_diagram(d)
+        flags = check_backward_hop(d)
+        assert len(flags) == 1
+        assert "app1 -> pe1" in flags[0] and "BACKWARD" in flags[0]
+        assert "'pes'" in flags[0] and "after 'apps'" in flags[0]
+
+    def test_terminal_side_call_exempt(self):
+        from app.diagram_ir.geometry import check_backward_hop
+        from app.diagram_ir.loader import load_ir
+        ir = self._zigzag_ir()
+        # Make pe1 terminal (an identity/MI-style side-call): drop its onward hop.
+        ir["edges"] = [e for e in ir["edges"] if e["source"] != "pe1"]
+        d = load_ir(ir)
+        layout_diagram(d)
+        assert check_backward_hop(d) == []
+
+    def test_good_fixtures_stay_clean(self):
+        from app.diagram_ir.examples import aws_complex, flow_spine
+        from app.diagram_ir.geometry import check_backward_hop
+        for mod_ in (flow_spine, aws_complex):   # mi side-call; 98px in-VPC wobble
+            d = mod_.build()
+            layout_diagram(d)
+            assert check_backward_hop(d) == [], mod_.__name__

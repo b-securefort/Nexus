@@ -280,6 +280,13 @@ class TestToolEditsFlow:
         assert "nodes (2): app, pe" in out
         assert "app->pe" in out
 
+    def test_echo_shows_children_order(self, tool):
+        """Conv #359: the agent couldn't see that its stage reorder hadn't
+        applied, because the echo listed presence but not sibling order."""
+        out = tool.execute({"filename": "arch", "diagram": _base_ir()}, _user())
+        assert "vnet ▸ [snet]" in out
+        assert "snet ▸ [pe]" in out
+
 
 # ── Adornment-label geometry ───────────────────────────────────────────────
 

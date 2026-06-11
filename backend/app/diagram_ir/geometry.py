@@ -303,6 +303,69 @@ def check_flow_placement(diagram: Diagram) -> list[str]:
             "children / parent moves) and re-render."
         )
     return out
+
+# --- Backward-hop advisory: the flow chain reverses reading direction -------
+#
+# Conv #359: "all private endpoints in one box" was authored BEFORE the app
+# tier it serves, so the chain frontend → pe → backend → pe → db zigzagged
+# right-left-right across the canvas. check_flow_placement never fired — the
+# hops were stage-adjacent, far under _PLACEMENT_FAR — because it measures
+# DISTANCE, not direction. This flags a rank-adjacent flow hop drawn AGAINST
+# the diagram's reading axis when the target is a TRANSIT node (it continues
+# the flow onward). A backward edge into a terminal side-service (auth call
+# into Entra, an MI lookup) is a normal side-call and stays unflagged, as is
+# small in-stage wobble (aws_complex draws a legitimate 98px ALB->ECS
+# reversal inside one VPC; the conv #359 zigzags were 250px+). Advisory only
+# — the AUTHOR moves boxes, never the engine.
+
+_BACKWARD_MIN = 120.0
+
+
+def check_backward_hop(diagram: Diagram) -> list[str]:
+    boxes: dict = {c.id: c for c in diagram.containers}
+    boxes.update({n.id: n for n in diagram.nodes})
+    ranks = _flow_ranks(diagram)
+    if not ranks:
+        return []
+    onward: set[str] = set()
+    for e in diagram.edges:
+        if e.type in _FLOWLIKE_TYPES:
+            r1, r2 = ranks.get(e.source), ranks.get(e.target)
+            if r1 is not None and r2 is not None and r2 > r1:
+                onward.add(e.source)
+
+    out: list[str] = []
+    for e in diagram.edges:
+        if e.type not in _FLOWLIKE_TYPES:
+            continue
+        rs, rt = ranks.get(e.source), ranks.get(e.target)
+        if rs is None or rt is None or rt != rs + 1:
+            continue
+        if e.target not in onward:        # terminal side-call, not a hop
+            continue
+        s, t = boxes.get(e.source), boxes.get(e.target)
+        if s is None or t is None:
+            continue
+        delta = ((t.x + t.w / 2) - (s.x + s.w / 2)) if diagram.direction == "LR" \
+            else ((t.y + t.h / 2) - (s.y + s.h / 2))
+        if delta < -_BACKWARD_MIN:
+            stage_s = _spine_stage(e.source, boxes)
+            stage_t = _spine_stage(e.target, boxes)
+            if stage_t == stage_s:
+                # Same perceived stage (e.g. both inside one VNet): name the
+                # immediate boxes — the fix is reordering WITHIN that stage.
+                stage_s = getattr(s, "parent", None) or e.source
+                stage_t = getattr(t, "parent", None) or e.target
+            out.append(
+                f"[backward-hop] {e.source} -> {e.target} is hop {rs}->{rt} of "
+                f"the flow but is drawn {-delta:.0f}px BACKWARD against the "
+                f"{diagram.direction} reading direction — '{stage_t}' comes too "
+                f"early on the spine. Move it (or the node) after '{stage_s}' "
+                f"via `edits` and re-render."
+            )
+    return out
+
+
 # --- Side-lane advisory: shared service buried in a flow stage --------------
 #
 # Human-diagrammer heuristic (2026-06-10): a node with many to/fro edges that

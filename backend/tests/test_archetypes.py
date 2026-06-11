@@ -11,6 +11,7 @@ import pytest
 from app.diagram_ir.archetypes import load_archetypes
 from app.diagram_ir.emit import emit_drawio
 from app.diagram_ir.geometry import (
+    check_backward_hop,
     check_edge_crossings,
     check_edge_overlaps,
     check_flow_placement,
@@ -54,6 +55,7 @@ def test_archetype_skeleton_is_detector_clean(slug):
     # ...and no placement advisories: a template must not ship with the
     # structural smells it exists to prevent.
     assert check_flow_placement(d) == []
+    assert check_backward_hop(d) == []
     assert check_side_lane(d) == []
 
     xml = emit_drawio(d, routes)

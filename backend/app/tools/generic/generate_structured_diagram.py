@@ -386,9 +386,12 @@ class GenerateStructuredDiagramTool(Tool):
         # Conv #352 burned 4 renders chasing nodes the vision pass hallucinated
         # as missing.
         echo = (
-            "Structure (authoritative — check presence/absence here, NOT in the image):\n"
+            "Structure (authoritative — check presence/absence AND stage order "
+            "here, NOT in the image):\n"
             f"  containers ({len(diagram.containers)}): "
-            + (", ".join(c.id for c in diagram.containers) or "—") + "\n"
+            + (", ".join(
+                c.id + (f" ▸ [{', '.join(c.children)}]" if c.children else "")
+                for c in diagram.containers) or "—") + "\n"
             f"  nodes ({len(diagram.nodes)}): "
             + (", ".join(n.id for n in diagram.nodes) or "—") + "\n"
             f"  edges ({len(diagram.edges)}): "
@@ -410,7 +413,8 @@ class GenerateStructuredDiagramTool(Tool):
         # mid-flow component was parked in the wrong stage. The router can't
         # fix authoring; this tells the author (the model) HOW to fix it.
         placement = check_flow_placement(diagram)
-        from app.diagram_ir.geometry import check_side_lane
+        from app.diagram_ir.geometry import check_backward_hop, check_side_lane
+        placement += check_backward_hop(diagram)
         placement += check_side_lane(diagram)
         if placement:
             score_detail += "\nPlacement advisory (fix via `edits`, then re-render):\n" + \

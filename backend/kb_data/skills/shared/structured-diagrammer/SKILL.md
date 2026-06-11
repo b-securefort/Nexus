@@ -34,4 +34,5 @@ Containment-canonical pictures: "X is inside Y" — a VNet with nested subnets a
 - **B/D (text defects)** → shorten or DROP edge labels first (`private`/`dns`/`telemetry` line styles already say it; never label what containment already states), then spread.
 - **Satellite drifting from what it serves** → `align_to` it (cross-band only — a same-band `align_to` is ignored).
 - **`[side-lane]` advisory** (shared service like DNS/identity buried in a flow stage) → do exactly what it says in ONE edit batch: add an invisible `band` beside the spine, move the node there, `align_to` its busiest counterpart.
+- **`[backward-hop]` advisory** (a flow hop drawn against the reading direction — usually a category-grouped box like "all private endpoints" placed before the tier it serves) → reorder the named container after the one that feeds it via `upsert_container` children, then verify the order actually changed in the Structure echo's `▸ [...]` lists.
 - **Clipped container label** → usually self-resolves on re-run; the box sizes to its title.

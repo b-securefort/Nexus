@@ -213,8 +213,10 @@ class TestPipelineScorecard:
         layout_diagram(d)
         routes = route_edges_gutter(d)
         # Pin the baseline so the fixture keeps reproducing the defect: with
-        # midpoint labels this topology collides.
-        assert len(check_label_collisions(d, routes)) >= 4
+        # midpoint labels this topology collides. (Was >=4 under the CHAR_W
+        # estimates; exact Arial metrics shrink the label boxes to truth and
+        # two of those overlaps were estimate-only phantoms.)
+        assert len(check_label_collisions(d, routes)) >= 2
         place_edge_labels(d, routes)
         self_check = (
             check_edge_crossings(d, routes)

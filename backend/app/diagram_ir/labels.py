@@ -17,15 +17,16 @@ geometry:
     RouteInfo (`label_t`, `label_offset`, `label_box`) for the emitter and the
     D-detector.
 
-Everything here is estimate-based (CHAR_W-style text metrics, same convention
-as layout.py) — good enough to keep text out of text, which is what readers
-notice.
+Text extents come from textmetrics (baked Arial advance tables at the exact
+px sizes the emitter writes) — measured, not estimated, so the boxes the
+placer avoids are the pixels draw.io paints.
 """
 
 from __future__ import annotations
 
-from .layout import CHAR_W, HEADER, LABEL_INSET, _label_w
+from .layout import HEADER, LABEL_INSET, _label_w
 from .schema import Container, Diagram, Node
+from .textmetrics import adornment_label_width, container_label_width, edge_label_width
 
 Rect = tuple[float, float, float, float]
 
@@ -33,12 +34,10 @@ Rect = tuple[float, float, float, float]
 # placer, the router, and the detectors all share one set of numbers.
 ADORN_SIZE = 24.0
 ADORN_PAD = 6.0
-_ADORN_LABEL_CHAR_W = 5.2     # adornment labels render small (~10px font)
 _ADORN_LABEL_H = 12.0
 
-# Edge-label text metrics (draw.io default edge font ≈ 11px).
-EDGE_LABEL_CHAR_W = 5.8
-EDGE_LABEL_LINE_H = 15.0
+# Edge labels render at 10px (emit.py's edgeLabel cell); line height ≈ 1.2em.
+EDGE_LABEL_LINE_H = 12.0
 EDGE_LABEL_PAD = 4.0          # white background padding around the text
 # Gap between the line and the near edge of the label box.
 _LINE_GAP = 4.0
@@ -79,8 +78,7 @@ def container_header_box(c: Container) -> Rect | None:
     band, just not the title."""
     if not c.label:
         return None
-    longest = max((len(line) for line in c.label.splitlines()), default=0)
-    w = min(longest * CHAR_W + LABEL_INSET, c.w)
+    w = min(container_label_width(c.label, c.style) + LABEL_INSET, c.w)
     return (c.x + 2.0, c.y, c.x + 2.0 + w, c.y + HEADER)
 
 
@@ -106,7 +104,7 @@ def adornment_boxes(owner: Container | Node) -> list[Rect]:
         out.append((gx1, gy1, gx2, gy2))
         if not ad.label:
             continue
-        w = len(ad.label) * _ADORN_LABEL_CHAR_W + 4
+        w = adornment_label_width(ad.label, on_node=isinstance(owner, Node)) + 4
         if isinstance(owner, Node):
             ly = gy1 + (ADORN_SIZE - _ADORN_LABEL_H) / 2
             if "left" in ad.corner:       # label points left, away from the icon
@@ -121,9 +119,8 @@ def adornment_boxes(owner: Container | Node) -> list[Rect]:
 
 def edge_label_size(label: str) -> tuple[float, float]:
     lines = label.splitlines() or [""]
-    longest = max(len(line) for line in lines)
     return (
-        longest * EDGE_LABEL_CHAR_W + 2 * EDGE_LABEL_PAD,
+        edge_label_width(label) + 2 * EDGE_LABEL_PAD,
         len(lines) * EDGE_LABEL_LINE_H + EDGE_LABEL_PAD,
     )
 

@@ -65,14 +65,15 @@ def test_image5_auto_full_pipeline_renders_xml():
 def test_container_width_fits_its_own_label():
     """A subnet whose label is far wider than its single narrow child must size
     to the label, not clip it (the 'Public subnet us-eas…' regression)."""
-    from app.diagram_ir.layout import CHAR_W
+    from app.diagram_ir.textmetrics import container_label_width
     label = "Public subnet  us-east-1a"
     d = Diagram(direction="LR",
                 containers=[Container(id="sub", label=label, style="subnet", children=["n"])],
                 nodes=[Node(id="n", label="x", icon="azure/mysql", parent="sub")])
     layout_diagram(d)
     sub = d.containers[0]
-    assert sub.w >= len(label) * CHAR_W      # the whole label fits inside the box
+    # the whole measured (bold, catalog-size) label fits inside the box
+    assert sub.w >= container_label_width(label, "subnet")
     child = d.nodes[0]                        # ...and the narrow child re-centered
     assert abs((child.x + child.w / 2) - (sub.x + sub.w / 2)) < 1.0
 

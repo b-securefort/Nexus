@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 
 from .schema import Container, Diagram, Node
+from .textmetrics import container_label_width, node_label_width
 
 PAD = 16          # inner padding inside a container
 GAP = 30          # gap between siblings
@@ -26,15 +27,13 @@ MARGIN = 30       # canvas margin around the whole diagram
 ICON_W = 56
 ICON_H = 56
 LABEL_H = 22      # space below an icon for its label
-CHAR_W = 6.2      # rough per-char width for label-width estimation
 LABEL_MAX = 170   # cap on label-driven footprint width
 LABEL_INSET = 12  # left+right text margin for a container's header label
 ADORN_CLEAR = 30  # glyph+gap a top-corner adornment steals from the header band
 
 
 def _label_w(label: str) -> float:
-    longest = max((len(line) for line in label.splitlines()), default=0)
-    return max(ICON_W, min(longest * CHAR_W, LABEL_MAX))
+    return max(ICON_W, min(node_label_width(label), LABEL_MAX))
 
 
 def _container_label_min_w(box: Container) -> float:
@@ -43,11 +42,10 @@ def _container_label_min_w(box: Container) -> float:
     top-corner adornment shares the header band, so reserve the glyph width."""
     if not box.label:
         return 0.0
-    longest = max((len(line) for line in box.label.splitlines()), default=0)
     inset = LABEL_INSET
     if any("top" in a.corner for a in box.adornments):
         inset += ADORN_CLEAR
-    return longest * CHAR_W + inset
+    return container_label_width(box.label, box.style) + inset
 
 
 def _default_layout(box: Container, direction: str) -> str:

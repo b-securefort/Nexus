@@ -1,0 +1,28 @@
+# ============================================================================
+# Allowlist of paths that flow from GitHub into ADO.
+#
+# One path per line. A bare directory name includes everything under it.
+# Lines starting with '#' and blank lines are ignored (the sync scripts strip
+# them before handing this file to `git filter-repo --paths-from-file`).
+# Anything NOT listed here never reaches ADO - not in the working tree, not
+# in history.
+#
+# WEEKLY-SYNC CONTRACT - read before editing:
+#   The rewrite is deterministic: same history + same config => same SHAs,
+#   which is what lets each weekly sync push only the new commits.
+#   - Adding a path for a file that is NEW on GitHub is safe (no old commit
+#     ever touched it, so no old SHA changes).
+#   - Adding or removing a path that EXISTS in GitHub history rewrites every
+#     SHA in the ADO mirror. The next sync will force-reset upstream-main to
+#     an unrelated history and the PR into the team's main will be a mess.
+#     Coordinate with the team before doing this.
+# ============================================================================
+
+backend
+frontend
+terminal-client
+docker-compose.yml
+.env.example
+.gitignore
+README.md
+PREREQUISITES.md

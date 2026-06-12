@@ -1,0 +1,23 @@
+# ============================================================================
+# Identity rewrite map, applied to the AUTHOR and COMMITTER of every commit
+# that flows into ADO. Standard git mailmap format:
+#
+#   New Name <new@email> Old Name <old@email>
+#
+# Replace ORG-CHANGE-ME below with your org display name and email.
+# The sync scripts REFUSE TO RUN while the placeholder is still present.
+#
+# Same weekly-sync contract as ado-paths.txt: editing an existing mapping
+# rewrites every SHA in the ADO mirror. Get the org identity right once,
+# before the first run, and then leave this file alone.
+# ============================================================================
+
+ORG-CHANGE-ME <ORG-CHANGE-ME@example.com> BCS <balaji@futurefortifiedtech.com>
+ORG-CHANGE-ME <ORG-CHANGE-ME@example.com> b-securefort <balaji@futurefortifiedtech.com>
+
+# Commits made in the GitHub web UI carry this committer; normalize it too.
+ORG-CHANGE-ME <ORG-CHANGE-ME@example.com> GitHub <noreply@github.com>
+
+# Optional: uncomment to also absorb bot commits into the org identity.
+# Leaving it commented keeps bot commits attributed to the bot.
+# ORG-CHANGE-ME <ORG-CHANGE-ME@example.com> qwen.ai[bot] <qwenlm-intl@service.alibaba.com>

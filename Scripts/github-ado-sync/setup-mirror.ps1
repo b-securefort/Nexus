@@ -6,8 +6,13 @@
   Creates two physically separate clones so org-private commits in ADO cannot leak to public GitHub.
     - Nexus-public has its push URL disabled and a pre-push hook that blocks pushes.
     - Nexus-ado has no GitHub URL configured at all.
-  Bootstraps the ADO repo by mirror-pushing GitHub history once, then creates an `upstream-main`
+  Bootstraps the ADO repo by pushing a REWRITTEN copy of GitHub history (only paths in
+  ado-paths.txt; identities replaced per ado-mailmap.txt), then creates an `upstream-main`
   tracking branch for future team-collaboration sync PRs.
+
+  Requires git filter-repo (pip install git-filter-repo) and a filled-in ado-mailmap.txt;
+  refuses to run while the ORG-CHANGE-ME placeholder is present. The ADO repo must be
+  empty (or already hold this rewritten history) - raw pre-rewrite history is never pushed.
 
   See README.md in this folder for full context and ADO branch-policy steps.
 
@@ -26,10 +31,16 @@ param(
   [string]$PublicDirName       = "Nexus-public",
   [string]$AdoDirName          = "Nexus-ado",
   [string]$BranchName          = "main",
-  [string]$UpstreamBranchName  = "upstream-main"
+  [string]$UpstreamBranchName  = "upstream-main",
+  [string]$PathsFile           = "$PSScriptRoot\ado-paths.txt",
+  [string]$MailmapFile         = "$PSScriptRoot\ado-mailmap.txt"
 )
 
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\rewrite-lib.ps1"
+
+# Fail early (before any cloning) if the rewrite config isn't ready.
+Assert-RewriteConfig -PathsFile $PathsFile -MailmapFile $MailmapFile
 
 if ($AdoUrl    -match    'github\.com') { throw "AdoUrl looks like GitHub. Refusing." }
 if ($GitHubUrl -notmatch 'github\.com') { throw "GitHubUrl does not look like github.com." }
@@ -68,18 +79,36 @@ exit 1
   Set-Content -Path $hookPath -Value $hookBody -Encoding ASCII
 } finally { Pop-Location }
 
-# --- Nexus-ado: bootstrap history from GitHub, then clone ---
+# --- Nexus-ado: bootstrap REWRITTEN history into ADO, then clone ---
 if (-not (Test-Path $adoPath)) {
-  Write-Host "[4/5] Bootstrapping ADO from GitHub history (mirror push)" -ForegroundColor Yellow
-  $bootstrap = Join-Path $BaseDir "Nexus-bootstrap.git"
-  if (Test-Path $bootstrap) { Remove-Item -Recurse -Force $bootstrap }
-  git clone --mirror $GitHubUrl $bootstrap
-  Push-Location $bootstrap
+  Write-Host "[4/5] Bootstrapping ADO with rewritten GitHub history (filtered paths, org identity)" -ForegroundColor Yellow
+  $scratch = Join-Path $BaseDir "Nexus-rewrite"
+  New-RewrittenMirror -SourcePath $publicPath -ScratchPath $scratch `
+                      -PathsFile $PathsFile -MailmapFile $MailmapFile
   try {
-    git remote set-url origin $AdoUrl
-    git push --mirror origin
-  } finally { Pop-Location }
-  Remove-Item -Recurse -Force $bootstrap
+    $rewrittenMain = (git -C $scratch rev-parse "refs/heads/$BranchName").Trim()
+    $remoteMainRef = git ls-remote $AdoUrl "refs/heads/$BranchName"
+    $remoteMain    = if ($remoteMainRef) { ($remoteMainRef -split "`t")[0].Trim() } else { $null }
+
+    if ($remoteMain -and $remoteMain -ne $rewrittenMain) {
+      throw ("ADO repo at $AdoUrl is not empty and its $BranchName does not match the rewritten history. " +
+             "If it holds a pre-rewrite mirror (original author names, unfiltered files), delete and " +
+             "recreate the ADO repo as empty, then re-run. If it holds rewritten history that is just " +
+             "behind GitHub, clone it manually and use sync-github-to-ado.ps1 instead.")
+    }
+    if ($remoteMain) {
+      Write-Host "       ADO already holds this rewritten history, skipping push" -ForegroundColor Green
+    } else {
+      Push-Location $scratch
+      try {
+        git remote add ado $AdoUrl
+        git push ado --all
+        git push ado --tags
+      } finally { Pop-Location }
+    }
+  } finally {
+    Remove-Item -Recurse -Force $scratch
+  }
 
   Write-Host "       Cloning ADO -> $AdoDirName" -ForegroundColor Yellow
   git clone $AdoUrl $adoPath

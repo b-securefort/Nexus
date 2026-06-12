@@ -3,16 +3,20 @@
   Recurring sync: pull GitHub into Nexus-public, transfer via bundle to Nexus-ado, push to ADO upstream-main.
 
 .DESCRIPTION
-  Safe one-way sync from public GitHub to private ADO.
-    1. Pre-flight: verifies Nexus-public has push DISABLED and Nexus-ado has no GitHub URL.
+  Safe one-way sync from public GitHub to private ADO. History is rewritten in
+  transit: only paths listed in ado-paths.txt survive, and author/committer
+  identities are replaced per ado-mailmap.txt.
+    1. Pre-flight: verifies Nexus-public has push DISABLED, Nexus-ado has no GitHub
+       URL, git filter-repo is installed, and ado-mailmap.txt has no placeholder.
     2. Pulls GitHub into Nexus-public.
-    3. Bundles refs into a single file.
+    3. Rewrites history into a scratch mirror (git filter-repo) and bundles it.
     4. Imports the bundle into Nexus-ado and force-updates `upstream-main` to match.
     5. Pushes `upstream-main` + tags to ADO.
     6. Optionally opens a PR (upstream-main -> main) via `az repos pr create`.
 
-  The bundle file is the only bridge; no remote ever links the two clones.
-  See README.md in this folder for full context.
+  The rewrite is deterministic, so weekly re-runs reproduce identical SHAs for
+  already-synced history and only new commits move. The bundle file is the only
+  bridge; no remote ever links the two clones. See README.md for full context.
 
 .EXAMPLE
   .\sync-github-to-ado.ps1                # interactive, manual PR
@@ -27,15 +31,19 @@ param(
   [string]$AdoDirName          = "Nexus-ado",
   [string]$BranchName          = "main",
   [string]$UpstreamBranchName  = "upstream-main",
+  [string]$PathsFile           = "$PSScriptRoot\ado-paths.txt",
+  [string]$MailmapFile         = "$PSScriptRoot\ado-mailmap.txt",
   [switch]$CreatePR,
   [switch]$NoConfirm
 )
 
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\rewrite-lib.ps1"
 
-$publicPath = Join-Path $BaseDir $PublicDirName
-$adoPath    = Join-Path $BaseDir $AdoDirName
-$bundlePath = Join-Path $BaseDir "nexus-sync.bundle"
+$publicPath  = Join-Path $BaseDir $PublicDirName
+$adoPath     = Join-Path $BaseDir $AdoDirName
+$scratchPath = Join-Path $BaseDir "Nexus-rewrite"
+$bundlePath  = Join-Path $BaseDir "nexus-sync.bundle"
 
 # ---------- Pre-flight ----------
 Write-Host ""
@@ -69,6 +77,9 @@ try {
   Write-Host "  [OK] ${AdoDirName}: origin=ADO only, no GitHub URLs"
 } finally { Pop-Location }
 
+Assert-RewriteConfig -PathsFile $PathsFile -MailmapFile $MailmapFile
+Write-Host "  [OK] rewrite config: git filter-repo installed, mailmap filled in"
+
 if (-not $NoConfirm) {
   Write-Host ""
   $reply = Read-Host "Proceed with sync (GitHub -> ADO $UpstreamBranchName)? [y/N]"
@@ -84,14 +95,32 @@ try {
   git checkout $BranchName
   git pull --ff-only origin $BranchName
 
-  # ---------- Step 2: bundle ----------
-  Write-Host ""
-  Write-Host "=== Step 2: create transport bundle ===" -ForegroundColor Cyan
-  if (Test-Path $bundlePath) { Remove-Item -Force $bundlePath }
-  git bundle create $bundlePath --all
-  $bundleSize = [Math]::Round((Get-Item $bundlePath).Length / 1MB, 2)
-  Write-Host "  Bundle: $bundlePath ($bundleSize MB)"
+  # Visibility: show which top-level paths are NOT flowing to ADO, so a new
+  # run-critical file missing from the allowlist gets noticed, not lost.
+  $allowed  = Get-AllowedPaths $PathsFile
+  $excluded = git ls-tree --name-only HEAD | Where-Object {
+    $entry = $_
+    -not ($allowed | Where-Object { $_ -eq $entry -or $_.StartsWith("$entry/") })
+  }
+  if ($excluded) {
+    Write-Host "  Not synced to ADO (absent from ado-paths.txt):" -ForegroundColor DarkYellow
+    Write-Host "    $($excluded -join ', ')" -ForegroundColor DarkYellow
+  }
 } finally { Pop-Location }
+
+# ---------- Step 2: rewrite history for ADO, then bundle ----------
+Write-Host ""
+Write-Host "=== Step 2: rewrite history (allowlist + org identity) and bundle ===" -ForegroundColor Cyan
+New-RewrittenMirror -SourcePath $publicPath -ScratchPath $scratchPath `
+                    -PathsFile $PathsFile -MailmapFile $MailmapFile
+if (Test-Path $bundlePath) { Remove-Item -Force $bundlePath }
+Push-Location $scratchPath
+try {
+  git bundle create $bundlePath --branches --tags
+} finally { Pop-Location }
+Remove-Item -Recurse -Force $scratchPath
+$bundleSize = [Math]::Round((Get-Item $bundlePath).Length / 1MB, 2)
+Write-Host "  Bundle: $bundlePath ($bundleSize MB)"
 
 # ---------- Step 3+4: import bundle, update upstream-main ----------
 Write-Host ""

@@ -1225,6 +1225,23 @@ def _save_message(
     return msg
 
 
+def _resolve_tuning_kwargs(skill: Skill, settings) -> dict[str, str]:
+    """Decoder tuning for every main-loop call of a turn: skill frontmatter
+    wins, the CHAT_REASONING_EFFORT / CHAT_VERBOSITY config defaults apply
+    otherwise, and empty/None omits the parameter entirely (older deployments
+    reject it with a 400). Reasoning tokens bill as output tokens, so
+    read-only skills run at low effort; verbosity is enforced here at the
+    decoder rather than only via the "Output style" prompt block."""
+    tuning: dict[str, str] = {}
+    effort = skill.reasoning_effort or settings.CHAT_REASONING_EFFORT
+    if effort:
+        tuning["reasoning_effort"] = effort
+    verbosity = skill.verbosity or settings.CHAT_VERBOSITY
+    if verbosity:
+        tuning["verbosity"] = verbosity
+    return tuning
+
+
 def _skill_from_snapshot(snapshot_json: str) -> Skill:
     """Reconstruct a Skill from a conversation's skill snapshot."""
     data = json.loads(snapshot_json)
@@ -1236,6 +1253,9 @@ def _skill_from_snapshot(snapshot_json: str) -> Skill:
         system_prompt=data.get("system_prompt", ""),
         tools=data.get("tools", []),
         source=data.get("source", "shared"),
+        # Older snapshots predate these keys — None falls back to config.
+        reasoning_effort=data.get("reasoning_effort"),
+        verbosity=data.get("verbosity"),
     )
 
 
@@ -1690,6 +1710,8 @@ async def handle_chat(
     tools = resolve_tools(skill.tools)
     tool_schemas = [t.to_openai_schema() for t in tools] if tools else None
 
+    tuning_kwargs = _resolve_tuning_kwargs(skill, settings)
+
     # User-correction capture (DESIGN.md §5 2026-06-05). When this turn is an
     # explicit teach-intent message AND there is a prior agent action to correct,
     # extract a generalizable lesson in the background. The marker pre-gate is a
@@ -1783,6 +1805,7 @@ async def handle_chat(
                 "stream": True,
                 "stream_options": {"include_usage": True},
                 "max_completion_tokens": 16384,
+                **tuning_kwargs,
             }
             if tool_schemas:
                 create_kwargs["tools"] = tool_schemas
@@ -2546,10 +2569,16 @@ async def handle_chat(
     wrap_content = ""
     try:
         def _wrap_call():
+            # Text-only summary of the turn — no tool use, no deep reasoning
+            # needed, so force low effort regardless of the skill's setting.
+            wrap_tuning = dict(tuning_kwargs)
+            if "reasoning_effort" in wrap_tuning:
+                wrap_tuning["reasoning_effort"] = "low"
             return chat_client.chat.completions.create(
                 model=settings.chat_deployment,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
                 max_completion_tokens=2048,
+                **wrap_tuning,
             )
         resp = await asyncio.to_thread(_wrap_call)
         wrap_content = (resp.choices[0].message.content or "").strip()

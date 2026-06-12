@@ -59,6 +59,139 @@ Body text
         skill = _parse_skill_file("bad", skill_file)
         assert skill is None
 
+    def test_parse_tuning_fields(self, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(
+            """---
+display_name: Tuned
+description: Skill with decoder tuning
+reasoning_effort: low
+verbosity: Medium
+tools: []
+---
+
+Body
+"""
+        )
+        skill = _parse_skill_file("tuned", skill_file)
+        assert skill is not None
+        assert skill.reasoning_effort == "low"
+        assert skill.verbosity == "medium"  # normalized to lowercase
+
+    def test_parse_tuning_fields_absent_default_none(self, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(
+            """---
+display_name: Plain
+description: No tuning keys
+tools: []
+---
+
+Body
+"""
+        )
+        skill = _parse_skill_file("plain", skill_file)
+        assert skill is not None
+        assert skill.reasoning_effort is None
+        assert skill.verbosity is None
+
+    def test_parse_tuning_fields_invalid_dropped(self, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(
+            """---
+display_name: Bad Tuning
+description: Invalid values must not fail the load
+reasoning_effort: turbo
+verbosity: 11
+tools: []
+---
+
+Body
+"""
+        )
+        skill = _parse_skill_file("bad-tuning", skill_file)
+        assert skill is not None  # skill still loads
+        assert skill.reasoning_effort is None
+        assert skill.verbosity is None
+
+    def test_parse_minimal_effort_allowed(self, tmp_path):
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(
+            """---
+display_name: Minimal
+description: minimal is a valid effort but not a valid verbosity
+reasoning_effort: minimal
+verbosity: minimal
+tools: []
+---
+
+Body
+"""
+        )
+        skill = _parse_skill_file("minimal", skill_file)
+        assert skill is not None
+        assert skill.reasoning_effort == "minimal"
+        assert skill.verbosity is None
+
+
+class TestSkillTuningResolution:
+    """Snapshot roundtrip + per-turn resolution of reasoning_effort/verbosity."""
+
+    def _skill(self, **overrides) -> Skill:
+        base = dict(
+            id="shared:t", name="t", display_name="T", description="",
+            system_prompt="p", tools=[], source="shared",
+        )
+        base.update(overrides)
+        return Skill(**base)
+
+    def test_snapshot_roundtrip_preserves_tuning(self):
+        from app.api.chat import _skill_to_snapshot
+        from app.agent.orchestrator import _skill_from_snapshot
+
+        skill = self._skill(reasoning_effort="low", verbosity="medium")
+        restored = _skill_from_snapshot(_skill_to_snapshot(skill))
+        assert restored.reasoning_effort == "low"
+        assert restored.verbosity == "medium"
+
+    def test_legacy_snapshot_without_tuning_keys(self):
+        from app.agent.orchestrator import _skill_from_snapshot
+
+        legacy = json.dumps({
+            "id": "shared:old", "name": "old", "display_name": "Old",
+            "description": "", "system_prompt": "p", "tools": [], "source": "shared",
+        })
+        restored = _skill_from_snapshot(legacy)
+        assert restored.reasoning_effort is None
+        assert restored.verbosity is None
+
+    def test_resolution_skill_overrides_config(self):
+        from types import SimpleNamespace
+        from app.agent.orchestrator import _resolve_tuning_kwargs
+
+        settings = SimpleNamespace(CHAT_REASONING_EFFORT="high", CHAT_VERBOSITY="low")
+        skill = self._skill(reasoning_effort="low", verbosity="medium")
+        assert _resolve_tuning_kwargs(skill, settings) == {
+            "reasoning_effort": "low",
+            "verbosity": "medium",
+        }
+
+    def test_resolution_falls_back_to_config(self):
+        from types import SimpleNamespace
+        from app.agent.orchestrator import _resolve_tuning_kwargs
+
+        settings = SimpleNamespace(CHAT_REASONING_EFFORT="", CHAT_VERBOSITY="low")
+        skill = self._skill()  # no per-skill tuning
+        assert _resolve_tuning_kwargs(skill, settings) == {"verbosity": "low"}
+
+    def test_resolution_empty_everywhere_omits_params(self):
+        from types import SimpleNamespace
+        from app.agent.orchestrator import _resolve_tuning_kwargs
+
+        settings = SimpleNamespace(CHAT_REASONING_EFFORT="", CHAT_VERBOSITY="")
+        skill = self._skill()
+        assert _resolve_tuning_kwargs(skill, settings) == {}
+
 
 class TestPersonalSkillsCRUD:
     """Test personal skills CRUD operations."""

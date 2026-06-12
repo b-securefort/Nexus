@@ -1,6 +1,7 @@
 ---
 display_name: Azure Engineer
 description: Hands-on assistant with full execute access — runs Azure CLI, ARM REST, executes scripts the agent wrote into output/scripts/, and writes/reads files (approval-gated)
+reasoning_effort: medium
 tools:
   - search_conversation
   - sleep

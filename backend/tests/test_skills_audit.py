@@ -27,12 +27,13 @@ from app.tools.base import TOOL_REGISTRY, init_tools
 
 @pytest.fixture(autouse=True)
 def _ensure_tools_loaded():
-    """Audit reads TOOL_REGISTRY. If a prior test cleared it (or this is
-    the first test in the run), populate it once. init_tools() is
-    idempotent — repeated calls re-import and re-set enabled flags but
-    leave existing registrations alone."""
-    if not TOOL_REGISTRY:
-        init_tools()
+    """Audit reads TOOL_REGISTRY. Populate it unconditionally: merely
+    importing some app modules registers a tool or two as a side effect
+    (e.g. app.api.chat registers ask_user), so a non-empty registry does
+    NOT mean the full set is present. init_tools() is idempotent —
+    repeated calls re-import and re-set enabled flags but leave existing
+    registrations alone."""
+    init_tools()
     yield
 
 

@@ -74,7 +74,11 @@ The agent loop. Receives a user message via SSE, composes the system prompt
 executes any tool calls (with approval gates and ask-user prompts), feeds
 results back, and loops up to 15 iterations. Tool failures trigger a
 multi-strategy retry escalation; success-after-failure prompts a learning
-record.
+record. Every main-loop call carries per-skill decoder tuning
+(`reasoning_effort` / `verbosity`, resolved once per turn by
+`_resolve_tuning_kwargs` — see §2 Skills system); the iteration-cap
+wrap-up call forces `reasoning_effort=low` since it only summarizes the
+turn.
 
 ### Conversation compaction
 **Files**: [backend/app/agent/compaction.py](../backend/app/agent/compaction.py)
@@ -148,6 +152,19 @@ A skill is a YAML-frontmatter markdown file specifying a `display_name`,
 `description`, `system_prompt`, and a `tools:` allowlist. Switching skills
 swaps the agent's persona and scoped toolset. Personal skills live in the
 `personal_skills` table; shared skills live in the synced KB repo.
+
+Optional decoder-tuning frontmatter (2026-06-12): `reasoning_effort:`
+(`minimal|low|medium|high`) and `verbosity:` (`low|medium|high`) are passed
+to the main-loop chat completion call. Unset keys fall back to the
+`CHAT_REASONING_EFFORT` (default unset = model default) and `CHAT_VERBOSITY`
+(default `low`) config settings; an empty effective value omits the parameter
+entirely (pre-gpt-5 deployments reject it with a 400). Invalid frontmatter
+values are dropped with a WARNING, not a load failure. Both fields are
+carried in the conversation's skill snapshot, so older snapshots (keys
+absent) inherit the config defaults. Current assignments: `kb-searcher`
+runs at `low` effort (read-only Q&A); both architect skills set
+`verbosity: medium` so ADR-length deliverables aren't clipped by the
+global `low`.
 
 ### Tools
 
@@ -914,6 +931,10 @@ Most platform diagrams are one of a handful of stories, and the expensive decisi
 ### 2026-06-11 — Semantic graph/view layer above the IR; ARG import
 
 Adds `app/diagram_model/`: a `SemanticGraph` (resources with provider metadata + typed relations, richer than any one picture) and `View`s (include/exclude/collapse) whose deterministic `project()` emits the IR authoring contract — so an L0 overview and its L1 drill-downs are projections of ONE model and cannot drift, with collapse folding a subtree into a counted node and re-targeting its relations. `azure_import.from_resource_graph()` builds the graph from rows an `az_resource_graph` query already returns (containment, VNet subnets, private-endpoint re-parenting + private-link relations, deduped peerings), with deterministic ids so re-imports keep existing Views valid — shifting the agent from *inventing* topology to *curating* it. The IR stays untouched as the render contract; the layer is purely additive above it. **Trade-off**: rejected enriching the IR itself with levels-of-detail (would entangle the render contract with curation policy and break the stored-IR edits flow); v1 ships as library only — the `import_azure_topology` tool wiring is a deliberate follow-up, and until then the layer has no user-visible entry point.
+
+### 2026-06-12 — Floor remote-exec az commands to ⛔ via a Tool risk-floor hook
+
+`az vm run-command invoke` (and the `aks command invoke` / `container exec` / `webapp ssh` / `ssh vm` / `acr run` family) passes an arbitrary command string to remote compute, re-opening the exact code-execution surface the 2026-05-22 `run_shell` retirement claimed to close by "structural impossibility" — so these now floor to ⛔ destructive in the risk reviewer, matched by contiguous-subcommand sequence in `bundles/azure/az_cli.py` and read by `risk_review.deterministic_floor` through a duck-typed `Tool.risk_floor()` hook resolved via the registry (no core→bundle import). Floored to ⛔ rather than hard-blocked like `role assignment delete` because the command runs on the user's own resource as the user's own ARM token — RCE they already possess — so the proportionate control is forcing a careful read, not denial. **Trade-off**: a floor-list is the leaky blocklist the 2026-05-22 entry rejected, so the enumerated family is only the deterministic floor — the separate review LLM still escalates the unenumerated tail and fails closed to ⚠ — and rejected both a hard block (removes a legitimate capability) and a static `from bundles.azure` import in core (reverses the bundle→core arrow).
 
 ---
 

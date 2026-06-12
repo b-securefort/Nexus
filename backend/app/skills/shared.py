@@ -155,6 +155,13 @@ def _parse_skill_file(name: str, filepath: Path) -> Skill | None:
     if not isinstance(tools, list):
         tools = []
 
+    reasoning_effort = _validated_tuning_value(
+        name, frontmatter, "reasoning_effort", {"minimal", "low", "medium", "high"}
+    )
+    verbosity = _validated_tuning_value(
+        name, frontmatter, "verbosity", {"low", "medium", "high"}
+    )
+
     system_prompt = parts[2].strip()
 
     return Skill(
@@ -165,4 +172,25 @@ def _parse_skill_file(name: str, filepath: Path) -> Skill | None:
         system_prompt=system_prompt,
         tools=[str(t) for t in tools],
         source="shared",
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
     )
+
+
+def _validated_tuning_value(
+    skill_name: str, frontmatter: dict, key: str, allowed: set[str]
+) -> str | None:
+    """Read an optional decoder-tuning frontmatter key (`reasoning_effort` /
+    `verbosity`). Invalid values are dropped with a warning rather than failing
+    the skill load — the config default then applies (see config.py)."""
+    raw = frontmatter.get(key)
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if value not in allowed:
+        logger.warning(
+            "Skill %s: invalid %s '%s' (allowed: %s) — ignoring, config default applies",
+            skill_name, key, raw, ", ".join(sorted(allowed)),
+        )
+        return None
+    return value

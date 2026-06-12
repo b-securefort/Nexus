@@ -185,6 +185,8 @@ Each skill is a `SKILL.md` file with YAML frontmatter:
 ---
 display_name: Chat with KB
 description: General-purpose assistant
+reasoning_effort: medium   # optional: minimal|low|medium|high (default: CHAT_REASONING_EFFORT config)
+verbosity: low             # optional: low|medium|high (default: CHAT_VERBOSITY config, "low")
 tools:
   - read_kb_file
   - search_kb

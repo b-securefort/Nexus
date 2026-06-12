@@ -1,6 +1,7 @@
 ---
 display_name: Draw.io Diagrammer
 description: Generates professional .drawio architecture diagrams that match Microsoft reference architecture style — clean, icon-rich, with numbered flow badges and correct Azure2 icons
+reasoning_effort: medium
 tools:
   - search_conversation
   - sleep

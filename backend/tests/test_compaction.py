@@ -30,6 +30,22 @@ def _scaled_down_thresholds(monkeypatch):
     monkeypatch.setattr(compaction, "COMPACT_THRESHOLD_TOKENS", 60)
     monkeypatch.setattr(compaction, "RECENT_KEEP_COUNT", 15)
     monkeypatch.setattr(compaction, "USER_PASTE_THRESHOLD", 3_000)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_tools_loaded():
+    """The truncation tests read per-tool `result_limit` from TOOL_REGISTRY
+    (e.g. az_cli); with an unpopulated registry `_truncate_tool_result` is a
+    no-op and the assertions fail when this file runs standalone or before
+    any test that calls init_tools(). Populate unconditionally — a non-empty
+    registry doesn't mean a complete one (importing app.api.chat registers
+    ask_user as a side effect). init_tools() is idempotent."""
+    from app.tools.base import init_tools
+
+    init_tools()
+    yield
+
+
 from app.agent.orchestrator import (
     _compose_system_prompt,
     _strip_retry_messages_for_tool,

@@ -308,6 +308,8 @@ def _skill_to_snapshot(skill: Skill) -> str:
         "system_prompt": skill.system_prompt,
         "tools": skill.tools,
         "source": skill.source,
+        "reasoning_effort": skill.reasoning_effort,
+        "verbosity": skill.verbosity,
     })
 
 

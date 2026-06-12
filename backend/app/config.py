@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION_HIGH: str = ""
     AZURE_OPENAI_CONTEXT_WINDOW_TOKENS_HIGH: int = 400000
 
+    # Token-efficiency defaults for the MAIN agent loop. A skill can override
+    # either via SKILL.md frontmatter (`reasoning_effort:` / `verbosity:`).
+    # Empty string = omit the parameter entirely (model default). Only set
+    # these when `chat_deployment` is a reasoning-capable gpt-5.x model — older
+    # deployments reject the parameters with a 400.
+    CHAT_REASONING_EFFORT: str = ""  # minimal | low | medium | high | "" (model default)
+    CHAT_VERBOSITY: str = "low"      # low | medium | high | "" (model default)
+
     @property
     def chat_deployment(self) -> str:
         """Deployment the main agent loop should use."""

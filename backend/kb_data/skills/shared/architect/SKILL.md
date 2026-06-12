@@ -1,6 +1,8 @@
 ---
 display_name: Azure Architect
 description: Senior cloud architect mode — ADR-style decisions, trade-off analysis, Well-Architected Framework guidance, full Azure tool access
+reasoning_effort: medium
+verbosity: medium
 tools:
   - search_conversation
   - sleep

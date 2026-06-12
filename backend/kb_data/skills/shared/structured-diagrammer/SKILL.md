@@ -1,6 +1,7 @@
 ---
 display_name: Structured Diagrammer
 description: Produces pixel-faithful Microsoft-reference-style cloud architecture diagrams from a structural Diagram IR (containment + tokens, no coordinates) — the engine computes all geometry and routing. Best for VNet/VPC topologies with nested subnets, tiers, and zones.
+reasoning_effort: medium
 tools:
   - search_conversation
   - sleep

@@ -1,6 +1,8 @@
 ---
 display_name: Azure Architect — Structured Diagrams
 description: Senior cloud architect mode (ADR decisions, trade-off analysis, Well-Architected Framework, full Azure tool access) that draws architecture as pixel-faithful Microsoft-style diagrams via the structural Diagram IR engine instead of the Python/Graphviz path.
+reasoning_effort: medium
+verbosity: medium
 tools:
   - search_conversation
   - sleep

@@ -61,6 +61,11 @@ export interface ApprovalInfo {
   // Advisory risk verdict (§5 2026-06-04). May be null on older payloads.
   risk_level?: RiskLevel | null;
   risk_description?: string | null;
+  // Deterministic, LLM-free render of the exact command (script/body_file content
+  // inlined, up to 64 KB). Absent on older payloads → card falls back to its own
+  // formatCommand. When command_truncated, the card offers a download (§5 2026-06-12).
+  rendered_command?: string | null;
+  command_truncated?: boolean;
 }
 
 export interface QuestionOption {

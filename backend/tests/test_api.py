@@ -581,3 +581,56 @@ class TestGreetingSanitizer:
         from app.api.chat import _sanitize_first_name
         assert _sanitize_first_name("") == ""
         assert _sanitize_first_name("   ") == ""
+
+
+# ── Approval command download (§5 2026-06-12) ───────────────────────────────────
+
+class TestApprovalCommandDownload:
+    """GET /api/approvals/{id}/command re-derives the full, uncapped, LLM-free
+    command from the stored args so the human can read what they're approving."""
+
+    @staticmethod
+    def _make_approval(aid: str, user_oid: str, args: dict):
+        import json
+        from app.db.engine import get_session
+        from app.db.models import PendingApproval
+        with get_session() as s:
+            s.add(PendingApproval(
+                id=aid, conversation_id=1, user_oid=user_oid,
+                tool_name="az_rest_api",
+                tool_args_json=json.dumps(args),
+                reason="testing",
+            ))
+            s.commit()
+
+    @pytest.mark.asyncio
+    async def test_returns_resolved_inline_body_as_attachment(self, client):
+        import uuid
+        aid = str(uuid.uuid4())
+        # inline body has no file on disk — only a re-render can serve it
+        self._make_approval(
+            aid, "dev-user",
+            {"method": "PUT", "url": "/subscriptions/x/foo",
+             "body": '{"publicNetworkAccess":"Enabled"}'},
+        )
+        resp = await client.get(f"/api/approvals/{aid}/command", headers=AUTH_HEADERS)
+        assert resp.status_code == 200
+        assert "publicNetworkAccess" in resp.text
+        assert "/subscriptions/x/foo" in resp.text
+        assert "attachment" in resp.headers.get("content-disposition", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_wrong_user_is_forbidden(self, client):
+        import uuid
+        aid = str(uuid.uuid4())
+        self._make_approval(
+            aid, "someone-else",
+            {"method": "GET", "url": "/x"},
+        )
+        resp = await client.get(f"/api/approvals/{aid}/command", headers=AUTH_HEADERS)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_missing_approval_is_404(self, client):
+        resp = await client.get("/api/approvals/does-not-exist/command", headers=AUTH_HEADERS)
+        assert resp.status_code == 404

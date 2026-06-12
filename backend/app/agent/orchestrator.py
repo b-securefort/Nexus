@@ -20,7 +20,7 @@ from app.agent.circuit_breaker import CircuitOpenError, check as cb_check, recor
 from app.agent.compaction import get_original_task, load_compacted_history
 from app.agent.concurrency import get_user_semaphore, run_in_tool_executor
 from app.agent.questions import create_pending_question, wait_for_answer
-from app.agent.risk_review import assess_risk
+from app.agent.risk_review import assess_risk, render_for_human
 from app.agent.streaming import (
     sse_approval_required,
     sse_done,
@@ -2236,6 +2236,11 @@ async def handle_chat(
                         # frontend keeps Allow disabled until the verdict arrives.
                         # Advisory only — never gates execution (§5 2026-06-04).
                         reason = func_args.get("reason", "No reason provided")
+                        # Deterministic, LLM-free render of the exact command for
+                        # the human card — resolved once and reused across both
+                        # emits so the human sees the full payload immediately,
+                        # independent of the review LLM (§5 2026-06-12).
+                        rendered_command, command_truncated = render_for_human(func_name, func_args)
                         approval = create_pending_approval(
                             session=session,
                             conversation_id=conversation.id,
@@ -2248,6 +2253,8 @@ async def handle_chat(
                         yield sse_approval_required(
                             approval.id, func_name, func_args, reason,
                             risk_level="pending",
+                            rendered_command=rendered_command,
+                            command_truncated=command_truncated,
                         )
 
                         # Separate review LLM (fails closed to >= caution).
@@ -2259,6 +2266,8 @@ async def handle_chat(
                             approval.id, func_name, func_args, reason,
                             risk_level=verdict.risk_level,
                             risk_description=verdict.description,
+                            rendered_command=rendered_command,
+                            command_truncated=command_truncated,
                         )
 
                         # Wait for approval

@@ -26,6 +26,8 @@ def sse_approval_required(
     reason: str,
     risk_level: str | None = None,
     risk_description: str | None = None,
+    rendered_command: str | None = None,
+    command_truncated: bool = False,
 ) -> str:
     """Approval card payload.
 
@@ -33,6 +35,12 @@ def sse_approval_required(
     `risk_level="pending"` so the card renders immediately, then again with the
     resolved advisory verdict. Same `approval_id` both times — the frontend
     updates the existing card in place rather than stacking a second one.
+
+    `rendered_command` is the deterministic, LLM-free resolved command shown to
+    the human (the script/`body_file` content inlined, up to 64 KB); when the
+    full command exceeds that, `command_truncated` is True and the card offers a
+    download via GET /api/approvals/{id}/command (§5 2026-06-12). Both ride on the
+    same value across the two emits — they don't depend on the risk verdict.
     """
     return sse_event(
         "approval_required",
@@ -43,6 +51,8 @@ def sse_approval_required(
             "reason": reason,
             "risk_level": risk_level,
             "risk_description": risk_description,
+            "rendered_command": rendered_command,
+            "command_truncated": command_truncated,
         },
     )
 

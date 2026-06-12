@@ -4,6 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { ApprovalCard } from '../components/ApprovalCard';
 import type { ApprovalInfo } from '../types';
 
+vi.mock('../api/client', () => ({ apiFetch: vi.fn() }));
+import { apiFetch } from '../api/client';
+
 const mockApproval: ApprovalInfo = {
   approval_id: 'ap-test-1',
   tool_name: 'execute_script',
@@ -96,5 +99,44 @@ describe('ApprovalCard', () => {
     expect(handler).not.toHaveBeenCalled();
     // back to the normal Approve/Deny state
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument();
+  });
+
+  // ── Backend-rendered command + download (§5 2026-06-12) ──────────────────────
+
+  it('shows the backend rendered_command (real payload, not a reconstructed pointer)', () => {
+    const withRender: ApprovalInfo = {
+      ...mockApproval,
+      rendered_command: 'execute script list-resources.ps1:\nGet-ChildItem -Recurse',
+    };
+    render(<ApprovalCard approval={withRender} onAction={() => {}} />);
+    expect(screen.getByText(/Get-ChildItem -Recurse/)).toBeInTheDocument();
+  });
+
+  it('falls back to local formatCommand when rendered_command is absent', () => {
+    // mockApproval carries no rendered_command → path-based reconstruction
+    render(<ApprovalCard approval={mockApproval} onAction={() => {}} />);
+    expect(screen.getByText(/list-resources\.ps1/)).toBeInTheDocument();
+  });
+
+  it('shows a download button only when the command is truncated', () => {
+    const { rerender } = render(<ApprovalCard approval={mockApproval} onAction={() => {}} />);
+    expect(screen.queryByText(/download full command/i)).not.toBeInTheDocument();
+    rerender(
+      <ApprovalCard approval={{ ...mockApproval, command_truncated: true }} onAction={() => {}} />,
+    );
+    expect(screen.getByText(/download full command/i)).toBeInTheDocument();
+  });
+
+  it('download button fetches the command endpoint through apiFetch (auth)', async () => {
+    const user = userEvent.setup();
+    (apiFetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['full command']),
+    });
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+    render(<ApprovalCard approval={{ ...mockApproval, command_truncated: true }} onAction={() => {}} />);
+    await user.click(screen.getByText(/download full command/i));
+    expect(apiFetch).toHaveBeenCalledWith('/api/approvals/ap-test-1/command');
   });
 });

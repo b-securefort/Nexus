@@ -32,28 +32,69 @@ _BLOCKED_PREFIXES: tuple[tuple[str, ...], ...] = (
     ("role", "definition", "delete"),
 )
 
+# Subcommand sequences that hand an arbitrary command string to remote compute —
+# the same arbitrary-code-execution surface the 2026-05-22 run_shell retirement
+# removed from the Nexus host, here reaching the user's own Azure resources.
+# These are NOT blocked: the target is the user's own resource and the command
+# runs as their own ARM identity, so it grants no privilege they lack. Instead
+# they floor to ⛔ destructive in the risk reviewer (via `risk_floor` below) so
+# the approval card forces a careful read rather than a routine ⚠ click.
+# See DESIGN.md §5 2026-06-12. The list is deliberately a finite floor: the
+# review LLM still escalates any remote-exec verb we did not enumerate here.
+_REMOTE_EXEC_PREFIXES: tuple[tuple[str, ...], ...] = (
+    ("vm", "run-command", "invoke"),
+    ("vm", "run-command", "create"),
+    ("vm", "run-command", "update"),
+    ("vmss", "run-command", "invoke"),
+    ("vmss", "run-command", "create"),
+    ("vmss", "run-command", "update"),
+    ("aks", "command", "invoke"),
+    ("ssh", "vm"),
+    ("ssh", "arc"),
+    ("container", "exec"),
+    ("containerapp", "exec"),
+    ("webapp", "ssh"),
+    ("webapp", "create-remote-connection"),
+    ("acr", "run"),
+    ("acr", "build"),
+    ("acr", "task", "run"),
+)
 
-def _is_blocked(az_args: list[str]) -> str | None:
-    """Return an error string if the args contain a blocked subcommand sequence
-    as a contiguous run of tokens.
+
+def _matches_prefix_sequence(
+    az_args: list[str], prefixes: tuple[tuple[str, ...], ...]
+) -> tuple[str, ...] | None:
+    """Return the first prefix that appears as a contiguous run of tokens
+    anywhere in ``az_args``, or None.
 
     Scans the *entire* args list rather than only the head, so global flags
     (``--debug``, ``--verbose``, ``--only-show-errors``, ``--output json``,
-    ``--subscription <id>``, etc.) cannot be used as a prefix to slip a
-    destructive subcommand past the blocklist.
+    ``--subscription <id>``, etc.) cannot be used as a prefix to slip a matched
+    subcommand past the scan. Matching the action verb as part of the sequence
+    (e.g. ``run-command invoke``) means read forms like ``run-command list`` do
+    not match.
     """
     lowered = [str(a).lower() for a in az_args]
-    for prefix in _BLOCKED_PREFIXES:
+    for prefix in prefixes:
         n = len(prefix)
         for i in range(len(lowered) - n + 1):
             if tuple(lowered[i:i + n]) == prefix:
-                joined = " ".join(prefix)
-                return (
-                    f"Error: 'az {joined}' is blocked for safety. "
-                    "These operations can wipe credentials or remove access. "
-                    "If this is genuinely required, the operator must run it manually."
-                )
+                return prefix
     return None
+
+
+def _is_blocked(az_args: list[str]) -> str | None:
+    """Return an error string if the args contain a blocked subcommand sequence
+    as a contiguous run of tokens, else None."""
+    prefix = _matches_prefix_sequence(az_args, _BLOCKED_PREFIXES)
+    if prefix is None:
+        return None
+    joined = " ".join(prefix)
+    return (
+        f"Error: 'az {joined}' is blocked for safety. "
+        "These operations can wipe credentials or remove access. "
+        "If this is genuinely required, the operator must run it manually."
+    )
 
 
 class AzCliTool(Tool):
@@ -74,6 +115,24 @@ class AzCliTool(Tool):
             "`az_rest_api` (with `body_file` for large payloads). Tip: "
             "`az <command> --help` shows the correct syntax."
         )
+
+    def risk_floor(self, func_args: dict) -> str | None:
+        """Tool-owned risk floor read by `risk_review.deterministic_floor`.
+
+        Duck-typed via the registry so core needs no `bundles` import — the
+        Azure bundle owns the facts about which az commands are dangerous
+        (DESIGN.md §5 2026-06-12). Returns the literal tier "destructive" when
+        the args invoke a remote-exec command that hands an arbitrary command
+        string to compute (run-command / exec / ssh / acr run); None otherwise,
+        leaving the generic token-based floor to classify. The returned string
+        must stay equal to `risk_review.DESTRUCTIVE` — a test guards the drift.
+        """
+        az_args = func_args.get("args") or []
+        if not isinstance(az_args, list):
+            return None
+        if _matches_prefix_sequence(az_args, _REMOTE_EXEC_PREFIXES) is not None:
+            return "destructive"
+        return None
 
     description = (
         "Execute an Azure CLI command. Requires explicit user approval. "

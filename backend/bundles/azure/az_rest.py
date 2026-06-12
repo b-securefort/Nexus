@@ -27,6 +27,20 @@ _DANGEROUS_PATH_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
 # are almost always model error rather than a legitimate ARM request shape.
 _MAX_BODY_BYTES = 1_048_576
 
+# How much of a request body the risk reviewer is shown. Real ARM payloads are
+# a few KB, so this displays essentially every legitimate mutation in full; a
+# body larger than this is the rare, already-suspicious case and is both marked
+# truncated to the reviewer AND floored to ⛔ by `risk_floor` so the unseen
+# remainder can never pass silently at ⚠ (DESIGN.md §5 2026-06-12).
+_REVIEW_BODY_WINDOW = 16384
+
+
+def _truncation_marker(shown_bytes: int, total_bytes: int) -> str:
+    return (
+        f"\n[payload truncated: showing first {shown_bytes} of "
+        f"{total_bytes} bytes — remainder NOT reviewed]"
+    )
+
 
 class AzRestApiTool(AzureToolBase):
     name = "az_rest_api"
@@ -126,6 +140,74 @@ class AzRestApiTool(AzureToolBase):
                 "Split the request or use a deployment template instead."
             )
         return target, None
+
+    # ── Risk-review hooks (DESIGN.md §5 2026-06-12) ──────────────────────────
+    # Duck-typed, read by risk_review via the registry — core never imports this
+    # bundle. render_for_review lets the reviewer judge the actual payload (not a
+    # filename); risk_floor escalates an oversized, unreviewable mutation body.
+
+    def render_for_review(
+        self, func_args: dict, max_bytes: int | None = _REVIEW_BODY_WINDOW
+    ) -> tuple[str, bool]:
+        """Resolve the command for display, inlining the real request body
+        (reading `body_file` from the output/ sandbox) so a mutation is judged on
+        its payload, not a pointer. Content past `max_bytes` is cut with a
+        truncation marker; `max_bytes=None` means uncapped (download path).
+        Returns (rendered, truncated). The reviewer uses the 16 KB default; the
+        human card passes 64 KB; the download endpoint passes None."""
+        method = str(func_args.get("method", "GET")).upper()
+        url = func_args.get("url", "")
+        body_text, truncated = self._body_for_review(func_args, max_bytes)
+        return f"{method} {url}\n{body_text}".strip(), truncated
+
+    def risk_floor(self, func_args: dict) -> str | None:
+        """Floor a mutation whose body exceeds the reviewer's window to the
+        literal tier "destructive" — an unreviewable payload must force a careful
+        read rather than passing at ⚠. Size-checked (inline `len` / file `stat`),
+        never re-read. Returns None for reads and in-window bodies, leaving the
+        method-based floor in risk_review to classify. Stays equal to
+        `risk_review.DESTRUCTIVE` — a test guards the drift."""
+        method = str(func_args.get("method", "GET")).upper()
+        if method in _SAFE_METHODS:
+            return None
+        inline = func_args.get("body")
+        if isinstance(inline, str) and len(inline) > _REVIEW_BODY_WINDOW:
+            return "destructive"
+        body_file = func_args.get("body_file")
+        if isinstance(body_file, str) and body_file:
+            target, err = self._resolve_body_file(body_file)
+            if err is None and target is not None:
+                try:
+                    if target.stat().st_size > _REVIEW_BODY_WINDOW:
+                        return "destructive"
+                except OSError:
+                    return None
+        return None
+
+    def _body_for_review(self, func_args: dict, max_bytes: int | None) -> tuple[str, bool]:
+        """Return (display_text, truncated) for the request body, reading at most
+        `max_bytes` (None = uncapped). `truncated` is True when the full body
+        exceeds `max_bytes`. Inline `body` wins over `body_file` (mirrors the
+        mutual-exclusion check in execute)."""
+        inline = func_args.get("body")
+        if isinstance(inline, str) and inline:
+            if max_bytes is None or len(inline) <= max_bytes:
+                return inline, False
+            return inline[:max_bytes] + _truncation_marker(max_bytes, len(inline)), True
+        body_file = func_args.get("body_file")
+        if isinstance(body_file, str) and body_file:
+            target, err = self._resolve_body_file(body_file)
+            if err or target is None:
+                return f"(body_file unreadable: {err})", False
+            try:
+                data = target.read_bytes()
+            except OSError as e:
+                return f"(body_file read error: {e})", False
+            if max_bytes is None or len(data) <= max_bytes:
+                return data.decode("utf-8", errors="replace"), False
+            text = data[:max_bytes].decode("utf-8", errors="replace")
+            return text + _truncation_marker(max_bytes, len(data)), True
+        return "", False
 
     def execute(self, args: dict, user: User) -> str:
         login_err = require_az_login()

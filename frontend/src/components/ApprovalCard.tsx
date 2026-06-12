@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { ShieldAlert, Check, X, Clock, ShieldCheck, AlertTriangle, OctagonAlert, Loader2, Info } from "lucide-react";
+import { ShieldAlert, Check, X, Clock, ShieldCheck, AlertTriangle, OctagonAlert, Loader2, Info, Download } from "lucide-react";
 import type { ApprovalInfo, RiskLevel } from "../types";
+import { apiFetch } from "../api/client";
 
 interface Props {
   approval: ApprovalInfo;
@@ -70,6 +71,33 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
     onAction("approve");
   };
 
+  // Prefer the backend's deterministic resolved command (shows the real
+  // script/body payload, not a pointer); fall back to local reconstruction only
+  // on older payloads that don't carry it (§5 2026-06-12).
+  const commandText =
+    approval.rendered_command ?? formatCommand(approval.tool_name, approval.args);
+
+  // Download the full (uncapped) command when it was truncated for the card.
+  // Fetched via apiFetch so the bearer token rides along (a bare <a href> 401s
+  // in MSAL mode), then handed to the browser as a blob download.
+  const handleDownloadCommand = async () => {
+    try {
+      const resp = await apiFetch(`/api/approvals/${approval.approval_id}/command`);
+      if (!resp.ok) return;
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `approval-${approval.approval_id}-command.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* best-effort download; nothing to surface on failure */
+    }
+  };
+
   return (
     <div className="bg-warning/5 border border-warning/25 rounded-xl p-5 space-y-3.5">
       {/* Header */}
@@ -104,12 +132,21 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         </div>
       )}
 
-      {/* Command */}
+      {/* Command — deterministic backend render (full payload, not a pointer) */}
       <div>
         <span className="text-base-400 text-sm">Command:</span>
         <pre className="mt-1.5 bg-base-900/80 rounded-lg p-3 text-sm text-base-200 font-mono overflow-x-auto overflow-y-auto max-h-40 whitespace-pre-wrap">
-          {formatCommand(approval.tool_name, approval.args)}
+          {commandText}
         </pre>
+        {approval.command_truncated && (
+          <button
+            onClick={handleDownloadCommand}
+            className="mt-2 flex items-center gap-1.5 text-sm text-warning hover:text-warning/80 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Command truncated — download full command to review
+          </button>
+        )}
       </div>
 
       {/* Double-confirm prompt for destructive commands */}

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 
@@ -459,6 +459,46 @@ async def handle_approval(approval_id: str, body: ApprovalRequest, user: User = 
             raise HTTPException(status_code=500, detail="Failed to resolve approval")
 
     return {"status": "ok"}
+
+
+@router.get("/approvals/{approval_id}/command")
+async def download_approval_command(approval_id: str, user: User = Depends(current_user)):
+    """Download the full, deterministic resolved command for an approval.
+
+    Re-derived (uncapped, NO LLM) from the stored `tool_args_json` — the
+    human-facing complement to the 64 KB-capped `rendered_command` on the
+    `approval_required` SSE event, used by the card's Download button when the
+    command is truncated (§5 2026-06-12). User-scoped exactly like
+    `handle_approval`; no extra storage and works for inline bodies that have no
+    file on disk.
+    """
+    from app.agent.risk_review import render_command_full
+
+    with get_session() as session:
+        approval = session.exec(
+            select(PendingApproval).where(PendingApproval.id == approval_id)
+        ).first()
+        if not approval:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        if approval.user_oid != user.oid:
+            raise HTTPException(status_code=403, detail="Access denied")
+        try:
+            func_args = json.loads(approval.tool_args_json)
+        except (ValueError, TypeError):
+            func_args = {}
+        if not isinstance(func_args, dict):
+            func_args = {}
+        text = render_command_full(approval.tool_name, func_args)
+
+    return Response(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="approval-{approval_id}-command.txt"'
+            )
+        },
+    )
 
 
 @router.post("/questions/{question_id}/answer")

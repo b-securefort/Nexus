@@ -55,6 +55,20 @@ _SCRIPT_EXTENSIONS = {".ps1": "powershell", ".sh": "bash"}
 # Max script output size before truncation
 _MAX_OUTPUT_SIZE = 8192
 
+# How much of a script body the risk reviewer is shown. Mirrors the az_rest body
+# window (DESIGN.md §5 2026-06-12): real diagnostic scripts fit easily, and a
+# body larger than this is both marked truncated to the reviewer AND floored to
+# ⛔ by risk_floor — closing the append-after-truncation gap where a destructive
+# tail past the old 4000-char cut was never seen by the review LLM.
+_REVIEW_BODY_WINDOW = 16384
+
+
+def _review_truncation_marker(shown_bytes: int, total_bytes: int) -> str:
+    return (
+        f"\n[script truncated: showing first {shown_bytes} of "
+        f"{total_bytes} bytes — remainder NOT reviewed]"
+    )
+
 # Same regex as generate_file/read_file — defence-in-depth on raw path input.
 _DANGEROUS_PATH_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
 
@@ -161,6 +175,51 @@ class ExecuteScriptTool(Tool):
             "Don't retry the same script. Inspect it with `read_file`, fix it "
             "with `generate_file` (overwrite=true), and re-run."
         )
+
+    # ── Risk-review hooks (DESIGN.md §5 2026-06-12) ──────────────────────────
+    # Duck-typed, read by risk_review via the registry. render_for_review shows
+    # the reviewer the resolved script body (replacing the old body[:4000] slice);
+    # risk_floor escalates an over-window, unreviewable-length script to ⛔.
+
+    def render_for_review(
+        self, func_args: dict, max_bytes: int | None = _REVIEW_BODY_WINDOW
+    ) -> tuple[str, bool]:
+        """Render the script for display, inlining its resolved body up to
+        `max_bytes` (None = uncapped) with a truncation marker when longer.
+        Returns (rendered, truncated). The reviewer uses the 16 KB default; the
+        human card passes 64 KB; the download endpoint passes None."""
+        raw_path = func_args.get("path") or func_args.get("script") or func_args.get("file") or ""
+        label = raw_path or "?"
+        script_path, err = _resolve_script(raw_path)
+        if err or script_path is None:
+            return f"execute script {label} (body could not be read)", False
+        try:
+            data = script_path.read_bytes()
+        except OSError as e:
+            return f"execute script {label} (body read error: {e})", False
+        if max_bytes is None or len(data) <= max_bytes:
+            return f"execute script {label}:\n{data.decode('utf-8', errors='replace')}", False
+        text = data[:max_bytes].decode("utf-8", errors="replace")
+        text += _review_truncation_marker(max_bytes, len(data))
+        return f"execute script {label}:\n{text}", True
+
+    def risk_floor(self, func_args: dict) -> str | None:
+        """Floor an over-window (unreviewable-length) script to the literal tier
+        "destructive" — the reviewer LLM only sees the first `_REVIEW_BODY_WINDOW`
+        bytes, so a longer body must escalate rather than pass on a partial view.
+        Size is checked by `stat`, never re-read. Returns None otherwise, leaving
+        the full-body shell-pattern floor (`_shell_floor` in risk_review) to
+        classify. Stays equal to `risk_review.DESTRUCTIVE` — a test guards it."""
+        raw_path = func_args.get("path") or func_args.get("script") or func_args.get("file") or ""
+        script_path, err = _resolve_script(raw_path)
+        if err or script_path is None:
+            return None
+        try:
+            if script_path.stat().st_size > _REVIEW_BODY_WINDOW:
+                return "destructive"
+        except OSError:
+            return None
+        return None
 
     description = (
         "Execute a script that already exists under output/scripts/. "

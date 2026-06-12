@@ -38,10 +38,10 @@ const CATEGORY_OPTIONS: { value: LearningCategory | ""; label: string }[] = [
 ];
 
 const STATUS_BADGE: Record<LearningStatus, string> = {
-  active: "bg-emerald-900/40 text-emerald-300 border border-emerald-900/60",
-  provisional: "bg-amber-900/40 text-amber-300 border border-amber-900/60",
+  active: "bg-success/10 text-success border border-success/30",
+  provisional: "bg-warning/10 text-warning border border-warning/30",
   archived: "bg-base-800 text-base-500 border border-base-800",
-  rejected: "bg-rose-900/40 text-rose-300 border border-rose-900/60",
+  rejected: "bg-danger/10 text-danger border border-danger/30",
 };
 
 const PAGE_SIZE = 50;
@@ -193,7 +193,7 @@ export function LearningsAdminPage() {
         </div>
 
         {error && (
-          <div className="bg-rose-900/30 border border-rose-900/60 text-rose-200 px-4 py-3 rounded-lg mb-4 text-sm">
+          <div className="bg-danger/10 border border-danger/30 text-danger px-4 py-3 rounded-lg mb-4 text-sm">
             {error}
           </div>
         )}
@@ -235,9 +235,9 @@ export function LearningsAdminPage() {
                   <td className="px-4 py-2 text-base-300 text-xs font-mono">{it.tool_name}</td>
                   <td className="px-4 py-2 text-base-200 max-w-md truncate">{it.summary}</td>
                   <td className="px-4 py-2 text-right text-xs text-base-500 font-mono">
-                    <span className="text-emerald-400">{it.validation_count}</span>
+                    <span className="text-success">{it.validation_count}</span>
                     {" / "}
-                    <span className="text-rose-400">{it.failure_count}</span>
+                    <span className="text-danger">{it.failure_count}</span>
                   </td>
                   <td className="px-4 py-2 text-xs text-base-500">
                     {new Date(it.recorded_at).toLocaleDateString()}
@@ -317,11 +317,11 @@ export function LearningsAdminPage() {
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
                       <div className="text-[10px] text-base-500 uppercase tracking-wider mb-1">Validations</div>
-                      <div className="text-emerald-400 font-mono">{selected.validation_count}</div>
+                      <div className="text-success font-mono">{selected.validation_count}</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-base-500 uppercase tracking-wider mb-1">Failures</div>
-                      <div className="text-rose-400 font-mono">{selected.failure_count}</div>
+                      <div className="text-danger font-mono">{selected.failure_count}</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-base-500 uppercase tracking-wider mb-1">Recorded</div>
@@ -363,7 +363,7 @@ export function LearningsAdminPage() {
                         {selected.status !== "active" && (
                           <button
                             onClick={() => handlePatchStatus(selected.id, "active")}
-                            className="px-3 py-2 text-xs bg-emerald-900/40 text-emerald-200 border border-emerald-900/60 rounded-md hover:bg-emerald-900/60"
+                            className="px-3 py-2 text-xs bg-success/10 text-success border border-success/30 rounded-md hover:bg-success/20"
                           >
                             Promote to active
                           </button>
@@ -371,7 +371,7 @@ export function LearningsAdminPage() {
                         {selected.status !== "provisional" && (
                           <button
                             onClick={() => handlePatchStatus(selected.id, "provisional")}
-                            className="px-3 py-2 text-xs bg-amber-900/40 text-amber-200 border border-amber-900/60 rounded-md hover:bg-amber-900/60"
+                            className="px-3 py-2 text-xs bg-warning/10 text-warning border border-warning/30 rounded-md hover:bg-warning/20"
                           >
                             Demote to provisional
                           </button>
@@ -393,7 +393,7 @@ export function LearningsAdminPage() {
                     )}
                     <button
                       onClick={() => handleDelete(selected.id)}
-                      className="ml-auto px-3 py-2 text-xs bg-rose-900/40 text-rose-200 border border-rose-900/60 rounded-md hover:bg-rose-900/60 flex items-center gap-1.5"
+                      className="ml-auto px-3 py-2 text-xs bg-danger/10 text-danger border border-danger/30 rounded-md hover:bg-danger/20 flex items-center gap-1.5"
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Delete
                     </button>

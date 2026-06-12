@@ -158,11 +158,11 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
     <div
       className={`bg-base-800/40 border rounded-xl overflow-hidden transition-[border-color] duration-200 ${
         hasError
-          ? "border-red-800/50"
+          ? "border-danger/40"
           : isDone
           ? "border-base-700/50"
           : isExecuting
-          ? "border-yellow-700/30"
+          ? "border-warning/30"
           : "border-accent/30"
       }`}
     >
@@ -172,12 +172,12 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
       >
         {isDone ? (
           hasError ? (
-            <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+            <XCircle className="w-3.5 h-3.5 text-danger flex-shrink-0" />
           ) : (
-            <CheckCircle className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+            <CheckCircle className="w-3.5 h-3.5 text-success flex-shrink-0" />
           )
         ) : isExecuting ? (
-          <Play className="w-3.5 h-3.5 text-yellow-400 animate-pulse flex-shrink-0" />
+          <Play className="w-3.5 h-3.5 text-warning animate-pulse flex-shrink-0" />
         ) : (
           <Loader2 className="w-3.5 h-3.5 text-accent-light animate-spin flex-shrink-0" />
         )}
@@ -192,10 +192,10 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
 
         <span className="ml-auto flex items-center gap-1">
           {isDone && hasError && (
-            <span className="text-[10px] text-red-400 font-medium">FAILED</span>
+            <span className="text-[10px] text-danger font-medium">FAILED</span>
           )}
           {isExecuting && (
-            <span className="text-[10px] text-yellow-400 font-medium">EXECUTING</span>
+            <span className="text-[10px] text-warning font-medium">EXECUTING</span>
           )}
           {showExpanded ? (
             <ChevronDown className="w-3.5 h-3.5" />
@@ -280,25 +280,25 @@ export function ToolCallCard({ tc, onToggle }: ToolCallCardProps) {
 
           {isExecuting && tc.streamingOutput && (
             <div>
-              <div className="text-yellow-400 mb-1 flex items-center gap-1">
+              <div className="text-warning mb-1 flex items-center gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Live output:
               </div>
               <pre className="bg-base-900/80 rounded-lg p-2.5 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap text-base-300 font-mono text-[11px]">
                 {tc.streamingOutput}
-                <span className="inline-block w-1.5 h-3 bg-yellow-400 rounded-sm animate-soft-pulse ml-0.5" />
+                <span className="inline-block w-1.5 h-3 bg-warning rounded-sm animate-soft-pulse ml-0.5" />
               </pre>
             </div>
           )}
 
           {tc.result && (
             <div>
-              <div className={`mb-1 ${hasError ? "text-red-400" : "text-base-500"}`}>
+              <div className={`mb-1 ${hasError ? "text-danger" : "text-base-500"}`}>
                 {hasError ? "Error:" : "Output:"}
               </div>
               <pre
                 className={`bg-base-900/80 rounded-lg p-2.5 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap ${
-                  hasError ? "text-red-300" : "text-base-300"
+                  hasError ? "text-danger" : "text-base-300"
                 }`}
               >
                 {tc.result}

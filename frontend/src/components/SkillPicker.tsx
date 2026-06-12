@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, Sparkles, User as UserIcon } from "lucide-react";
+import { ChevronDown, GraduationCap, User as UserIcon } from "lucide-react";
 import { fetchSkills } from "../api/skills";
 import { useAppStore } from "../store/useAppStore";
 import type { Skill } from "../types";
@@ -39,7 +39,11 @@ export function SkillPicker() {
         disabled={locked}
         className="flex items-center gap-2 bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-2 text-sm text-base-200 hover:bg-base-800 disabled:opacity-50 disabled:cursor-not-allowed transition-[background-color,transform] duration-150 ease-[var(--ease-out)] min-w-[200px]"
       >
-        <Sparkles className="w-4 h-4 text-accent-light" />
+        {selected?.source === "personal" ? (
+          <UserIcon className="w-4 h-4 text-success flex-shrink-0" />
+        ) : (
+          <GraduationCap className="w-4 h-4 text-accent-light flex-shrink-0" />
+        )}
         <span className="flex-1 text-left truncate">
           {selected ? selected.display_name : "Select a skill..."}
         </span>
@@ -67,9 +71,9 @@ export function SkillPicker() {
                     }}
                     className="w-full text-left px-3 py-2.5 text-sm text-base-200 hover:bg-base-700/60 flex items-center gap-2.5 transition-colors duration-100"
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-accent-light" />
-                    <div>
-                      <div>{skill.display_name}</div>
+                    <GraduationCap className="w-3.5 h-3.5 text-accent-light flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="truncate">{skill.display_name}</div>
                       {skill.description && (
                         <div className="text-xs text-base-500 truncate">
                           {skill.description}
@@ -95,9 +99,9 @@ export function SkillPicker() {
                     }}
                     className="w-full text-left px-3 py-2.5 text-sm text-base-200 hover:bg-base-700/60 flex items-center gap-2.5 transition-colors duration-100"
                   >
-                    <UserIcon className="w-3.5 h-3.5 text-green-400" />
-                    <div>
-                      <div>{skill.display_name}</div>
+                    <UserIcon className="w-3.5 h-3.5 text-success flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="truncate">{skill.display_name}</div>
                       {skill.description && (
                         <div className="text-xs text-base-500 truncate">
                           {skill.description}

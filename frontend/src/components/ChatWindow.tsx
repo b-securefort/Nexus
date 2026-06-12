@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Square, Bot, Paperclip, X as XIcon } from "lucide-react";
+import { ArrowUp, Square, Paperclip, X as XIcon } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import {
   sendChatMessage,
   resolveApproval,
-  fetchGreeting,
   submitQuestionAnswers,
   refreshArmToken,
 } from "../api/chat";
@@ -25,20 +24,15 @@ import type {
 } from "../types";
 import { msalInstance } from "../auth/AuthProvider";
 import { ARM_SCOPE } from "../auth/msalConfig";
+import { APP_ICON } from "../branding";
+import { pickGreeting } from "../greetings";
 
-/** Simple time-of-day fallback while the AI greeting loads. */
-function getFallbackGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 5) return "Hey there, night owl";
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
-}
-
-// Fire greeting fetch at module load time (parallel with page render)
-const greetingPromise = fetchGreeting()
-  .then((g) => g || getFallbackGreeting())
-  .catch(() => getFallbackGreeting());
+const SUGGESTIONS = [
+  "Search the knowledge base",
+  "Check Azure resource status",
+  "Help me debug an issue",
+  "Explain our architecture",
+];
 
 export function ChatWindow() {
   const [input, setInput] = useState("");
@@ -488,62 +482,169 @@ export function ChatWindow() {
     !pendingQuestion &&
     (input.trim().length > 0 || pendingAttachments.length > 0);
 
-  const [greeting, setGreeting] = useState("");
+  // Static time-of-day greeting, randomized once per session (see greetings.ts).
+  const [greeting] = useState(() => pickGreeting());
 
-  // Read from the module-level promise (already in-flight)
-  useEffect(() => {
-    let cancelled = false;
-    greetingPromise.then((g) => {
-      if (!cancelled) setGreeting(g);
-    });
-    return () => { cancelled = true; };
-  }, []);
+  const composerDisabled = isStreaming || !!pendingApproval || !!pendingQuestion;
+
+  // Single unified composer surface (textarea + toolbar), reused by both the
+  // centered empty-state hero and the bottom-pinned conversation layout.
+  const composer = (
+    <div className="rounded-2xl border border-base-700/60 bg-base-800/60 focus-within:border-accent/40 focus-within:ring-1 focus-within:ring-accent/25 transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)]">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        multiple
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      {/* Attachment previews */}
+      {pendingAttachments.length > 0 && (
+        <div className="flex gap-2 px-3.5 pt-3 flex-wrap">
+          {pendingAttachments.map((file, i) => (
+            <div key={`${file.name}-${i}`} className="relative group">
+              <img
+                src={URL.createObjectURL(file)}
+                alt={file.name}
+                className="w-16 h-16 object-cover rounded-lg border border-base-700/60"
+              />
+              <button
+                onClick={() => removePendingAttachment(i)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-base-900 border border-base-700 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <XIcon className="w-3 h-3 text-base-400" />
+              </button>
+              <div className="absolute bottom-0 left-0 right-0 bg-black/60 rounded-b-lg px-1 py-0.5">
+                <span className="text-[10px] text-white/80 truncate block">{file.name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        ref={textareaRef}
+        value={input}
+        onChange={(e) => {
+          setInput(e.target.value);
+          autoResize();
+        }}
+        onKeyDown={handleKeyDown}
+        placeholder={
+          pendingApproval
+            ? "Waiting for approval decision..."
+            : pendingQuestion
+            ? "Answer the questions above to continue..."
+            : pendingAttachments.length > 0
+            ? "Add a message about the image(s)..."
+            : "Message Nexus..."
+        }
+        disabled={composerDisabled}
+        rows={1}
+        autoFocus
+        className="w-full bg-transparent px-4 pt-3.5 pb-1 text-[15px] text-base-100 placeholder-base-500 resize-none focus:outline-none disabled:opacity-40 leading-relaxed"
+        style={{ minHeight: "48px", maxHeight: "200px" }}
+      />
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 px-2.5 pb-2.5">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={composerDisabled}
+          className="p-2 text-base-400 hover:text-base-200 hover:bg-base-700/50 rounded-lg disabled:opacity-40 transition-colors duration-150 ease-[var(--ease-out)]"
+          title="Attach image (or paste from clipboard)"
+        >
+          <Paperclip className="w-[18px] h-[18px]" />
+        </button>
+        <div className="ml-auto flex items-center gap-3">
+          <ContextUsageIndicator usage={contextUsage} />
+          {isStreaming ? (
+            <button
+              onClick={handleStop}
+              aria-label="Stop generation"
+              title="Stop"
+              className="w-9 h-9 rounded-full bg-danger-strong hover:brightness-110 text-white flex items-center justify-center transition-[filter,transform] duration-150 ease-[var(--ease-out)]"
+            >
+              <Square className="w-4 h-4 fill-current" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!canSend}
+              aria-label="Send message"
+              className="w-9 h-9 rounded-full bg-accent hover:bg-accent-hover disabled:bg-base-700 disabled:text-base-500 disabled:cursor-not-allowed text-white flex items-center justify-center transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
+            >
+              <ArrowUp className="w-5 h-5" strokeWidth={2.5} />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Fresh conversation → centered hero: greeting, composer and suggestions
+  // read as one unit instead of a floating island over a bottom-pinned input.
+  const showHero =
+    messages.length === 0 &&
+    !isStreaming &&
+    streamingSegments.length === 0 &&
+    !pendingApproval &&
+    !pendingQuestion;
+
+  if (showHero) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className="min-h-full flex items-center justify-center px-6 py-8">
+          <div className="w-full max-w-2xl">
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-5">
+                <img src={APP_ICON} alt="NEXUS" className="w-11 h-11 object-contain" />
+              </div>
+              <h2 className="text-3xl font-semibold text-base-100 tracking-tight mb-2 animate-fade-in-up">{greeting}</h2>
+              <p className="text-sm text-base-500 leading-relaxed">
+                {selectedSkillId
+                  ? "Ask me anything — I can search your knowledge base, run Azure commands, and more."
+                  : "Select a skill from the dropdown above to get started."}
+              </p>
+            </div>
+
+            {error && (
+              <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-danger text-sm mb-4 animate-fade-in-up">
+                {error}
+              </div>
+            )}
+
+            {composer}
+
+            {selectedSkillId && (
+              <div className="grid grid-cols-2 gap-2.5 mt-4 stagger-children">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    onClick={() => {
+                      setInput(suggestion);
+                      textareaRef.current?.focus();
+                    }}
+                    className="text-left px-3.5 py-2.5 bg-base-800/40 hover:bg-base-800 border border-base-700/40 rounded-xl text-sm text-base-400 hover:text-base-200 transition-colors duration-150 ease-[var(--ease-out)]"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className={`max-w-4xl mx-auto space-y-5 ${messages.length === 0 && !isStreaming ? "h-full" : ""}`}>
-        {messages.length === 0 && !isStreaming && (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center max-w-lg animate-fade-in-up">
-              <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
-                <img src="/nexus_icon.png" alt="NEXUS" className="w-10 h-10 object-contain" />
-              </div>
-              {greeting ? (
-                <h2 className="text-2xl font-semibold text-base-100 tracking-tight mb-2 animate-fade-in-up">{greeting}</h2>
-              ) : (
-                <div className="h-8 w-56 mx-auto mb-2 rounded-lg bg-base-800/60 animate-soft-pulse" />
-              )}
-              <p className="text-sm text-base-500 leading-relaxed mb-8">
-                {selectedSkillId
-                  ? "Ask me anything — I can search your knowledge base, run Azure commands, and more."
-                  : "Select a skill from the dropdown above to get started."}
-              </p>
-              {selectedSkillId && (
-                <div className="grid grid-cols-2 gap-2.5 max-w-md mx-auto stagger-children">
-                  {[
-                    "Search the knowledge base",
-                    "Check Azure resource status",
-                    "Help me debug an issue",
-                    "Explain our architecture",
-                  ].map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      onClick={() => {
-                        setInput(suggestion);
-                      }}
-                      className="text-left px-3.5 py-2.5 bg-base-800/50 hover:bg-base-800 border border-base-700/40 rounded-xl text-sm text-base-300 hover:text-base-100 transition-colors duration-150 ease-[var(--ease-out)]"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
+        <div className="max-w-3xl mx-auto space-y-6">
         {messages.map((msg) => (
           <MessageBubble
             key={msg.id}
@@ -556,34 +657,27 @@ export function ChatWindow() {
 
         {/* Streaming assistant content + live tool calls (interleaved) */}
         {isStreaming && streamingSegments.length > 0 && (
-          <div className="flex justify-start gap-3 animate-fade-in-up">
-            <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
-              <Bot className="w-3.5 h-3.5 text-accent-light" />
-            </div>
-            <div className="max-w-[80%] space-y-2">
-              {streamingSegments.map((seg, i) => {
-                if (seg.type === "text") {
-                  const isLast = i === streamingSegments.length - 1;
-                  return (
-                    <div key={`seg-text-${i}`} className="bg-base-800/80 rounded-xl px-4 py-3 text-base-100 whitespace-pre-wrap text-sm leading-relaxed">
-                      {seg.content}
-                      {isLast && (
-                        <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
-                      )}
-                    </div>
-                  );
-                }
-                const tc = toolCalls.find((t) => t.call_id === seg.call_id);
-                if (!tc) return null;
-                return <ToolCallCard key={tc.call_id} tc={tc} onToggle={toggleToolCallExpanded} />;
-              })}
-              {/* Show cursor when streaming hasn't produced text yet after last tool call */}
-              {streamingSegments[streamingSegments.length - 1]?.type === "tool_call" && isStreaming && (
-                <div className="bg-base-800/80 rounded-xl px-4 py-3">
-                  <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse" />
-                </div>
-              )}
-            </div>
+          <div className="space-y-2.5 animate-fade-in-up">
+            {streamingSegments.map((seg, i) => {
+              if (seg.type === "text") {
+                const isLast = i === streamingSegments.length - 1;
+                return (
+                  <div key={`seg-text-${i}`} className="text-[15px] leading-[1.7] text-base-200 whitespace-pre-wrap">
+                    {seg.content}
+                    {isLast && (
+                      <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
+                    )}
+                  </div>
+                );
+              }
+              const tc = toolCalls.find((t) => t.call_id === seg.call_id);
+              if (!tc) return null;
+              return <ToolCallCard key={tc.call_id} tc={tc} onToggle={toggleToolCallExpanded} />;
+            })}
+            {/* Show cursor when streaming hasn't produced text yet after last tool call */}
+            {streamingSegments[streamingSegments.length - 1]?.type === "tool_call" && isStreaming && (
+              <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse" />
+            )}
           </div>
         )}
 
@@ -596,30 +690,25 @@ export function ChatWindow() {
 
         {/* Pending or just-resolved question */}
         {pendingQuestion && (
-          <div className="animate-fade-in-up flex justify-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
-              <Bot className="w-3.5 h-3.5 text-accent-light" />
-            </div>
-            <div className="max-w-[80%] flex-1">
-              <QuestionCard
-                question={pendingQuestion}
-                resolved={resolvedAnswers[pendingQuestion.question_id]}
-                onSubmit={handleAnswerQuestion}
-              />
-            </div>
+          <div className="animate-fade-in-up">
+            <QuestionCard
+              question={pendingQuestion}
+              resolved={resolvedAnswers[pendingQuestion.question_id]}
+              onSubmit={handleAnswerQuestion}
+            />
           </div>
         )}
 
         {/* Error */}
         {error && (
-          <div className="bg-red-950/40 border border-red-800/40 rounded-xl px-4 py-3 text-red-300 text-sm animate-fade-in-up">
+          <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-danger text-sm animate-fade-in-up">
             {error}
           </div>
         )}
 
         {/* Iteration budget used up — offer one-click resumption */}
         {iterationLimitHit && !isStreaming && (
-          <div className="bg-amber-950/40 border border-amber-800/40 rounded-xl px-4 py-3 text-amber-200 text-sm animate-fade-in-up flex items-center justify-between gap-3">
+          <div className="bg-warning/10 border border-warning/30 rounded-xl px-4 py-3 text-warning text-sm animate-fade-in-up flex items-center justify-between gap-3">
             <span>
               I used my full tool budget for this turn. Progress is saved —
               want me to keep going?
@@ -637,94 +726,10 @@ export function ChatWindow() {
         </div>
       </div>
 
-      {/* Input area */}
-      <div className="border-t border-base-800/80 px-6 py-4">
-        <div className="max-w-4xl mx-auto">
-          {/* Attachment previews */}
-          {pendingAttachments.length > 0 && (
-            <div className="flex gap-2 mb-2 flex-wrap">
-              {pendingAttachments.map((file, i) => (
-                <div key={`${file.name}-${i}`} className="relative group">
-                  <img
-                    src={URL.createObjectURL(file)}
-                    alt={file.name}
-                    className="w-16 h-16 object-cover rounded-lg border border-base-700/60"
-                  />
-                  <button
-                    onClick={() => removePendingAttachment(i)}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-base-900 border border-base-700 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <XIcon className="w-3 h-3 text-base-400" />
-                  </button>
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 rounded-b-lg px-1 py-0.5">
-                    <span className="text-[10px] text-base-300 truncate block">{file.name}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="flex gap-3">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              multiple
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
-              className="self-end bg-base-800/60 border border-base-700/60 rounded-xl px-3 py-3 text-base-400 hover:text-base-200 hover:bg-base-800 disabled:opacity-40 transition-colors duration-150 ease-[var(--ease-out)]"
-              title="Attach image (or paste from clipboard)"
-            >
-              <Paperclip className="w-5 h-5" />
-            </button>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                autoResize();
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                pendingApproval
-                  ? "Waiting for approval decision..."
-                  : pendingQuestion
-                  ? "Answer the questions above to continue..."
-                  : pendingAttachments.length > 0
-                  ? "Add a message about the image(s)..."
-                  : "Type your message..."
-              }
-              disabled={isStreaming || !!pendingApproval || !!pendingQuestion}
-              rows={1}
-              className="flex-1 bg-base-800/60 border border-base-700/60 rounded-xl px-4 py-3 text-base-100 placeholder-base-600 resize-none focus:outline-none focus:ring-1 focus:ring-accent/50 focus:border-accent/40 disabled:opacity-40 transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)] text-sm leading-relaxed"
-              style={{ minHeight: "44px", maxHeight: "200px" }}
-            />
-            {isStreaming ? (
-              <button
-                onClick={handleStop}
-                aria-label="Stop generation"
-                title="Stop"
-                className="self-end bg-red-700 hover:bg-red-600 text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
-              >
-                <Square className="w-5 h-5 fill-current" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={!canSend}
-                aria-label="Send message"
-                className="self-end bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition-[background-color,transform] duration-150 ease-[var(--ease-out)]"
-              >
-                <Send className="w-5 h-5" />
-              </button>
-            )}
-          </div>
-          <div className="mt-2 flex justify-start">
-            <ContextUsageIndicator usage={contextUsage} />
-          </div>
+      {/* Composer pinned at bottom */}
+      <div className="px-6 pb-5 pt-2">
+        <div className="max-w-3xl mx-auto">
+          {composer}
         </div>
       </div>
     </div>

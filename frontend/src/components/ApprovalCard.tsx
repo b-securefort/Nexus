@@ -29,9 +29,9 @@ function formatCommand(toolName: string, args: Record<string, unknown>): string 
 // while the review LLM runs — Allow stays disabled until it resolves.
 const RISK_UI: Record<RiskLevel, { label: string; Icon: typeof Check; className: string }> = {
   pending: { label: "Assessing risk…", Icon: Loader2, className: "text-base-400" },
-  safe: { label: "Safe to run", Icon: ShieldCheck, className: "text-green-400" },
-  caution: { label: "Review before running", Icon: AlertTriangle, className: "text-yellow-400" },
-  destructive: { label: "Destructive — review carefully", Icon: OctagonAlert, className: "text-red-400" },
+  safe: { label: "Safe to run", Icon: ShieldCheck, className: "text-success" },
+  caution: { label: "Review before running", Icon: AlertTriangle, className: "text-warning" },
+  destructive: { label: "Destructive — review carefully", Icon: OctagonAlert, className: "text-danger" },
 };
 
 export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props) {
@@ -71,12 +71,12 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
   };
 
   return (
-    <div className="bg-amber-950/30 border border-amber-700/30 rounded-xl p-5 space-y-3.5">
+    <div className="bg-warning/5 border border-warning/25 rounded-xl p-5 space-y-3.5">
       {/* Header */}
-      <div className="flex items-center gap-2.5 text-amber-400">
+      <div className="flex items-center gap-2.5 text-warning">
         <ShieldAlert className="w-5 h-5" />
         <span className="font-semibold text-sm tracking-tight">Approval Required</span>
-        <span className="ml-auto flex items-center gap-1 text-sm text-amber-500">
+        <span className="ml-auto flex items-center gap-1 text-sm text-warning/80">
           <Clock className="w-3.5 h-3.5" />
           {minutes}:{seconds.toString().padStart(2, "0")}
         </span>
@@ -93,7 +93,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
       {/* Tool name */}
       <div>
         <span className="text-base-400 text-sm">Tool: </span>
-        <span className="font-mono text-sm text-amber-300">{approval.tool_name}</span>
+        <span className="font-mono text-sm text-warning">{approval.tool_name}</span>
       </div>
 
       {/* What this command does (review LLM description) */}
@@ -114,7 +114,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
 
       {/* Double-confirm prompt for destructive commands */}
       {confirming && (
-        <div className="flex items-center gap-2 text-red-300 text-sm">
+        <div className="flex items-center gap-2 text-danger text-sm">
           <OctagonAlert className="w-4 h-4 shrink-0" />
           <span>This is flagged as destructive. Run it anyway?</span>
         </div>
@@ -126,8 +126,8 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
           onClick={handleApproveClick}
           disabled={allowDisabled}
           className={`flex items-center gap-2 ${
-            confirming ? "bg-red-700 hover:bg-red-600" : "bg-green-700 hover:bg-green-600"
-          } disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium`}
+            confirming ? "bg-danger-strong" : "bg-success-strong"
+          } hover:brightness-110 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform,filter] duration-150 ease-[var(--ease-out)] text-sm font-medium`}
         >
           <Check className="w-4 h-4" />
           {confirming ? "Yes, run it" : "Approve"}
@@ -135,7 +135,7 @@ export function ApprovalCard({ approval, onAction, timeoutSeconds = 600 }: Props
         <button
           onClick={() => (confirming ? setConfirming(false) : onAction("deny"))}
           disabled={remaining === 0}
-          className="flex items-center gap-2 bg-red-800 hover:bg-red-700 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
+          className="flex items-center gap-2 bg-danger-strong hover:brightness-110 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform,filter] duration-150 ease-[var(--ease-out)] text-sm font-medium"
         >
           <X className="w-4 h-4" />
           {confirming ? "Cancel" : "Deny"}

@@ -1,5 +1,5 @@
 import { useState, memo, useMemo, useEffect } from "react";
-import { User, Bot, X, Download } from "lucide-react";
+import { X, Download } from "lucide-react";
 import { useAuthedBlobUrl } from "../hooks/useAuthedBlobUrl";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -193,36 +193,29 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
     return Date.now() - t < 5000;
   })();
 
+  // User turns: compact accent bubble on the right. Assistant turns: no bubble,
+  // no avatar — prose flows at full column width so replies read as a document,
+  // with tool/question cards interleaved.
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} gap-3 ${isFresh ? "animate-fade-in-up" : ""}`}>
-      {!isUser && (
-        <div className="w-7 h-7 rounded-lg bg-accent/15 flex items-center justify-center flex-shrink-0 mt-1">
-          <Bot className="w-3.5 h-3.5 text-accent-light" />
-        </div>
-      )}
-
-      <div className={`max-w-[80%] space-y-2`}>
+    <div className={`${isUser ? "flex justify-end" : ""} ${isFresh ? "animate-fade-in-up" : ""}`}>
+      <div className={isUser ? "max-w-[75%] flex flex-col items-end gap-2" : "space-y-2.5"}>
         {message.content && (
-          <div
-            className={`rounded-xl px-4 py-3 ${
-              isUser
-                ? "bg-accent text-white text-sm leading-relaxed whitespace-pre-wrap"
-                : "bg-base-800/80 text-base-100 prose prose-invert prose-sm prose-chat max-w-none"
-            }`}
-          >
-            {isUser ? (
-              message.content
-            ) : (
+          isUser ? (
+            <div className="bg-accent text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+              {message.content}
+            </div>
+          ) : (
+            <div className="prose prose-chat max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
-            )}
-          </div>
+            </div>
+          )
         )}
 
         {/* Attachments (images) */}
         {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className={`flex flex-wrap gap-2 ${isUser ? "justify-end" : ""}`}>
             {attachments.map((att, i) => (
               <AttachmentImage
                 key={att.filename || i}
@@ -247,12 +240,6 @@ export const MessageBubble = memo(function MessageBubble({ message, toolCalls, t
           />
         ))}
       </div>
-
-      {isUser && (
-        <div className="w-7 h-7 rounded-lg bg-base-700/60 flex items-center justify-center flex-shrink-0 mt-1">
-          <User className="w-3.5 h-3.5 text-base-400" />
-        </div>
-      )}
 
       {/* Lightbox */}
       {lightboxUrl && (
@@ -317,7 +304,7 @@ function AttachmentImage({
         <img
           src={src}
           alt={name}
-          className="max-w-[240px] max-h-[180px] object-contain bg-base-900"
+          className="max-w-[360px] max-h-[260px] object-contain bg-base-900"
           loading="lazy"
         />
       </button>

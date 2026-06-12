@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { HelpCircle, Send } from "lucide-react";
+import { HelpCircle, Check } from "lucide-react";
 import type {
   QuestionAnswerEntry,
   QuestionInfo,
@@ -103,8 +103,8 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
     resolved?.[qIdx];
 
   return (
-    <div className="bg-blue-950/25 border border-blue-700/30 rounded-xl p-5 space-y-4">
-      <div className="flex items-center gap-2.5 text-blue-300">
+    <div className="bg-accent/5 border border-accent/25 rounded-xl p-5 space-y-4">
+      <div className="flex items-center gap-2.5 text-accent-light">
         <HelpCircle className="w-5 h-5" />
         <span className="font-semibold text-sm tracking-tight">
           {isLocked ? "Your answers" : "A few questions before I begin"}
@@ -122,7 +122,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
 
         return (
           <div key={qIdx} className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wider text-blue-300">
+            <div className="text-xs font-semibold uppercase tracking-wider text-accent-light">
               {q.header}
             </div>
             <div className="flex items-baseline gap-2 flex-wrap">
@@ -130,7 +130,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
                 {q.question}
               </span>
               {q.multi_select && (
-                <span className="text-[10px] text-blue-400 italic ml-1">
+                <span className="text-[10px] text-base-500 italic ml-1">
                   (pick one or more)
                 </span>
               )}
@@ -148,7 +148,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
                     onClick={() => toggleOption(qIdx, opt.label, q.multi_select)}
                     className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg border transition-colors duration-100 ${
                       checked
-                        ? "bg-blue-800/30 border-blue-500/50"
+                        ? "bg-accent/15 border-accent/50"
                         : "bg-base-900/40 border-base-700/40 hover:border-base-600/60"
                     } ${isLocked ? "cursor-default opacity-90" : "cursor-pointer"}`}
                   >
@@ -173,7 +173,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
               <div
                 className={`w-full rounded-lg border transition-colors duration-100 ${
                   otherSelected
-                    ? "bg-blue-800/30 border-blue-500/50"
+                    ? "bg-accent/15 border-accent/50"
                     : "bg-base-900/40 border-base-700/40 hover:border-base-600/60"
                 }`}
               >
@@ -200,7 +200,7 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
                       onChange={(e) => setOtherText(qIdx, e.target.value)}
                       placeholder="Type your answer..."
                       rows={2}
-                      className="w-full bg-base-900 border border-base-700 rounded-md px-2 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-blue-500/60 focus:outline-none resize-y"
+                      className="w-full bg-base-900 border border-base-700 rounded-md px-2 py-1.5 text-sm text-base-100 placeholder:text-base-500 focus:border-accent/60 focus:outline-none resize-y"
                     />
                   </div>
                 )}
@@ -216,9 +216,9 @@ export function QuestionCard({ question, resolved, onSubmit }: Props) {
             type="button"
             onClick={handleSubmit}
             disabled={!ready || submitting}
-            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-base-800 disabled:text-base-600 text-white px-4 py-2 rounded-xl transition-[background-color,transform] duration-150 ease-[var(--ease-out)] text-sm font-medium"
           >
-            <Send className="w-4 h-4" />
+            <Check className="w-4 h-4" />
             {submitting ? "Sending…" : "Submit answers"}
           </button>
         </div>
@@ -231,10 +231,10 @@ function RadioIcon({ checked, className }: { checked: boolean; className?: strin
   return (
     <span
       className={`inline-flex items-center justify-center w-4 h-4 rounded-full border ${
-        checked ? "border-blue-400 bg-blue-500/20" : "border-base-500"
+        checked ? "border-accent-light bg-accent/20" : "border-base-500"
       } ${className ?? ""}`}
     >
-      {checked && <span className="w-2 h-2 rounded-full bg-blue-400" />}
+      {checked && <span className="w-2 h-2 rounded-full bg-accent-light" />}
     </span>
   );
 }
@@ -243,12 +243,12 @@ function CheckboxIcon({ checked, className }: { checked: boolean; className?: st
   return (
     <span
       className={`inline-flex items-center justify-center w-4 h-4 rounded border ${
-        checked ? "border-blue-400 bg-blue-500/20" : "border-base-500"
+        checked ? "border-accent-light bg-accent/20" : "border-base-500"
       } ${className ?? ""}`}
     >
       {checked && (
         <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M2 6 L5 9 L10 3" className="text-blue-300" />
+          <path d="M2 6 L5 9 L10 3" className="text-accent-light" />
         </svg>
       )}
     </span>

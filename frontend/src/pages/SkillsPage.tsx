@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Plus, Pencil, Trash2, Sparkles, User } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, GraduationCap, User } from "lucide-react";
 import { fetchSkills, deletePersonalSkill } from "../api/skills";
 import { SkillEditor } from "../components/SkillEditor";
 import type { Skill } from "../types";
@@ -87,31 +87,35 @@ export function SkillsPage() {
             {sharedSkills.map((skill) => (
               <div
                 key={skill.id}
-                className="bg-base-900 border border-base-800/80 rounded-xl px-4 py-3.5 flex items-center gap-3"
+                className="bg-base-900 border border-base-800/80 rounded-xl px-4 py-3.5"
               >
-                <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center flex-shrink-0">
-                  <Sparkles className="w-3.5 h-3.5 text-accent-light" />
-                </div>
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-base-200">
-                    {skill.display_name}
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center flex-shrink-0">
+                    <GraduationCap className="w-3.5 h-3.5 text-accent-light" />
                   </div>
-                  {skill.description && (
-                    <div className="text-xs text-base-500 mt-0.5 leading-relaxed">
-                      {skill.description}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-base-200">
+                      {skill.display_name}
                     </div>
-                  )}
+                    {skill.description && (
+                      <div className="text-xs text-base-500 mt-0.5 leading-relaxed">
+                        {skill.description}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex gap-1 flex-wrap justify-end">
-                  {skill.tools.map((t) => (
-                    <span
-                      key={t}
-                      className="text-[11px] bg-base-800 text-base-500 px-1.5 py-0.5 rounded-md font-mono"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
+                {skill.tools.length > 0 && (
+                  <div className="flex gap-1 flex-wrap mt-2.5 pl-10">
+                    {skill.tools.map((t) => (
+                      <span
+                        key={t}
+                        className="text-[11px] bg-base-800 text-base-500 px-1.5 py-0.5 rounded-md font-mono"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -131,43 +135,47 @@ export function SkillsPage() {
             {personalSkills.map((skill) => (
               <div
                 key={skill.id}
-                className="bg-base-900 border border-base-800/80 rounded-xl px-4 py-3.5 flex items-center gap-3"
+                className="bg-base-900 border border-base-800/80 rounded-xl px-4 py-3.5"
               >
-                <div className="w-7 h-7 rounded-lg bg-green-600/10 flex items-center justify-center flex-shrink-0">
-                  <User className="w-3.5 h-3.5 text-green-400" />
-                </div>
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-base-200">
-                    {skill.display_name}
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
+                    <User className="w-3.5 h-3.5 text-success" />
                   </div>
-                  {skill.description && (
-                    <div className="text-xs text-base-500 mt-0.5 leading-relaxed">
-                      {skill.description}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-base-200">
+                      {skill.display_name}
                     </div>
-                  )}
+                    {skill.description && (
+                      <div className="text-xs text-base-500 mt-0.5 leading-relaxed">
+                        {skill.description}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setEditing(skill.name)}
+                    className="text-base-500 hover:text-base-300 p-1.5 transition-colors flex-shrink-0"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(skill.name)}
+                    className="text-base-500 hover:text-danger p-1.5 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                <div className="flex gap-1 mr-2 flex-wrap justify-end">
-                  {skill.tools.map((t) => (
-                    <span
-                      key={t}
-                      className="text-[11px] bg-base-800 text-base-500 px-1.5 py-0.5 rounded-md font-mono"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-                <button
-                  onClick={() => setEditing(skill.name)}
-                  className="text-base-500 hover:text-base-300 p-1.5 transition-colors"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleDelete(skill.name)}
-                  className="text-base-500 hover:text-red-400 p-1.5 transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {skill.tools.length > 0 && (
+                  <div className="flex gap-1 flex-wrap mt-2.5 pl-10">
+                    {skill.tools.map((t) => (
+                      <span
+                        key={t}
+                        className="text-[11px] bg-base-800 text-base-500 px-1.5 py-0.5 rounded-md font-mono"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

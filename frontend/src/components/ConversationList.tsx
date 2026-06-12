@@ -204,7 +204,7 @@ export function ConversationList() {
                       className="flex-1 bg-base-900 border border-accent/40 rounded px-2 py-0.5 text-sm text-base-200 focus:outline-none min-w-0"
                       maxLength={100}
                     />
-                    <button onClick={handleConfirmRename} className="p-0.5 text-green-400 hover:text-green-300">
+                    <button onClick={handleConfirmRename} className="p-0.5 text-success hover:brightness-110">
                       <Check className="w-3.5 h-3.5" />
                     </button>
                     <button onClick={handleCancelRename} className="p-0.5 text-base-500 hover:text-base-300">
@@ -255,7 +255,7 @@ export function ConversationList() {
                         e.stopPropagation();
                         handleDelete(conv.id);
                       }}
-                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-red-400 hover:bg-base-700/60 transition-colors"
+                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-danger hover:bg-base-700/60 transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       Delete

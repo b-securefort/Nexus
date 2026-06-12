@@ -85,7 +85,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
       </h2>
 
       {error && (
-        <div className="flex items-center gap-2 bg-red-950/40 border border-red-800/40 rounded-xl px-3 py-2.5 text-sm text-red-300">
+        <div className="flex items-center gap-2 bg-danger/10 border border-danger/30 rounded-xl px-3 py-2.5 text-sm text-danger">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}
         </div>
@@ -164,7 +164,7 @@ export function SkillEditor({ skillName, onSaved, onCancel }: Props) {
                   {tool.name}
                 </span>
                 {tool.requires_approval && (
-                  <span className="ml-2 text-xs bg-amber-900/50 text-amber-400 px-1.5 py-0.5 rounded">
+                  <span className="ml-2 text-xs bg-warning/15 text-warning px-1.5 py-0.5 rounded">
                     requires approval
                   </span>
                 )}

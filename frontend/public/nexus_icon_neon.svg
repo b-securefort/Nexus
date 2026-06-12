@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <filter id="glowP" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="b2"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b1"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowG" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="b2"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b1"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Cloud outline with lightning-bolt speech tail -->
+  <g filter="url(#glowP)" fill="none" stroke="#b06bff" stroke-width="15"
+     stroke-linejoin="round" stroke-linecap="round">
+    <path d="
+      M 302 356
+      L 284 420
+      L 304 416
+      L 280 484
+      L 348 406
+      L 328 410
+      L 352 356
+      L 380 356
+      C 428 356 458 320 458 282
+      C 458 248 436 222 404 214
+      C 408 160 364 120 312 128
+      C 292 96 248 84 212 100
+      C 176 116 158 148 162 182
+      C 116 186 84 220 84 264
+      C 84 312 122 356 172 356
+      Z"/>
+  </g>
+
+  <!-- Face -->
+  <g filter="url(#glowG)" fill="none" stroke="#2eea62" stroke-width="14"
+     stroke-linejoin="round" stroke-linecap="round">
+    <!-- left eye: > -->
+    <path d="M 172 218 L 216 242 L 172 266"/>
+    <!-- right eye: asterisk -->
+    <path d="M 330 206 L 330 278"/>
+    <path d="M 299 224 L 361 260"/>
+    <path d="M 361 224 L 299 260"/>
+    <!-- smile -->
+    <path d="M 212 304 Q 252 336 294 300"/>
+  </g>
+</svg>

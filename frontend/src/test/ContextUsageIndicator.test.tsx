@@ -28,9 +28,9 @@ const legacyUsage: ContextUsage = {
 };
 
 describe('ContextUsageIndicator', () => {
-  it('renders placeholder when usage is null', () => {
-    render(<ContextUsageIndicator usage={null} />);
-    expect(screen.getByText(/Context usage will appear/i)).toBeInTheDocument();
+  it('renders nothing when usage is null', () => {
+    const { container } = render(<ContextUsageIndicator usage={null} />);
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders compact summary using prompt tokens only (occupancy, not spend)', () => {

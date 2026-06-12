@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/nexus_icon.png" />
+    <!-- Favicon follows VITE_APP_ICON (see frontend/.env); Vite substitutes
+         %VITE_APP_ICON% at build/serve time, same as the CSP URL below. -->
+    <link rel="icon" href="%VITE_APP_ICON%" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
       Content-Security-Policy: defence-in-depth in case the backend's input

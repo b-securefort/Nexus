@@ -11,13 +11,13 @@ vi.mock('../api/chat', async () => ({
   sendChatMessage: (...args: unknown[]) => mockSendChatMessage(...args),
   resumeChat: vi.fn(),
   resolveApproval: (...args: unknown[]) => mockResolveApproval(...args),
-  fetchGreeting: vi.fn().mockResolvedValue('Hey there, happy Thursday'),
 }));
 vi.mock('../api/conversations', () => ({
   fetchConversation: (id: number) => mockFetchConversation(id),
 }));
 
 import { ChatWindow } from '../components/ChatWindow';
+import { GREETINGS } from '../greetings';
 
 describe('ChatWindow', () => {
   beforeEach(() => {
@@ -37,10 +37,10 @@ describe('ChatWindow', () => {
 
   it('renders empty state with skill selected', async () => {
     render(<ChatWindow />);
-    // Starts with fallback, then AI greeting loads
-    await waitFor(() => {
-      expect(screen.getByText('Hey there, happy Thursday')).toBeInTheDocument();
-    });
+    // Greeting is one of the static time-of-day pool entries (greetings.ts)
+    const allGreetings = Object.values(GREETINGS).flat() as string[];
+    const heading = screen.getByRole('heading', { level: 2 });
+    expect(allGreetings).toContain(heading.textContent);
     expect(screen.getByText(/Ask me anything/)).toBeInTheDocument();
   });
 
@@ -54,7 +54,7 @@ describe('ChatWindow', () => {
 
   it('renders the message input field', () => {
     render(<ChatWindow />);
-    expect(screen.getByPlaceholderText(/Type your message/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Message Nexus/)).toBeInTheDocument();
   });
 
   it('renders existing messages', () => {
@@ -111,7 +111,7 @@ describe('ChatWindow', () => {
     const user = userEvent.setup();
     render(<ChatWindow />);
 
-    const input = screen.getByPlaceholderText(/Type your message/);
+    const input = screen.getByPlaceholderText(/Message Nexus/);
     await user.type(input, 'Hello');
     await user.keyboard('{Enter}');
 
@@ -125,7 +125,7 @@ describe('ChatWindow', () => {
     const user = userEvent.setup();
     render(<ChatWindow />);
 
-    const input = screen.getByPlaceholderText(/Type your message/);
+    const input = screen.getByPlaceholderText(/Message Nexus/);
     await user.type(input, 'Hello world');
     await user.keyboard('{Enter}');
 
@@ -148,18 +148,21 @@ describe('ChatWindow', () => {
     const user = userEvent.setup();
     render(<ChatWindow />);
 
-    const input = screen.getByPlaceholderText(/Type your message/) as HTMLTextAreaElement;
+    const input = screen.getByPlaceholderText(/Message Nexus/) as HTMLTextAreaElement;
     await user.type(input, 'Hello');
     await user.keyboard('{Enter}');
 
-    expect(input.value).toBe('');
+    // Sending swaps the empty-state hero layout for the conversation layout,
+    // remounting the composer — re-query instead of using the stale node.
+    const inputAfter = screen.getByPlaceholderText(/Message Nexus/) as HTMLTextAreaElement;
+    expect(inputAfter.value).toBe('');
   });
 
   it('does not send on shift+enter (allows newline)', async () => {
     const user = userEvent.setup();
     render(<ChatWindow />);
 
-    const input = screen.getByPlaceholderText(/Type your message/);
+    const input = screen.getByPlaceholderText(/Message Nexus/);
     await user.type(input, 'Line 1');
     await user.keyboard('{Shift>}{Enter}{/Shift}');
 

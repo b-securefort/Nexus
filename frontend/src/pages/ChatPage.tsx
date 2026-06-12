@@ -1,6 +1,8 @@
 import { ChatWindow } from "../components/ChatWindow";
 import { ConversationList } from "../components/ConversationList";
 import { SkillPicker } from "../components/SkillPicker";
+import { ThemeSwitcher } from "../components/ThemeSwitcher";
+import { APP_ICON } from "../branding";
 import { Settings, PanelLeftClose, PanelLeft, Plus, Brain } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
@@ -40,7 +42,7 @@ export function ChatPage() {
           <div className="px-3 py-3 border-b border-base-800/80">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <img src="/nexus_icon.png" alt="NEXUS" className="w-7 h-7 rounded-lg object-contain" />
+                <img src={APP_ICON} alt="NEXUS" className="w-7 h-7 rounded-lg object-contain" />
                 <span className="font-semibold text-base-100 tracking-tight">NEXUS</span>
               </div>
               <div className="flex items-center gap-1">
@@ -111,6 +113,9 @@ export function ChatPage() {
             </div>
           )}
           <SkillPicker />
+          <div className="ml-auto">
+            <ThemeSwitcher />
+          </div>
         </div>
 
         {/* Chat */}

@@ -81,12 +81,10 @@ export function ContextUsageIndicator({ usage }: Props) {
     };
   }, [open]);
 
+  // Nothing to show until the first reply reports usage — render nothing
+  // rather than placeholder noise under the composer.
   if (!usage) {
-    return (
-      <div className="text-xs text-base-600">
-        Context usage will appear after the first reply
-      </div>
-    );
+    return null;
   }
 
   // Occupancy = how full the window is right now = the prompt we sent. The
@@ -102,7 +100,7 @@ export function ContextUsageIndicator({ usage }: Props) {
 
   // Color the ring based on usage band
   const ringColor =
-    pct >= 90 ? "stroke-red-400" : pct >= 70 ? "stroke-amber-400" : "stroke-accent-light";
+    pct >= 90 ? "stroke-danger" : pct >= 70 ? "stroke-warning" : "stroke-accent-light";
 
   const categories = buildCategories(usage);
   const totalForBar = usage.context_window || 1;
@@ -147,7 +145,7 @@ export function ContextUsageIndicator({ usage }: Props) {
         <div
           role="dialog"
           aria-label="Context usage breakdown"
-          className="absolute bottom-full mb-2 left-0 z-40 w-[420px] max-w-[calc(100vw-3rem)] bg-base-900 border border-base-700/70 rounded-xl shadow-xl p-4 animate-fade-in-up"
+          className="absolute bottom-full mb-2 right-0 z-40 w-[420px] max-w-[calc(100vw-3rem)] bg-base-900 border border-base-700/70 rounded-xl shadow-xl p-4 animate-fade-in-up"
         >
           <div className="flex items-start justify-between mb-3">
             <div>

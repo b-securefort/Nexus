@@ -61,7 +61,7 @@ describe('MessageBubble', () => {
     expect(wrapper.className).toContain('justify-end');
   });
 
-  it('renders assistant messages left-aligned', () => {
+  it('renders assistant messages as full-width prose (no bubble)', () => {
     const msg: Message = {
       id: 2,
       role: 'assistant',
@@ -72,6 +72,9 @@ describe('MessageBubble', () => {
       <MessageBubble message={msg} toolCalls={[]} toolResultMap={new Map()} onToggleToolCall={() => {}} />
     );
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).toContain('justify-start');
+    // Assistant turns are not right-aligned bubbles…
+    expect(wrapper.className).not.toContain('justify-end');
+    // …their markdown renders inside the themed prose block.
+    expect(wrapper.querySelector('.prose-chat')).not.toBeNull();
   });
 });

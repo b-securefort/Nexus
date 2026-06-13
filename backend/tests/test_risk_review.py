@@ -290,10 +290,150 @@ class TestHumanRender:
         assert "truncated" not in out.lower()
         assert out.count("a") >= 70000
 
-    def test_hookless_tool_falls_back_not_truncated(self):
+    def test_short_command_not_truncated(self):
         from app.agent.risk_review import render_for_human
         text, truncated = render_for_human("az_cli", {"args": ["group", "list"]})
         assert text.startswith("az ") and truncated is False
+
+
+class TestAzClassification:
+    """#16/#17 — AzCliTool.risk_floor owns the full az classification; core's
+    deterministic_floor defers to it (DESIGN.md §5 2026-06-13)."""
+
+    def test_privesc_grant_floors_destructive(self):
+        # role assignment create (grant self Owner) — floored ⛔, not blocked.
+        assert deterministic_floor(
+            "az_cli",
+            {"args": ["role", "assignment", "create", "--role", "Owner",
+                      "--assignee", "me", "--scope", "/subscriptions/x"]},
+        ) == DESTRUCTIVE
+        assert deterministic_floor(
+            "az_cli", {"args": ["role", "definition", "update", "--role-definition", "x"]}
+        ) == DESTRUCTIVE
+
+    def test_credential_read_floors_caution_not_safe(self):
+        # `secret show` uses the read verb `show` but returns a secret — it must
+        # NOT hit the read-verb SAFE shortcut.
+        assert deterministic_floor(
+            "az_cli", {"args": ["keyvault", "secret", "show", "--name", "db-pw", "--vault-name", "kv"]}
+        ) == CAUTION
+        assert deterministic_floor(
+            "az_cli", {"args": ["storage", "account", "keys", "list", "-n", "sa"]}
+        ) == CAUTION
+        assert deterministic_floor(
+            "az_cli", {"args": ["cosmosdb", "list-keys", "-n", "c", "-g", "rg"]}
+        ) == CAUTION
+
+    def test_plain_read_still_safe(self):
+        assert deterministic_floor("az_cli", {"args": ["vm", "list"]}) == SAFE
+        assert deterministic_floor("az_cli", {"args": ["keyvault", "list"]}) == SAFE
+
+    def test_power_state_is_caution_via_default(self):
+        # stop/deallocate are reversible — caution, not destructive.
+        assert deterministic_floor("az_cli", {"args": ["vm", "deallocate", "-n", "x", "-g", "rg"]}) == CAUTION
+        assert deterministic_floor("az_cli", {"args": ["vm", "stop", "-n", "x", "-g", "rg"]}) == CAUTION
+
+    def test_core_defers_entirely_to_hook(self):
+        # deterministic_floor's az_cli branch is `_tool_risk_floor(...) or CAUTION`
+        # — its verdict must equal the tool hook's for every shape.
+        from bundles.azure.az_cli import AzCliTool
+        tool = AzCliTool()
+        for args in (
+            ["group", "delete", "-n", "rg"],
+            ["group", "list"],
+            ["role", "assignment", "create", "--role", "Owner"],
+            ["keyvault", "secret", "show", "-n", "s"],
+            ["vm", "deallocate", "-n", "x"],
+        ):
+            assert deterministic_floor("az_cli", {"args": args}) == tool.risk_floor({"args": args})
+
+    def test_hook_tiers_match_risk_review_constants(self):
+        # Guard the literal strings the hook returns against drift.
+        from bundles.azure.az_cli import AzCliTool
+        tool = AzCliTool()
+        assert tool.risk_floor({"args": ["role", "assignment", "create"]}) == DESTRUCTIVE
+        assert tool.risk_floor({"args": ["keyvault", "secret", "show", "-n", "s"]}) == CAUTION
+        assert tool.risk_floor({"args": ["vm", "list"]}) == SAFE
+
+
+class TestSecretMasking:
+    """#16 Surface A — secret-bearing args are masked everywhere a human or the
+    judge LLM sees the rendered command (DESIGN.md §5 2026-06-13)."""
+
+    def test_render_masks_sensitive_flag_value(self):
+        from app.agent.risk_review import render_command
+        out = render_command(
+            "az_cli",
+            {"args": ["keyvault", "secret", "set", "--name", "x", "--value", "hunter2"]},
+        )
+        assert "hunter2" not in out
+        assert "***" in out
+        assert "--value" in out  # flag still visible; only the value masked
+
+    def test_render_masks_admin_password_and_inline_form(self):
+        from app.agent.risk_review import render_command
+        out = render_command(
+            "az_cli",
+            {"args": ["vm", "create", "-n", "v", "--admin-password=P@ssw0rd!", "--admin-username", "az"]},
+        )
+        assert "P@ssw0rd!" not in out
+        assert "az" in out  # non-secret value preserved
+
+    def test_sensitive_flag_masks_whole_value_even_if_connection_string(self):
+        from app.agent.risk_review import render_command
+        cs = "DefaultEndpointsProtocol=https;AccountName=sa;AccountKey=abc123XYZ==;"
+        out = render_command("az_cli", {"args": ["storage", "blob", "list", "--connection-string", cs]})
+        assert "abc123XYZ==" not in out
+        assert "--connection-string ***" in out  # flag-guarded → whole value masked
+
+    def test_connection_string_shape_masked_without_sensitive_flag(self):
+        # A secret shape that isn't behind a sensitive flag (e.g. a bare token)
+        # is still caught by the value-shape regex.
+        from app.agent.risk_review import render_command
+        out = render_command(
+            "az_cli", {"args": ["storage", "blob", "list", "--query", "AccountKey=abc123XYZ==;tail"]}
+        )
+        assert "abc123XYZ==" not in out
+        assert "AccountKey=***" in out
+
+    def test_render_for_human_masks_too(self):
+        from app.agent.risk_review import render_for_human
+        text, _ = render_for_human(
+            "az_cli", {"args": ["keyvault", "secret", "set", "-n", "x", "--value", "topsecret"]}
+        )
+        assert "topsecret" not in text and "***" in text
+
+    def test_masking_is_display_only_execution_args_unchanged(self):
+        # render is a pure read; the caller's func_args must be untouched so the
+        # executed command still carries the real value.
+        from app.agent.risk_review import render_command
+        func_args = {"args": ["keyvault", "secret", "set", "-n", "x", "--value", "live-secret"]}
+        render_command("az_cli", func_args)
+        assert func_args["args"][-1] == "live-secret"
+
+
+class TestRedactOutput:
+    """#16 Surface B — credential-read OUTPUT is redacted before persistence /
+    replay; the hook is resolved generically through the registry."""
+
+    def test_credential_read_output_redacted(self):
+        from app.tools.base import redact_tool_output
+        out = redact_tool_output(
+            "az_cli",
+            {"args": ["keyvault", "secret", "show", "-n", "db-pw"]},
+            '{"value": "super-secret-password"}',
+        )
+        assert "super-secret-password" not in out
+        assert "redacted" in out.lower()
+
+    def test_non_credential_output_passes_through(self):
+        from app.tools.base import redact_tool_output
+        payload = '{"name": "myvm", "powerState": "running"}'
+        assert redact_tool_output("az_cli", {"args": ["vm", "show", "-n", "myvm"]}, payload) == payload
+
+    def test_unknown_tool_passes_through(self):
+        from app.tools.base import redact_tool_output
+        assert redact_tool_output("no_such_tool", {}, "data") == "data"
 
 
 class TestShellFloor:

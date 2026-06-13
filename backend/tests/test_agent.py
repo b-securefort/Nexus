@@ -67,6 +67,47 @@ class TestApprovalStateMachine:
         assert pending is not None
         assert pending.status == "pending"
 
+
+class TestMaskedToolCallsJson:
+    """Surface A persistence — stored tool_calls have secret arg values masked,
+    while the caller's list (used for dispatch) is untouched (§5 2026-06-13)."""
+
+    def _call(self, name: str, args: dict) -> dict:
+        import json
+        return {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        }
+
+    def test_secret_arg_masked_in_stored_copy(self):
+        import json
+        import bundles.azure.az_cli  # noqa: F401 — register az_cli
+        from app.agent.orchestrator import _masked_tool_calls_json
+
+        calls = [self._call("az_cli", {"args": ["keyvault", "secret", "set", "--value", "s3cret"], "reason": "r"})]
+        stored = json.loads(_masked_tool_calls_json(calls))
+        stored_args = json.loads(stored[0]["function"]["arguments"])["args"]
+        assert "s3cret" not in stored_args
+        assert "***" in stored_args
+        # The caller's list is untouched — dispatch must still get the real value.
+        assert json.loads(calls[0]["function"]["arguments"])["args"][-1] == "s3cret"
+
+    def test_non_secret_call_unchanged(self):
+        import json
+        import bundles.azure.az_cli  # noqa: F401
+        from app.agent.orchestrator import _masked_tool_calls_json
+
+        calls = [self._call("az_cli", {"args": ["group", "list"], "reason": "r"})]
+        stored = json.loads(_masked_tool_calls_json(calls))
+        assert json.loads(stored[0]["function"]["arguments"])["args"] == ["group", "list"]
+
+    def test_unparseable_arguments_pass_through(self):
+        from app.agent.orchestrator import _masked_tool_calls_json
+        calls = [{"id": "x", "type": "function", "function": {"name": "az_cli", "arguments": "{bad json"}}]
+        # Must not raise; returns the call as-is.
+        assert "bad json" in _masked_tool_calls_json(calls)
+
     def test_no_pending_after_resolve(self, db_session):
         approval = create_pending_approval(
             db_session, 1, "user-1", "execute_script", '{}', "test"

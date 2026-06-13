@@ -50,15 +50,26 @@ Status legend: ☐ open · ☑ done · ⊘ demoted
   misleading all-ports "allowlist" comment + autonomous internal scan via prompt
   injection. DO NOT reuse web_fetch's RFC1918 block — network_test EXISTS to probe
   private hosts.
-- ☐ **#16** Secret-reading commands floor SAFE and are stored plaintext:
-  `storage account keys list` / `keyvault secret show` (list/list-keys are read
-  verbs → SAFE in `deterministic_floor`), output written verbatim to the
-  `messages` table. Fix: treat credential-reads as caution + redact secret shapes
-  before persistence.
-- ☐ **#17** Floor's "any read verb ⇒ SAFE" shortcut is unsound; destructive token
-  set too narrow — `role assignment delete` blocked but `create` (grant self
-  Owner) only caution; `stop`/`deallocate` + security-disabling `update`s not
-  flagged. (Partially mitigated by #12's `risk_floor` pattern — extend it.)
+- ☑ **#16** Secret-reading commands floored SAFE + stored plaintext → fixed
+  2026-06-13 (§5 ×2, with #17). Floor half: `_CREDENTIAL_READ_PREFIXES` floors
+  credential-reads to ⚠ before the read-verb SAFE shortcut. Masking (driven by
+  the user's "judge LLM must not read keys" steer): `AzCliTool.render_for_review`
+  + `_mask_args` mask secret-bearing ARGS (Surface A) everywhere the rendered
+  command is shown — judge LLM, approval card, download, and stored
+  `tool_calls_json` (via core `mask_args` hook + `_masked_tool_calls_json`);
+  `redact_output` hook replaces credential-read OUTPUT (Surface B) with a marker
+  before DB persistence/replay. Live SSE + current-turn in-memory keep the real
+  value (user gets the secret, agent chains within the turn); future turns
+  rebuild masked from DB. Masking is display-only — execution reads `func_args`.
+- ☑ **#17** Floor's "any read verb ⇒ SAFE" unsound + narrow destructive set →
+  fixed 2026-06-13 (§5, with #16). Full az classification moved into
+  `AzCliTool.risk_floor` (contract widened `destructive|None` → any tier); core
+  `deterministic_floor` az_cli branch collapsed to `_tool_risk_floor(...) or
+  CAUTION`, finishing the bundle→core decoupling #12 began. Privilege-escalation
+  grants (`role assignment|definition create|update`) floor ⛔ NOT blocked (own
+  resource, own ARM token — #12 precedent; lock-out `delete`s stay in
+  `_BLOCKED_PREFIXES`). `stop`/`deallocate` stay ⚠ (default); security-disabling
+  `update`s left to the review LLM (not floorable by verb token alone).
 - ☑ **#18** Human approval card shows backend-rendered command (not a pointer) +
   download for >64 KB. `rendered_command`/`command_truncated` on the SSE event;
   `render_for_human` (64 KB) / `render_command_full` (uncapped); new

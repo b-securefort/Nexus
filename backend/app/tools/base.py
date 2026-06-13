@@ -427,6 +427,55 @@ class Tool(ABC):
         generic 'try a different tool' message."""
         return None
 
+    def redact_output(self, func_args: dict, output: str) -> str:
+        """Return the tool output with secret material redacted before it is
+        persisted to the messages table or replayed to the LLM (§5 2026-06-13).
+        Default: pass through unchanged. Tools whose output can contain
+        credentials (az_cli credential-reads) override this. The live SSE stream
+        and the current turn's in-memory history keep the real value."""
+        return output
+
+    def mask_args(self, func_args: dict) -> dict:
+        """Return func_args with secret argument values masked before the
+        assistant's tool_calls are persisted / replayed (§5 2026-06-13).
+        Default: unchanged. Override in tools that take secrets as arguments."""
+        return func_args
+
+
+def redact_tool_output(tool_name: str, func_args: dict, output: str) -> str:
+    """Resolve a tool's `redact_output` hook via the registry and apply it.
+
+    Core calls this before saving a tool result so the bundle owns the facts
+    about which of its outputs are secret — no core→bundle import (mirrors
+    risk_review's hook resolution). Never raises; on any failure the output is
+    returned unchanged EXCEPT that an unresolved tool is left as-is (a missing
+    tool means a disabled bundle, not a secret to hide)."""
+    try:
+        tool = get_tool(tool_name)
+        hook = getattr(tool, "redact_output", None)
+        if hook is None:
+            return output
+        result = hook(func_args, output)
+        return result if isinstance(result, str) else output
+    except Exception as e:  # noqa: BLE001 — redaction must never break the turn
+        logger.warning("redact_output hook failed for %s: %s", tool_name, str(e)[:120])
+        return output
+
+
+def mask_tool_call_args(tool_name: str, func_args: dict) -> dict:
+    """Resolve a tool's `mask_args` hook via the registry and apply it before
+    the assistant's tool_calls are persisted / replayed. Never raises."""
+    try:
+        tool = get_tool(tool_name)
+        hook = getattr(tool, "mask_args", None)
+        if hook is None:
+            return func_args
+        result = hook(func_args)
+        return result if isinstance(result, dict) else func_args
+    except Exception as e:  # noqa: BLE001 — masking must never break the turn
+        logger.warning("mask_args hook failed for %s: %s", tool_name, str(e)[:120])
+        return func_args
+
 
 def retry_with_backoff(
     func, max_retries: int = 3, base_delay: float = 2.0, retryable_errors: tuple = ("429", "500", "502", "503", "504", "Too Many Requests")

@@ -52,6 +52,8 @@ from app.tools.base import (
     Tool,
     classify_tool_outcome,
     kill_conversation_processes,
+    mask_tool_call_args,
+    redact_tool_output,
     resolve_tools,
     set_arm_token,
     set_conversation_id,
@@ -1225,6 +1227,36 @@ def _save_message(
     return msg
 
 
+def _masked_tool_calls_json(tool_calls: list[dict]) -> str:
+    """Serialise tool_calls for persistence with secret arg values masked
+    (Surface A, §5 2026-06-13).
+
+    Builds masked COPIES — the caller's `tool_calls` is left intact because the
+    dispatch/prefetch path reads it for the real args. The mask is resolved per
+    tool via the duck-typed `mask_args` hook, so the az bundle owns which of its
+    args are secret. Future turns rebuild history from this masked DB copy, so no
+    separate read-side masking is needed. Unparseable arguments pass through."""
+    masked: list[dict] = []
+    for call in tool_calls:
+        fn = call.get("function", {}) if isinstance(call, dict) else {}
+        name = fn.get("name", "")
+        raw = fn.get("arguments") or ""
+        try:
+            parsed = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            masked.append(call)
+            continue
+        if not isinstance(parsed, dict):
+            masked.append(call)
+            continue
+        clean = mask_tool_call_args(name, parsed)
+        if clean == parsed:
+            masked.append(call)
+        else:
+            masked.append({**call, "function": {**fn, "arguments": json.dumps(clean)}})
+    return json.dumps(masked)
+
+
 def _resolve_tuning_kwargs(skill: Skill, settings) -> dict[str, str]:
     """Decoder tuning for every main-loop call of a turn: skill frontmatter
     wins, the CHAT_REASONING_EFFORT / CHAT_VERBOSITY config defaults apply
@@ -1959,7 +1991,11 @@ async def handle_chat(
             # alongside the description. Mid-loop assistant messages don't
             # get attachments — they'd appear on intermediate bubbles that
             # then trigger more tools, which reads as visual noise.
-            tc_json = json.dumps(tool_calls) if tool_calls else None
+            # Surface A persistence (§5 2026-06-13): the STORED tool_calls have
+            # secret arg values masked (e.g. `keyvault secret set --value ***`).
+            # `tool_calls` itself is untouched — dispatch/prefetch below read it
+            # for the real args; future turns rebuild from this masked DB copy.
+            tc_json = _masked_tool_calls_json(tool_calls) if tool_calls else None
             attachments_json: str | None = None
             if not tool_calls and pending_render_attachments:
                 attachments_json = json.dumps(list(pending_render_attachments.values()))
@@ -2338,12 +2374,27 @@ async def handle_chat(
                 }
                 enveloped_result = json.dumps(envelope, indent=2)
 
-                # Save tool result to DB and history as the standardised envelope
+                # Surface B redaction (§5 2026-06-13): the PERSISTED + future-turn
+                # replayed copy has any credential-read output replaced with a
+                # marker. The live SSE stream (below) and this turn's in-memory
+                # history keep the real value, so the user receives the secret
+                # they asked for and the agent can chain within the turn.
+                persisted_result = redact_tool_output(func_name, func_args, tool_result)
+                if persisted_result == tool_result:
+                    persisted_content = enveloped_result
+                else:
+                    persisted_content = json.dumps(
+                        {"status": envelope_status, "tool": func_name, "data": persisted_result},
+                        indent=2,
+                    )
+
+                # Save tool result to DB as the standardised envelope (redacted
+                # copy for credential-reads).
                 tool_msg = _save_message(
                     session,
                     conversation.id,
                     role="tool",
-                    content=enveloped_result,
+                    content=persisted_content,
                     tool_call_id=call_id,
                     tool_name=func_name,
                 )

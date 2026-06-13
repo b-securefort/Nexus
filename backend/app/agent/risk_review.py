@@ -65,16 +65,10 @@ def _tier_max(a: str, b: str) -> str:
 
 # ── Deterministic floor ───────────────────────────────────────────────────────
 
-# az subcommand tokens that imply irreversible data/identity loss. Matched as
-# standalone tokens anywhere in the args list (global flags can't shield them).
-_AZ_DESTRUCTIVE_TOKENS = {
-    "delete", "purge", "remove", "destroy", "revoke",
-}
-# az read-only leaf verbs — these are genuinely safe even though az_cli is
-# always approval-gated.
-_AZ_READ_VERBS = {
-    "list", "show", "get", "check", "exists", "wait", "version", "list-keys",
-}
+# NB: az command classification (destructive tokens, read verbs, credential-reads,
+# privilege-escalation) lives in `AzCliTool.risk_floor`, not here — the bundle owns
+# the facts about its own tool and core defers via the duck-typed hook (§5
+# 2026-06-13, finishing the decoupling §5 2026-06-12 began).
 
 # Destructive shell patterns scanned in an execute_script body (lower-cased).
 _SHELL_DESTRUCTIVE_SUBSTRINGS = (
@@ -149,19 +143,11 @@ def deterministic_floor(tool_name: str, func_args: dict) -> str:
     """The minimum risk tier from pattern rules alone. Never raises."""
     try:
         if tool_name == "az_cli":
-            # Tool-owned floor first: remote-exec commands (run-command / exec /
-            # ssh / acr run) hand an arbitrary command string to compute, so the
-            # az bundle floors them to ⛔. This must win over the read-verb SAFE
-            # shortcut below (DESIGN.md §5 2026-06-12).
-            if _tool_risk_floor(tool_name, func_args) == DESTRUCTIVE:
-                return DESTRUCTIVE
-            tokens = [str(t).lower() for t in (func_args.get("args") or [])]
-            if any(t in _AZ_DESTRUCTIVE_TOKENS for t in tokens):
-                return DESTRUCTIVE
-            non_flag = [t for t in tokens if not t.startswith("-")]
-            if non_flag and any(v in _AZ_READ_VERBS for v in non_flag):
-                return SAFE
-            return CAUTION
+            # The az bundle owns the full classification (remote-exec / privesc ⛔,
+            # credential-reads ⚠, destructive tokens ⛔, read verbs ✓, else ⚠) via
+            # its risk_floor hook; core defers entirely (§5 2026-06-13). A disabled
+            # bundle yields no tool/hook → conservative CAUTION default.
+            return _tool_risk_floor(tool_name, func_args) or CAUTION
 
         if tool_name == "execute_script":
             # _shell_floor scans the FULL body for destructive patterns; the
@@ -263,6 +249,9 @@ def render_command(tool_name: str, func_args: dict) -> str:
     if rendered is not None:
         return rendered[0]
     if tool_name == "az_cli" and isinstance(func_args.get("args"), list):
+        # Superseded by AzCliTool.render_for_review (masks secret args), which the
+        # hook above uses whenever the tool is registered — i.e. always. Kept only
+        # as a defensive fallback; unmasked, so it must never be the live path.
         return "az " + " ".join(str(a) for a in func_args["args"])
     if tool_name == "execute_script":
         # Superseded by ExecuteScriptTool.render_for_review (16 KB window +

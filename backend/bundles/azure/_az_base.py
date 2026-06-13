@@ -59,6 +59,45 @@ def _find_az() -> str | None:
     return None
 
 
+# B1 — Explicit allowlist instead of inheriting the full process environment.
+# This prevents credential-exfiltration attacks where a malicious az argument
+# reads %AZURE_OPENAI_API_KEY% or similar secrets out of os.environ.  Only the
+# vars required for az to function are forwarded; everything else is stripped.
+# (§5 2026-05-21; module-level since §5 2026-06-13 so az_cli shares it.)
+_ALLOWED_ENV_KEYS = {
+    # Core path resolution
+    "PATH", "PATHEXT",
+    # Unix home (az stores config under ~/.azure)
+    "HOME",
+    # Windows profile root (az config dir default on Windows)
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+    # Explicit az config override
+    "AZURE_CONFIG_DIR",
+    # Windows subsystem / temp
+    "SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP",
+    # Proxy settings that az respects
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    # Needed by some az extension installers
+    "AZURE_EXTENSION_DIR",
+}
+
+
+def _az_env() -> dict[str, str]:
+    """Allowlisted environment for an az subprocess + the ARM token overlay.
+
+    The overlay makes az authenticate as the current user: get_arm_token()
+    reads the per-request ContextVar the orchestrator sets at the top of each
+    chat turn (the accessor stays in core).
+    """
+    env: dict[str, str] = {
+        k: v for k, v in os.environ.items() if k in _ALLOWED_ENV_KEYS
+    }
+    arm_token = get_arm_token()
+    if arm_token:
+        env["AZURE_ACCESS_TOKEN"] = arm_token
+    return env
+
+
 class AzureToolBase(Tool):
     """Base class for tools that call the az CLI under the hood."""
 
@@ -84,36 +123,7 @@ class AzureToolBase(Tool):
             if injection_err:
                 return injection_err
 
-        # B1 — Build an explicit allowlist env instead of inheriting the full
-        # process environment.  This prevents credential-exfiltration attacks
-        # where a malicious az argument reads %AZURE_OPENAI_API_KEY% or similar
-        # secrets out of os.environ.  Only the vars required for az to function
-        # are forwarded; everything else is stripped.
-        _ALLOWED_ENV_KEYS = {
-            # Core path resolution
-            "PATH", "PATHEXT",
-            # Unix home (az stores config under ~/.azure)
-            "HOME",
-            # Windows profile root (az config dir default on Windows)
-            "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
-            # Explicit az config override
-            "AZURE_CONFIG_DIR",
-            # Windows subsystem / temp
-            "SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP",
-            # Proxy settings that az respects
-            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-            # Needed by some az extension installers
-            "AZURE_EXTENSION_DIR",
-        }
-        env: dict[str, str] = {
-            k: v for k, v in os.environ.items() if k in _ALLOWED_ENV_KEYS
-        }
-        # Overlay the user's ARM token so az authenticates as the current user.
-        # get_arm_token() reads the per-request ContextVar that the orchestrator
-        # sets at the top of each chat turn (the accessor stays in core).
-        arm_token = get_arm_token()
-        if arm_token:
-            env["AZURE_ACCESS_TOKEN"] = arm_token
+        env = _az_env()
 
         try:
             def _run():

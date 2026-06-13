@@ -7,16 +7,19 @@ end-to-end process kill (cross-platform).
 
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
 
 from app.tools import base
 from app.tools.base import (
+    consume_stream,
     get_conversation_id,
     kill_conversation_processes,
     register_process,
     set_conversation_id,
+    stream_subprocess,
     unregister_process,
     _process_registry,
 )
@@ -104,3 +107,79 @@ class TestKillSwitch:
         assert kill_conversation_processes(9) == 2
         assert _wait_dead(p1) and _wait_dead(p2)
         assert 9 not in _process_registry
+
+
+def _drain(gen):
+    """Drive a stream_subprocess generator to completion; return (lines, result)."""
+    lines = []
+    while True:
+        try:
+            lines.append(next(gen))
+        except StopIteration as stop:
+            return lines, stop.value
+
+
+class TestStreamSubprocessWatchdog:
+    """Wall-clock watchdog for streaming subprocesses (DESIGN.md §5 2026-06-13).
+
+    `for line in proc.stdout` blocks forever on a command that hangs without
+    printing — the watchdog kills the tree at the deadline so the read hits
+    EOF and the generator unwinds with timed_out=True.
+    """
+
+    def test_watchdog_kills_silent_hung_process(self):
+        # Prints nothing, sleeps 30s — the exact shape the old code hung on.
+        start = time.monotonic()
+        gen = stream_subprocess(
+            [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1.5,
+        )
+        lines, res = _drain(gen)
+        elapsed = time.monotonic() - start
+        assert elapsed < 15, "watchdog did not fire — read loop hung"
+        assert res.timed_out is True
+        assert res.returncode != 0
+
+    def test_normal_exit_is_not_a_timeout(self):
+        gen = stream_subprocess(
+            [sys.executable, "-c", "print('hello-stream')"], timeout=30,
+        )
+        lines, res = _drain(gen)
+        assert res.timed_out is False
+        assert res.returncode == 0
+        assert "hello-stream" in res.stdout
+        assert any("hello-stream" in line for line in lines)
+
+    def test_stream_registers_for_kill_switch(self):
+        """A streamed subprocess must be killable via the Stop path — print a
+        line (so the generator yields and registration is observable), then
+        kill the conversation's processes and check the run ends non-zero
+        without the watchdog having fired."""
+        set_conversation_id(77)
+        try:
+            gen = stream_subprocess(
+                [sys.executable, "-c",
+                 "import time; print('up', flush=True); time.sleep(30)"],
+                timeout=60,
+            )
+            first = next(gen)  # registration happened before the first yield
+            assert "up" in first
+            assert len(_process_registry.get(77, set())) == 1
+
+            killed = kill_conversation_processes(77)
+            assert killed == 1
+
+            _lines, res = _drain(gen)
+            assert res.returncode != 0
+            assert res.timed_out is False  # Stop-kill, not deadline-kill
+            assert 77 not in _process_registry
+        finally:
+            set_conversation_id(None)
+
+    def test_consume_stream_returns_generator_value(self):
+        gen = stream_subprocess(
+            [sys.executable, "-c", "print('drained')"], timeout=30,
+        )
+        # consume_stream is what collapsed execute() paths use (§5 2026-06-13)
+        res = consume_stream(gen)
+        assert res.returncode == 0
+        assert "drained" in res.stdout

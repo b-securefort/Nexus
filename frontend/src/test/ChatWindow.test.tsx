@@ -79,6 +79,28 @@ describe('ChatWindow', () => {
     expect(screen.getByText('Generating response...')).toBeInTheDocument();
   });
 
+  it('shows thinking indicator while streaming before any token arrives', () => {
+    useAppStore.setState({
+      isStreaming: true,
+      streamingContent: '',
+      streamingSegments: [],
+      messages: [{ id: 1, role: 'user', content: 'Hello', created_at: '' }],
+    });
+    render(<ChatWindow />);
+    expect(screen.getByRole('status', { name: /thinking/i })).toBeInTheDocument();
+  });
+
+  it('hides thinking indicator once streaming content arrives', () => {
+    useAppStore.setState({
+      isStreaming: true,
+      streamingContent: 'Hi',
+      streamingSegments: [{ type: 'text', content: 'Hi' }],
+      messages: [{ id: 1, role: 'user', content: 'Hello', created_at: '' }],
+    });
+    render(<ChatWindow />);
+    expect(screen.queryByRole('status', { name: /thinking/i })).not.toBeInTheDocument();
+  });
+
   it('shows error message', () => {
     useAppStore.setState({ error: 'Something went wrong' });
     render(<ChatWindow />);

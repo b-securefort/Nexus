@@ -18,19 +18,14 @@ import logging
 import os
 import re
 import shutil
-import subprocess
-import sys
-import threading
 from pathlib import Path
 from typing import Generator
 
 from app.auth.models import User
 from app.tools.base import (
-    SUBPROCESS_FLAGS,
     Tool,
-    get_conversation_id,
-    register_process,
-    unregister_process,
+    consume_stream,
+    stream_subprocess,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,54 +250,9 @@ class ExecuteScriptTool(Tool):
     requires_approval = True
 
     def execute(self, args: dict, user: User) -> str:
-        if not isinstance(args, dict):
-            return "Error: invalid arguments — expected an object with path and reason"
-
-        raw_path = args.get("path") or args.get("script") or args.get("file") or ""
-        if not isinstance(raw_path, str) or not raw_path:
-            return "Error: path is required (relative to output/scripts/)"
-
-        timeout, err = _normalize_timeout(args.get("timeout_seconds"))
-        if err:
-            return err
-
-        script_path, path_err = _resolve_script(raw_path)
-        if path_err or script_path is None:
-            return path_err or "Error: unable to resolve script path"
-
-        cmd = _build_cmd(script_path)
-        env = _shell_env()
-
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(_WORK_DIR),
-                env=env,
-                **SUBPROCESS_FLAGS,
-            )
-            output = f"Exit code: {result.returncode}\n"
-            if result.stdout:
-                output += f"--- stdout ---\n{result.stdout}\n"
-            if result.stderr:
-                output += f"--- stderr ---\n{result.stderr}\n"
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-            # Non-zero exit is a real failure — prefix "Error:" so the
-            # orchestrator detects it (is_error), retries, and can learn the fix.
-            if result.returncode != 0:
-                return f"Error: script exited with code {result.returncode}.\n{output}"
-            return output
-        except subprocess.TimeoutExpired:
-            return f"Error: script timed out after {timeout} seconds"
-        except FileNotFoundError as e:
-            return f"Error: interpreter not found: {e}"
-        except Exception as e:
-            logger.error("execute_script error for %s: %s", script_path, e)
-            return f"Error: {e}"
+        # Single implementation: drain the streaming path (§5 2026-06-13) so
+        # the kill-switch registration and watchdog deadline exist exactly once.
+        return consume_stream(self.execute_streaming(args, user))
 
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
         """Streamed variant — yields stdout lines as they arrive.
@@ -335,69 +285,16 @@ class ExecuteScriptTool(Tool):
         cmd = _build_cmd(script_path)
         env = _shell_env()
 
-        # Launch in its own process group so the Stop / disconnect path can kill
-        # the whole tree (pwsh → az → python). On POSIX `start_new_session=True`
-        # gives a killable group for os.killpg; on Windows taskkill /T walks the
-        # PID tree, so no extra flag is needed. See DESIGN.md §5 2026-06-04.
-        popen_kwargs = dict(SUBPROCESS_FLAGS)
-        if sys.platform != "win32":
-            popen_kwargs["start_new_session"] = True
-
-        conv_id = get_conversation_id()
-        proc = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                shell=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(_WORK_DIR),
-                env=env,
-                **popen_kwargs,
+            # The shared runner owns the lifecycle: killable process group,
+            # kill-switch registration (Stop / disconnect kills the whole tree —
+            # pwsh → az → python — see §5 2026-06-04), and the wall-clock
+            # watchdog deadline (§5 2026-06-13).
+            res = yield from stream_subprocess(
+                cmd, env=env, cwd=str(_WORK_DIR), timeout=timeout,
             )
-            # Register for the kill switch. If the turn is stopped, the
-            # orchestrator kills this tree; the read loop below then hits EOF and
-            # this thread unwinds.
-            register_process(conv_id, proc)
-            stdout_lines: list[str] = []
-            stderr_lines: list[str] = []
-
-            def _read_stderr():
-                assert proc.stderr is not None
-                for line in proc.stderr:
-                    stderr_lines.append(line)
-
-            t = threading.Thread(target=_read_stderr, daemon=True)
-            t.start()
-
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                stdout_lines.append(line)
-                yield line
-
-            proc.wait(timeout=timeout)
-            t.join(timeout=5)
-
-            full = f"Exit code: {proc.returncode}\n"
-            if stdout_lines:
-                full += f"--- stdout ---\n{''.join(stdout_lines)}\n"
-            if stderr_lines:
-                full += f"--- stderr ---\n{''.join(stderr_lines)}\n"
-                yield f"--- stderr ---\n{''.join(stderr_lines)}"
-
-            if len(full) > _MAX_OUTPUT_SIZE:
-                full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-            # See execute(): surface non-zero exit as an error for retry/learning.
-            if proc.returncode != 0:
-                return f"Error: script exited with code {proc.returncode}.\n{full}"
-            return full
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
-            err = f"Error: script timed out after {timeout} seconds"
+        except FileNotFoundError as e:
+            err = f"Error: interpreter not found: {e}"
             yield err
             return err
         except Exception as e:
@@ -405,6 +302,23 @@ class ExecuteScriptTool(Tool):
             err = f"Error: {e}"
             yield err
             return err
-        finally:
-            if proc is not None:
-                unregister_process(conv_id, proc)
+
+        # returncode!=0 guard: a clean exit that races the watchdog is a success.
+        if res.timed_out and res.returncode != 0:
+            err = f"Error: script timed out after {timeout} seconds"
+            yield err
+            return err
+
+        full = f"Exit code: {res.returncode}\n"
+        if res.stdout:
+            full += f"--- stdout ---\n{res.stdout}\n"
+        if res.stderr:
+            full += f"--- stderr ---\n{res.stderr}\n"
+            yield f"--- stderr ---\n{res.stderr}"
+
+        if len(full) > _MAX_OUTPUT_SIZE:
+            full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
+        # Surface non-zero exit as an error for retry/learning (is_error).
+        if res.returncode != 0:
+            return f"Error: script exited with code {res.returncode}.\n{full}"
+        return full

@@ -13,6 +13,7 @@ import sys
 import threading
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Generator
 
 from prometheus_client import Counter
@@ -162,6 +163,133 @@ def kill_conversation_processes(conversation_id: int | None) -> int:
 SUBPROCESS_FLAGS: dict = (
     {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 )
+
+
+# ── Streaming subprocess runner with wall-clock watchdog (§5 2026-06-13) ──────
+#
+# `for line in proc.stdout` blocks in a C-level pipe read that cannot be
+# interrupted portably (no select() on Windows pipes), so a `proc.wait(timeout)`
+# placed *after* the read loop never runs against a command that hangs without
+# printing. The deadline therefore has to come from outside the read loop: a
+# timer kills the process tree, the blocked read hits EOF, and the generator
+# unwinds — the same unwind the Stop / disconnect kill switch already relies on.
+# Two triggers, one kill path.
+
+
+class ProcessWatchdog:
+    """Wall-clock deadline for a streaming subprocess.
+
+    Arms a daemon Timer that kills the process tree when the deadline passes.
+    `expired` tells the caller the kill was the deadline's doing — a retryable
+    timeout — as opposed to the user's Stop, which must stay terminal
+    (§5 2026-06-04: a user denial/interrupt is never a retryable error).
+    """
+
+    def __init__(self, proc: subprocess.Popen, timeout_seconds: float) -> None:
+        self._proc = proc
+        self.expired = False
+        self._timer = threading.Timer(timeout_seconds, self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        if self._proc.poll() is not None:
+            return  # finished under the deadline — not a timeout
+        self.expired = True
+        _kill_process_tree(self._proc)
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+
+
+@dataclass
+class StreamedRun:
+    """Outcome of `stream_subprocess` — returned via StopIteration.value."""
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool
+
+
+def stream_subprocess(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    timeout: float = 60,
+) -> Generator[str, None, StreamedRun]:
+    """Run `cmd` shell=False, yielding stdout lines as they arrive.
+
+    The single subprocess invocation shared by the streaming command tools
+    (az_cli via `_az_base`, execute_script). It owns the whole lifecycle:
+    spawn in a killable group, register with the per-conversation kill
+    registry, arm a `ProcessWatchdog` for the wall-clock deadline, drain
+    stderr on a side thread, and unregister on the way out. Callers keep
+    their own output formatting and error vocabulary.
+    """
+    popen_kwargs = dict(SUBPROCESS_FLAGS)
+    if sys.platform != "win32":
+        # Killable process group for os.killpg; on Windows taskkill /T walks
+        # the PID tree instead (see _kill_process_tree).
+        popen_kwargs["start_new_session"] = True
+
+    conv_id = get_conversation_id()
+    proc = subprocess.Popen(
+        cmd,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=cwd,
+        **popen_kwargs,
+    )
+    register_process(conv_id, proc)
+    watchdog = ProcessWatchdog(proc, timeout)
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    try:
+        def _read_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stderr_lines.append(line)
+
+        t = threading.Thread(target=_read_stderr, daemon=True)
+        t.start()
+
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            yield line
+
+        # stdout is EOF. If the process closed stdout but lingers, this wait is
+        # still bounded: the watchdog kills the tree at the deadline.
+        proc.wait()
+        t.join(timeout=5)
+    finally:
+        watchdog.cancel()
+        unregister_process(conv_id, proc)
+
+    return StreamedRun(
+        returncode=proc.returncode,
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines),
+        timed_out=watchdog.expired,
+    )
+
+
+def consume_stream(gen: Generator[str, None, str]) -> str:
+    """Drain a tool's `execute_streaming` generator and return its value.
+
+    Lets `execute()` be a thin wrapper over the streaming implementation so a
+    subprocess tool has exactly one invocation path to harden (§5 2026-06-13).
+    """
+    while True:
+        try:
+            next(gen)
+        except StopIteration as stop:
+            return stop.value if stop.value is not None else ""
 
 # Characters that must always be blocked in az CLI argument values.
 #

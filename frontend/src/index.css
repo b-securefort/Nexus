@@ -159,11 +159,11 @@
   --danger-strong: #b91c1c;
 }
 
-/* ── Theme: Deloitte — green & white (Deloitte brand palette) ──
+/* ── Theme: Executive Green — green & white (Executive Green brand palette) ──
    Signature green #86BC25 appears in tints/swatch; interactive elements use
    the deeper accessible greens (#26890D / #046A38) so white text stays
-   readable. Grays follow the Deloitte cool-gray ramp (#53565A / #75787B). */
-:root[data-theme='deloitte'] {
+   readable. Grays follow the Executive Green cool-gray ramp (#53565A / #75787B). */
+:root[data-theme='execgreen'] {
   color-scheme: light;
 
   --base-50: #000000;
@@ -256,6 +256,12 @@ button:not(:disabled):active,
   50% { opacity: 0.4; }
 }
 
+/* ── Thinking indicator dots (waiting for first model token) ── */
+@keyframes typingDot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
 .animate-fade-in-up {
   animation: fadeInUp 200ms var(--ease-out) both;
 }
@@ -266,6 +272,10 @@ button:not(:disabled):active,
 
 .animate-soft-pulse {
   animation: softPulse 1s ease-in-out infinite;
+}
+
+.animate-typing-dot {
+  animation: typingDot 1.2s ease-in-out infinite;
 }
 
 /* ── Stagger children ── */
@@ -332,6 +342,7 @@ button:not(:disabled):active,
   }
   .animate-fade-in-up,
   .animate-scale-in,
+  .animate-typing-dot,
   .stagger-children > * {
     animation: none;
     opacity: 1;

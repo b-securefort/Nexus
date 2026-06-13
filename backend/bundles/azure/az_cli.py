@@ -3,21 +3,25 @@ Azure CLI tool — runs az commands with user approval.
 """
 
 import logging
-import subprocess
-import sys
-import threading
 from typing import Generator
 
-import os
-
 from app.auth.models import User
-from app.tools.base import SUBPROCESS_FLAGS, Tool, check_shell_injection, get_arm_token
-from bundles.azure._az_base import _find_az
+from app.tools.base import (
+    Tool,
+    check_shell_injection,
+    consume_stream,
+    stream_subprocess,
+)
+from bundles.azure._az_base import _az_env, _find_az
 from bundles.azure.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_SIZE = 8192
+
+# Wall-clock deadline for one az invocation, enforced by the stream_subprocess
+# watchdog (§5 2026-06-13). Fixed for now — configurability is backlog #11.
+_TIMEOUT_SECONDS = 60
 
 # Subcommand prefixes that are blocked even with approval. These are operations
 # that wipe credentials, create identities, or remove access — any of which
@@ -159,74 +163,10 @@ class AzCliTool(Tool):
     requires_approval = True
 
     def execute(self, args: dict, user: User) -> str:
-        # Pre-check Azure login state
-        login_err = require_az_login()
-        if login_err:
-            return login_err
-
-        az_args = args.get("args", [])
-        if not isinstance(az_args, list):
-            return "Error: args must be a list of strings"
-
-        # Block destructive operations even with approval
-        blocked = _is_blocked(az_args)
-        if blocked:
-            return blocked
-
-        # Defence-in-depth: block shell metacharacters in individual args
-        for i, arg in enumerate(az_args):
-            injection_err = check_shell_injection(str(arg), f"args[{i}]")
-            if injection_err:
-                return injection_err
-
-        az_path = _find_az()
-        if not az_path:
-            return "Error: Azure CLI is not installed on this server. Circuit breaker is open. Tool disabled."
-
-        cmd = [az_path] + [str(a) for a in az_args]
-
-        env = os.environ.copy()
-        arm_token = get_arm_token()
-        if arm_token:
-            env["AZURE_ACCESS_TOKEN"] = arm_token
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                shell=(sys.platform == "win32"),
-                env=env,
-                **SUBPROCESS_FLAGS,
-            )
-
-            output = f"Exit code: {result.returncode}\n"
-            if result.stdout:
-                output += f"--- stdout ---\n{result.stdout}\n"
-            if result.stderr:
-                output += f"--- stderr ---\n{result.stderr}\n"
-
-            if len(output) > _MAX_OUTPUT_SIZE:
-                output = output[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-
-            # A non-zero exit is a real failure. Prefix "Error:" so the
-            # orchestrator's failure detection (is_error) engages — otherwise a
-            # failed command (bad syntax, exit 2, auth error) reads as success,
-            # so multi-strategy retry never fires and the success-after-failure
-            # learning path never captures the fix. The full exit/stderr detail
-            # is preserved after the prefix for the model to read.
-            if result.returncode != 0:
-                return f"Error: az CLI exited with code {result.returncode}.\n{output}"
-            return output
-
-        except subprocess.TimeoutExpired:
-            return "Error: az CLI command timed out after 60 seconds"
-        except FileNotFoundError:
-            return "Error: Azure CLI (az) not found. Is it installed?"
-        except Exception as e:
-            logger.error("az CLI error: %s", str(e))
-            return f"Error: {str(e)}"
+        # Single implementation: drain the streaming path (§5 2026-06-13).
+        # A separate subprocess.run copy here is where a dead 60s timeout hid
+        # while the orchestrator only ever dispatched execute_streaming.
+        return consume_stream(self.execute_streaming(args, user))
 
     def execute_streaming(self, args: dict, user: User) -> Generator[str, None, str]:
         # Pre-check Azure login state
@@ -247,6 +187,7 @@ class AzCliTool(Tool):
             return blocked
 
         # Defence-in-depth: block shell metacharacters in individual args
+        # (primary defence is shell=False inside stream_subprocess)
         for i, arg in enumerate(az_args):
             injection_err = check_shell_injection(str(arg), f"args[{i}]")
             if injection_err:
@@ -261,67 +202,12 @@ class AzCliTool(Tool):
 
         cmd = [az_path] + [str(a) for a in az_args]
 
-        env = os.environ.copy()
-        arm_token = get_arm_token()
-        if arm_token:
-            env["AZURE_ACCESS_TOKEN"] = arm_token
-
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=(sys.platform == "win32"),
-                env=env,
-                **SUBPROCESS_FLAGS,
+            # shell=False + env allowlist + kill-switch registration + watchdog
+            # deadline, all owned by the shared runner (§5 2026-06-13).
+            res = yield from stream_subprocess(
+                cmd, env=_az_env(), timeout=_TIMEOUT_SECONDS,
             )
-
-            output_lines: list[str] = []
-            stderr_lines: list[str] = []
-
-            # Read stderr in background thread
-            def _read_stderr():
-                assert proc.stderr is not None
-                for line in proc.stderr:
-                    stderr_lines.append(line)
-
-            t = threading.Thread(target=_read_stderr, daemon=True)
-            t.start()
-
-            # Stream stdout line by line
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                output_lines.append(line)
-                yield line
-
-            proc.wait(timeout=60)
-            t.join(timeout=5)
-
-            # Build full result
-            full = f"Exit code: {proc.returncode}\n"
-            if output_lines:
-                full += f"--- stdout ---\n{''.join(output_lines)}\n"
-            if stderr_lines:
-                full += f"--- stderr ---\n{''.join(stderr_lines)}\n"
-                # Yield stderr at the end
-                yield f"--- stderr ---\n{''.join(stderr_lines)}"
-
-            if len(full) > _MAX_OUTPUT_SIZE:
-                full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
-
-            # See execute(): non-zero exit must surface as an error so retry +
-            # learning capture engage. Streamed chunks already reached the UI;
-            # only the returned value (used for is_error) gets the prefix.
-            if proc.returncode != 0:
-                return f"Error: az CLI exited with code {proc.returncode}.\n{full}"
-            return full
-
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            err = "Error: az CLI command timed out after 60 seconds"
-            yield err
-            return err
         except FileNotFoundError:
             err = "Error: Azure CLI (az) not found. Is it installed?"
             yield err
@@ -331,3 +217,32 @@ class AzCliTool(Tool):
             err = f"Error: {str(e)}"
             yield err
             return err
+
+        # returncode!=0 guard: if the process finished cleanly in the same
+        # instant the watchdog fired, believe the clean exit over the timer.
+        if res.timed_out and res.returncode != 0:
+            err = f"Error: az CLI command timed out after {_TIMEOUT_SECONDS} seconds"
+            yield err
+            return err
+
+        # Build full result
+        full = f"Exit code: {res.returncode}\n"
+        if res.stdout:
+            full += f"--- stdout ---\n{res.stdout}\n"
+        if res.stderr:
+            full += f"--- stderr ---\n{res.stderr}\n"
+            # Yield stderr at the end
+            yield f"--- stderr ---\n{res.stderr}"
+
+        if len(full) > _MAX_OUTPUT_SIZE:
+            full = full[:_MAX_OUTPUT_SIZE] + "\n... (truncated)"
+
+        # A non-zero exit is a real failure. Prefix "Error:" so the
+        # orchestrator's failure detection (is_error) engages — otherwise a
+        # failed command (bad syntax, exit 2, auth error) reads as success,
+        # so multi-strategy retry never fires and the success-after-failure
+        # learning path never captures the fix. Streamed chunks already reached
+        # the UI; only the returned value (used for is_error) gets the prefix.
+        if res.returncode != 0:
+            return f"Error: az CLI exited with code {res.returncode}.\n{full}"
+        return full

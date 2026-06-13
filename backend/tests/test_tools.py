@@ -21,6 +21,22 @@ _USER = User(oid="test-user", email="test@test.com", display_name="Test")
 init_tools()
 
 
+def _fake_stream(returncode=0, stdout="", stderr="", timed_out=False):
+    """Build a stand-in for `stream_subprocess`: a generator function that
+    yields the stdout lines and returns a StreamedRun, signature-compatible
+    so tests can patch it at the tool-module level."""
+    from app.tools.base import StreamedRun
+
+    def _gen(cmd, *, env=None, cwd=None, timeout=60):
+        for line in stdout.splitlines(keepends=True):
+            yield line
+        return StreamedRun(
+            returncode=returncode, stdout=stdout, stderr=stderr, timed_out=timed_out,
+        )
+
+    return _gen
+
+
 class TestToolRegistry:
     def test_init_tools_registers_all(self):
         # init_tools() was already called at module top — calling it again
@@ -472,15 +488,15 @@ class TestAzCliTool:
         result = tool.execute({"args": "not-a-list", "reason": "test"}, _USER)
         assert "Error" in result
 
-    @patch("bundles.azure.az_cli.subprocess.run")
+    @patch("bundles.azure.az_cli.stream_subprocess")
     @patch("bundles.azure.az_cli._find_az", return_value="az")
     @patch("bundles.azure.az_cli.require_az_login", return_value=None)
-    def test_nonzero_exit_surfaces_as_error(self, _login, _find, mock_run):
+    def test_nonzero_exit_surfaces_as_error(self, _login, _find, mock_stream):
         """A command that exits non-zero (e.g. bad flag) must return an
         Error-prefixed result so the orchestrator detects the failure and the
         success-after-failure learning path can fire. Regression for the
         'az vm deallocate --yes reported as success' bug (conv 313)."""
-        mock_run.return_value = MagicMock(
+        mock_stream.side_effect = _fake_stream(
             returncode=2,
             stdout="",
             stderr="ERROR: unrecognized arguments: --yes",
@@ -494,18 +510,53 @@ class TestAzCliTool:
         assert "exited with code 2" in result
         assert "unrecognized arguments" in result  # detail preserved for the model
 
-    @patch("bundles.azure.az_cli.subprocess.run")
+    @patch("bundles.azure.az_cli.stream_subprocess")
     @patch("bundles.azure.az_cli._find_az", return_value="az")
     @patch("bundles.azure.az_cli.require_az_login", return_value=None)
-    def test_zero_exit_is_not_an_error(self, _login, _find, mock_run):
+    def test_zero_exit_is_not_an_error(self, _login, _find, mock_stream):
         """Success path is unchanged — exit 0 must NOT be prefixed with Error."""
-        mock_run.return_value = MagicMock(
+        mock_stream.side_effect = _fake_stream(
             returncode=0, stdout='{"id": "abc"}', stderr="",
         )
         tool = get_tool("az_cli")
         result = tool.execute({"args": ["account", "show"], "reason": "t"}, _USER)
         assert not result.startswith("Error")
         assert "Exit code: 0" in result
+
+    @patch("bundles.azure.az_cli.stream_subprocess")
+    @patch("bundles.azure.az_cli._find_az", return_value="az")
+    @patch("bundles.azure.az_cli.require_az_login", return_value=None)
+    def test_watchdog_timeout_surfaces_as_error(self, _login, _find, mock_stream):
+        """A watchdog-killed run must return the retryable timeout error."""
+        mock_stream.side_effect = _fake_stream(
+            returncode=1, stdout="partial\n", stderr="", timed_out=True,
+        )
+        tool = get_tool("az_cli")
+        result = tool.execute({"args": ["vm", "list"], "reason": "t"}, _USER)
+        assert result.startswith("Error")
+        assert "timed out after 60 seconds" in result
+
+    @patch("bundles.azure.az_cli.stream_subprocess")
+    @patch("bundles.azure.az_cli._find_az", return_value="az")
+    @patch("bundles.azure.az_cli.require_az_login", return_value=None)
+    def test_env_is_allowlisted_not_full_environ(self, _login, _find, mock_stream):
+        """az_cli must pass the _az_env() allowlist to the subprocess, never a
+        full os.environ copy — a malicious arg expanding %AZURE_OPENAI_API_KEY%
+        must find nothing to leak (§5 2026-05-21, applied to az_cli 2026-06-13)."""
+        captured: dict = {}
+
+        def _capture(cmd, *, env=None, cwd=None, timeout=60):
+            captured["env"] = env
+            return _fake_stream(returncode=0, stdout="ok\n", stderr="")(
+                cmd, env=env, cwd=cwd, timeout=timeout
+            )
+
+        mock_stream.side_effect = _capture
+        tool = get_tool("az_cli")
+        with patch.dict("os.environ", {"AZURE_OPENAI_API_KEY": "sk-secret"}):
+            tool.execute({"args": ["account", "show"], "reason": "t"}, _USER)
+        assert captured["env"] is not None
+        assert "AZURE_OPENAI_API_KEY" not in captured["env"]
 
 
 # ── Adversarial / quality coverage ──────────────────────────────────────────

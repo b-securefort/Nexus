@@ -15,19 +15,26 @@ Status legend: ☐ open · ☑ done · ⊘ demoted
 
 ## Security (internal-only hosting does NOT defuse #1–3, 16, 17, 19, 20, 23)
 
-- ☐ **#1** `az_cli` uses `shell=True` on Windows + full `os.environ.copy()`, while
-  every other az tool routes through `_az_base._run_az` (shell=False + env
-  allowlist, §5 2026-05-21). `check_shell_injection` deliberately allows `|`
-  ("safe with shell=False") — but az_cli isn't shell=False on win32, so `|ˆ;<>`
-  get reinterpreted by cmd.exe; and the full env hands every secret (Azure OpenAI
-  keys) to the child. Fix: route az_cli through `_run_az` or replicate its
-  shell=False + allowlist.
-- ☐ **#2** Streaming paths (`az_cli.execute_streaming`, `execute_script`) have no
-  real timeout — `for line in proc.stdout` blocks forever on a command that hangs
-  without printing; `proc.wait(timeout)` only runs after EOF.
-- ☐ **#3** `az_cli` is invisible to the Stop kill switch — only
-  `execute_script`'s streaming path registers its subprocess via
-  `register_process`. A runaway az command can't be killed.
+- ☑ **#1** `az_cli` shell=True-on-Windows + full `os.environ.copy()` → now runs
+  through the shared shell=False runner with the §5 2026-05-21 env allowlist
+  (`_az_env()` lifted module-level in `_az_base`). NOT routed through `_run_az`
+  (can't stream; inheritance would flip `requires_credentials`/ARM-preflight
+  semantics; az_cli's Error-prefixed exit-code+stdout contract feeds
+  retry/learning). Both `execute()` paths collapsed into draining
+  `execute_streaming()` — the orchestrator only dispatches streaming, so the
+  old `execute()` 60s timeout was dead code. DONE 2026-06-13 (§5 ×2).
+- ☑ **#2** No real streaming timeout → wall-clock `ProcessWatchdog` in core
+  `base.py` kills the process tree at the deadline (blocked read hits EOF, the
+  generator unwinds); a flag distinguishes timeout-kill (retryable error) from
+  Stop-kill (terminal, §5 2026-06-04). Shared `stream_subprocess()` runner
+  adopted by az_cli AND execute_script. Timeout still fixed 60s — see #11.
+  DONE 2026-06-13.
+- ☑ **#3** az_cli invisible to Stop → its `Popen` now registers in the
+  per-conversation kill registry via `stream_subprocess`. Reframed during
+  design: this is kill-as-resource-hygiene (free the pinned executor thread +
+  semaphore slot), NOT kill-as-undo — the §5 2026-06-04 "killing local az
+  can't recall an ARM dispatch" rejection still stands; the new §5 entry
+  refines it. DONE 2026-06-13.
 - ☑ **#12** Remote-exec az commands (`vm run-command invoke`, `aks command
   invoke`, `container/containerapp exec`, `webapp ssh`, `ssh vm/arc`, `acr
   run/build`, vmss variants) → floor ⛔ via `AzCliTool.risk_floor` +

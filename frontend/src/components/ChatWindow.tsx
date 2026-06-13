@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { ArrowUp, Square, Paperclip, X as XIcon } from "lucide-react";
+import { ArrowUp, ArrowDown, Square, Paperclip, X as XIcon } from "lucide-react";
+import { StreamingMarkdown } from "./StreamingMarkdown";
+import { StreamSmoother } from "../lib/streamSmoother";
 import { useAppStore } from "../store/useAppStore";
 import {
   sendChatMessage,
@@ -41,7 +43,18 @@ export function ChatWindow() {
   // of the old dead-end error banner.
   const [iterationLimitHit, setIterationLimitHit] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Paces bursty SSE chunks into steady word-by-word output. Reads the store
+  // action via getState so the instance never goes stale across renders.
+  const smootherRef = useRef<StreamSmoother | null>(null);
+  if (smootherRef.current === null) {
+    smootherRef.current = new StreamSmoother((text) =>
+      useAppStore.getState().appendStreamingContent(text)
+    );
+  }
+  const smoother = smootherRef.current;
+  useEffect(() => () => smoother.cancel(), [smoother]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -71,7 +84,6 @@ export function ChatWindow() {
     setMessages,
     addMessage,
     setStreamingContent,
-    appendStreamingContent,
     setIsStreaming,
     setPendingApproval,
     setPendingQuestion,
@@ -100,15 +112,37 @@ export function ChatWindow() {
     return map;
   }, [messages]);
 
-  const scrollToBottom = useCallback(() => {
+  // Auto-follow only while the user is pinned to the bottom (ChatGPT-style).
+  // Scrolling up detaches; a floating button re-attaches. The ref mirrors the
+  // state so the autoscroll effect doesn't re-run on every pin/unpin flip.
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     // Use requestAnimationFrame to ensure DOM has updated before scrolling
     requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({ behavior });
     });
   }, []);
 
+  const pinToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+    scrollToBottom(behavior);
+  }, [scrollToBottom]);
+
   useEffect(() => {
-    scrollToBottom();
+    // Instant (not smooth) while following a stream — repeated smooth scrolls
+    // fight each other and briefly read as "not at bottom".
+    if (isAtBottomRef.current) scrollToBottom("auto");
   }, [messages, streamingContent, streamingSegments, toolCalls, pendingApproval, scrollToBottom]);
 
   // Load conversation messages when conversationId changes. Track the
@@ -125,12 +159,17 @@ export function ChatWindow() {
       }
       prevConversationIdRef.current = conversationId;
       fetchConversation(conversationId)
-        .then((conv) => setMessages(conv.messages))
+        .then((conv) => {
+          setMessages(conv.messages);
+          // Opening a conversation always lands at the latest message,
+          // even if the user had scrolled up in the previous one.
+          pinToBottom("auto");
+        })
         .catch(() => setError("Failed to load conversation"));
     } else {
       prevConversationIdRef.current = null;
     }
-  }, [conversationId, setMessages, setError, setContextUsage]);
+  }, [conversationId, setMessages, setError, setContextUsage, pinToBottom]);
 
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown) => {
@@ -138,10 +177,13 @@ export function ChatWindow() {
 
       switch (eventType) {
         case "token":
-          appendStreamingContent(d.text as string);
+          smoother.push(d.text as string);
           break;
 
         case "tool_call_start":
+          // Drain pending text first — the tool card must appear after all
+          // text the model produced before it, not race ahead of the pacing.
+          smoother.flush();
           addToolCall({
             call_id: d.call_id as string,
             name: d.name as string,
@@ -158,10 +200,12 @@ export function ChatWindow() {
           break;
 
         case "approval_required":
+          smoother.flush();
           setPendingApproval(d as unknown as ApprovalInfo);
           break;
 
         case "question_required":
+          smoother.flush();
           setPendingQuestion(d as unknown as QuestionInfo);
           break;
 
@@ -189,6 +233,9 @@ export function ChatWindow() {
         }
 
         case "done":
+          // Show the complete text immediately — once the turn is over,
+          // continued pacing is artificial delay, not smoothness.
+          smoother.flush();
           setIsStreaming(false);
           setStreamingContent("");
           if (d.usage) {
@@ -207,11 +254,13 @@ export function ChatWindow() {
           break;
 
         case "error":
+          smoother.flush();
           setError(d.message as string);
           setIsStreaming(false);
           break;
 
         case "iteration_limit":
+          smoother.flush();
           // Not an error: tool results + a wrap-up summary are persisted.
           // Offer one-click resumption (a plain "continue" message).
           setIterationLimitHit(true);
@@ -247,7 +296,7 @@ export function ChatWindow() {
       }
     },
     [
-      appendStreamingContent,
+      smoother,
       addToolCall,
       setToolCallExecuting,
       appendToolCallOutput,
@@ -308,6 +357,8 @@ export function ChatWindow() {
         : null,
     };
     addMessage(tempMsg);
+    // Sending re-pins the view to the bottom (ChatGPT behavior).
+    pinToBottom();
 
     abortRef.current = new AbortController();
 
@@ -351,6 +402,7 @@ export function ChatWindow() {
       created_at: new Date().toISOString(),
       attachments_json: null,
     });
+    pinToBottom();
     abortRef.current = new AbortController();
     try {
       await sendChatMessage(
@@ -373,6 +425,8 @@ export function ChatWindow() {
     // tool already executing finishes server-side but its result is discarded.
     abortRef.current?.abort();
     abortRef.current = null;
+    // Queued-but-unpainted words belong to the aborted turn — discard them.
+    smoother.cancel();
     setIsStreaming(false);
     setStreamingContent("");
     // A pending approval/question is moot once the turn is aborted — drop the
@@ -394,7 +448,7 @@ export function ChatWindow() {
       clearToolCalls();
     }
   }, [
-    setIsStreaming, setStreamingContent, setMessages, clearToolCalls,
+    smoother, setIsStreaming, setStreamingContent, setMessages, clearToolCalls,
     setPendingApproval, setPendingQuestion,
   ]);
 
@@ -643,7 +697,12 @@ export function ChatWindow() {
   return (
     <div className="flex flex-col h-full">
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="relative flex-1 min-h-0">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="h-full overflow-y-auto px-6 py-6"
+      >
         <div className="max-w-3xl mx-auto space-y-6">
         {messages.map((msg) => (
           <MessageBubble
@@ -655,17 +714,34 @@ export function ChatWindow() {
           />
         ))}
 
+        {/* Thinking indicator — fills the gap between sending a prompt and
+            the first token/tool event, so the user sees the request landed. */}
+        {isStreaming && streamingSegments.length === 0 && (
+          <div
+            className="flex items-center gap-1.5 py-1 animate-fade-in-up"
+            role="status"
+            aria-label="Nexus is thinking"
+          >
+            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" />
+            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "160ms" }} />
+            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "320ms" }} />
+          </div>
+        )}
+
         {/* Streaming assistant content + live tool calls (interleaved) */}
         {isStreaming && streamingSegments.length > 0 && (
           <div className="space-y-2.5 animate-fade-in-up">
             {streamingSegments.map((seg, i) => {
               if (seg.type === "text") {
                 const isLast = i === streamingSegments.length - 1;
+                // Render markdown live as tokens arrive (ChatGPT-style).
+                // StreamingMarkdown memoizes completed blocks so each token
+                // only re-parses the tail block, not the whole message.
                 return (
-                  <div key={`seg-text-${i}`} className="text-[15px] leading-[1.7] text-base-200 whitespace-pre-wrap">
-                    {seg.content}
+                  <div key={`seg-text-${i}`}>
+                    <StreamingMarkdown content={seg.content} />
                     {isLast && (
-                      <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse ml-1 align-middle" />
+                      <span className="inline-block w-1.5 h-4 bg-accent-light rounded-sm animate-soft-pulse align-middle" />
                     )}
                   </div>
                 );
@@ -724,6 +800,20 @@ export function ChatWindow() {
 
         <div ref={messagesEndRef} />
         </div>
+      </div>
+
+      {/* Floating scroll-to-bottom button — appears once the user scrolls up
+          and detaches from auto-follow; clicking re-pins to the live tail. */}
+      {!isAtBottom && (
+        <button
+          onClick={() => pinToBottom()}
+          aria-label="Scroll to bottom"
+          title="Scroll to bottom"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 w-9 h-9 rounded-full bg-base-800 hover:bg-base-700 border border-base-600/60 text-base-200 shadow-lg flex items-center justify-center transition-colors duration-150 ease-[var(--ease-out)] animate-scale-in"
+        >
+          <ArrowDown className="w-4.5 h-4.5" strokeWidth={2} />
+        </button>
+      )}
       </div>
 
       {/* Composer pinned at bottom */}

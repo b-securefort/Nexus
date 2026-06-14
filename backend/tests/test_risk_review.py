@@ -517,3 +517,141 @@ class TestAssessRisk:
         monkeypatch.setattr(risk_review, "_get_client", lambda: _FakeClient(raises=True))
         v = assess_risk("az_cli", {"args": ["group", "delete", "-n", "rg"]})
         assert v.risk_level == DESTRUCTIVE
+
+
+# ── az_cli @file indirection (DESIGN.md §5 2026-06-15) ────────────────────────
+
+
+class TestAzCliAtFile:
+    """az's `@file` convention loads an arg value from disk at execution. Every
+    @file must resolve inside the output/ sandbox (hard reject otherwise),
+    rewrite to an absolute path, be fingerprinted for the #20 TOCTOU re-check,
+    and be shown as content to the human but only as a pointer to the judge/DB."""
+
+    @pytest.fixture
+    def sandbox(self, tmp_path, monkeypatch):
+        """Point the shared resolver's output/ root at a tmp dir so tests don't
+        touch the real sandbox. `resolve_output_file` reads `_OUTPUT_DIR` at call
+        time, so patching the module attribute is enough."""
+        import bundles.azure._az_base as az_base
+        monkeypatch.setattr(az_base, "_OUTPUT_DIR", tmp_path)
+        return tmp_path
+
+    # ── boundary guard ──────────────────────────────────────────────────────
+    @pytest.mark.parametrize("bad", ["@../secret.txt", "@../../backend/.env", "@/etc/passwd"])
+    def test_escape_is_hard_rejected(self, sandbox, bad):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        out, resolved, err = _resolve_and_rewrite_at_files(
+            ["vm", "run-command", "invoke", "--scripts", bad]
+        )
+        assert out is None and resolved == []
+        assert err and err.startswith("Error")
+
+    def test_unreadable_at_file_rejected(self, sandbox):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        out, _resolved, err = _resolve_and_rewrite_at_files(["x", "--scripts", "@ghost.ps1"])
+        assert out is None
+        assert err and "not found" in err
+
+    def test_valid_at_file_resolved_and_rewritten_to_abspath(self, sandbox):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        (sandbox / "x.ps1").write_text("Write-Host hi", encoding="utf-8")
+        out, resolved, err = _resolve_and_rewrite_at_files(["vm", "--scripts", "@x.ps1"])
+        assert err is None
+        assert len(resolved) == 1
+        scripts_val = out[out.index("--scripts") + 1]
+        assert scripts_val.startswith("@")
+        # rewritten to an absolute path under the sandbox, not the relative form
+        from pathlib import Path
+        assert Path(scripts_val[1:]).is_absolute()
+        assert scripts_val.endswith("x.ps1")
+        assert scripts_val != "@x.ps1"
+
+    def test_output_prefixed_form_accepted(self, sandbox):
+        # The natural az cwd-relative form `@output/x.ps1` resolves the same file
+        # as `@x.ps1` rather than double-prefixing to output/output/x.ps1.
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        (sandbox / "x.ps1").write_text("hi", encoding="utf-8")
+        out, resolved, err = _resolve_and_rewrite_at_files(["vm", "--scripts", "@output/x.ps1"])
+        assert err is None and len(resolved) == 1
+
+    def test_inline_flag_form_resolved(self, sandbox):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        (sandbox / "p.json").write_text("{}", encoding="utf-8")
+        out, resolved, err = _resolve_and_rewrite_at_files(["deployment", "--parameters=@p.json"])
+        assert err is None and len(resolved) == 1
+        val = out[-1]
+        assert val.startswith("--parameters=@") and val.endswith("p.json")
+
+    # ── JMESPath carve-out ──────────────────────────────────────────────────
+    def test_query_at_node_not_treated_as_file(self, sandbox):
+        # `--query @.name` is JMESPath current-node, not an @file — must pass
+        # through untouched (no error even though output/.name doesn't exist).
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        out, resolved, err = _resolve_and_rewrite_at_files(["vm", "list", "--query", "@.name"])
+        assert err is None and resolved == []
+        assert out == ["vm", "list", "--query", "@.name"]
+
+    def test_query_inline_at_not_treated_as_file(self, sandbox):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        out, resolved, err = _resolve_and_rewrite_at_files(["vm", "list", "--query=@"])
+        assert err is None and resolved == []
+
+    def test_bare_at_not_treated_as_file(self, sandbox):
+        from bundles.azure.az_cli import _resolve_and_rewrite_at_files
+        out, resolved, err = _resolve_and_rewrite_at_files(["vm", "list", "--query", "@"])
+        assert err is None and resolved == []
+
+    # ── #20 fingerprint ─────────────────────────────────────────────────────
+    def test_fingerprint_none_without_at_file(self, sandbox):
+        from bundles.azure.az_cli import AzCliTool
+        assert AzCliTool().review_fingerprint({"args": ["group", "list"]}) is None
+
+    def test_fingerprint_changes_on_swap(self, sandbox):
+        from bundles.azure.az_cli import AzCliTool
+        tool = AzCliTool()
+        f = sandbox / "s.ps1"
+        f.write_text("Get-Date", encoding="utf-8")
+        fp1 = tool.review_fingerprint({"args": ["vm", "--scripts", "@s.ps1"]})
+        assert fp1 is not None
+        f.write_text("Remove-Item -Recurse -Force C:\\", encoding="utf-8")
+        fp2 = tool.review_fingerprint({"args": ["vm", "--scripts", "@s.ps1"]})
+        assert fp1 != fp2
+
+    def test_fingerprint_multi_file_order_independent(self, sandbox):
+        from bundles.azure.az_cli import AzCliTool
+        tool = AzCliTool()
+        (sandbox / "a.ps1").write_text("AAA", encoding="utf-8")
+        (sandbox / "b.ps1").write_text("BBB", encoding="utf-8")
+        fp_ab = tool.review_fingerprint({"args": ["x", "@a.ps1", "@b.ps1"]})
+        fp_ba = tool.review_fingerprint({"args": ["x", "@b.ps1", "@a.ps1"]})
+        assert fp_ab == fp_ba and fp_ab is not None
+
+    def test_fingerprint_resolved_via_registry(self, sandbox):
+        # The orchestrator reaches the hook generically through the registry.
+        from app.agent.risk_review import review_fingerprint
+        (sandbox / "s.ps1").write_text("x", encoding="utf-8")
+        assert review_fingerprint("az_cli", {"args": ["vm", "--scripts", "@s.ps1"]}) is not None
+
+    # ── surface split: human=content, judge/DB=pointer ──────────────────────
+    def test_judge_render_shows_pointer_not_content(self, sandbox):
+        from app.agent.risk_review import render_command
+        (sandbox / "s.ps1").write_text("SECRET-SCRIPT-BODY", encoding="utf-8")
+        out = render_command("az_cli", {"args": ["vm", "run-command", "invoke", "--scripts", "@s.ps1"]})
+        assert "SECRET-SCRIPT-BODY" not in out   # judge never sees file content
+        assert "@s.ps1" in out                   # only the pointer
+
+    def test_human_render_shows_content(self, sandbox):
+        from app.agent.risk_review import render_for_human
+        (sandbox / "s.ps1").write_text("SECRET-SCRIPT-BODY", encoding="utf-8")
+        text, _trunc = render_for_human(
+            "az_cli", {"args": ["vm", "run-command", "invoke", "--scripts", "@s.ps1"]}
+        )
+        assert "SECRET-SCRIPT-BODY" in text       # the human (the gate) sees what runs
+
+    def test_judge_render_budget_below_human_window(self):
+        # Drift guard: the judge default budget must stay below the content
+        # threshold and the human window above it, or the surface split inverts.
+        from bundles.azure.az_cli import _JUDGE_RENDER_MAX
+        from app.agent.risk_review import _HUMAN_COMMAND_WINDOW
+        assert 16384 <= _JUDGE_RENDER_MAX < _HUMAN_COMMAND_WINDOW

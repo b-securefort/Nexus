@@ -5,23 +5,16 @@ GET requests are read-only (no approval). Mutations require approval.
 
 import json
 import logging
-import re
 from pathlib import Path
 
 from app.auth.models import User
-from bundles.azure._az_base import AzureToolBase, _find_az
+from bundles.azure._az_base import AzureToolBase, _find_az, resolve_output_file
 from bundles.azure.az_login_check import require_az_login
 
 logger = logging.getLogger(__name__)
 
 # HTTP methods that are read-only
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-
-# Sandbox for body_file resolution — same boundary as generate_file/read_file.
-_OUTPUT_DIR = Path("output")
-
-# Path-input guard for body_file (mirrors generate_file/read_file).
-_DANGEROUS_PATH_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
 
 # Maximum body payload size accepted from body_file (bytes). Larger payloads
 # are almost always model error rather than a legitimate ARM request shape.
@@ -112,34 +105,13 @@ class AzRestApiTool(AzureToolBase):
     def _resolve_body_file(body_file: str) -> tuple[Path | None, str | None]:
         """Resolve a body_file argument to an absolute path under output/.
 
-        Returns (resolved_path, None) on success or (None, error_message) on
-        any guard failure. Same defence-in-depth as generate_file/read_file:
-        regex on the raw input then Path.resolve().relative_to(sandbox).
+        Thin wrapper over the shared `resolve_output_file` sandbox guard
+        (DESIGN.md §5 2026-06-15) with the body-size cap applied. Returns
+        (resolved_path, None) on success or (None, error_message) on failure.
         """
-        if not isinstance(body_file, str) or not body_file:
-            return None, "Error: body_file must be a non-empty string path under output/"
-        if _DANGEROUS_PATH_PATTERNS.search(body_file):
-            return None, "Error: body_file contains path traversal or special characters."
-        target = (_OUTPUT_DIR / body_file).resolve()
-        sandbox = _OUTPUT_DIR.resolve()
-        try:
-            target.relative_to(sandbox)
-        except ValueError:
-            return None, "Error: body_file resolves outside the output/ sandbox."
-        if not target.exists():
-            return None, f"Error: body_file not found: output/{body_file}"
-        if not target.is_file():
-            return None, f"Error: body_file is not a regular file: output/{body_file}"
-        try:
-            size = target.stat().st_size
-        except OSError as e:
-            return None, f"Error: cannot stat body_file: {e}"
-        if size > _MAX_BODY_BYTES:
-            return None, (
-                f"Error: body_file too large ({size} bytes, max {_MAX_BODY_BYTES}). "
-                "Split the request or use a deployment template instead."
-            )
-        return target, None
+        return resolve_output_file(
+            body_file, max_bytes=_MAX_BODY_BYTES, label="body_file",
+        )
 
     # ── Risk-review hooks (DESIGN.md §5 2026-06-12) ──────────────────────────
     # Duck-typed, read by risk_review via the registry — core never imports this

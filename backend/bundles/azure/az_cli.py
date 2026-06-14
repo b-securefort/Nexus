@@ -2,9 +2,10 @@
 Azure CLI tool — runs az commands with user approval.
 """
 
+import hashlib
 import logging
 import re
-from typing import Generator
+from typing import Generator, Iterator
 
 from app.auth.models import User
 from app.tools.base import (
@@ -13,7 +14,7 @@ from app.tools.base import (
     consume_stream,
     stream_subprocess,
 )
-from bundles.azure._az_base import _az_env, _find_az
+from bundles.azure._az_base import _az_env, _find_az, resolve_output_file
 from bundles.azure.az_login_check import require_az_login, clear_login_cache
 
 logger = logging.getLogger(__name__)
@@ -207,6 +208,89 @@ def _is_blocked(az_args: list[str]) -> str | None:
     )
 
 
+# az's `@file` convention loads an argument value from disk at execution time
+# (`--scripts @output/x.ps1`). Any such path must resolve inside the output/
+# sandbox — otherwise az would read an arbitrary server file (e.g. backend/.env)
+# and forward it to remote compute. We resolve every @-token against the sandbox,
+# hard-reject escapes, and rewrite the survivor to its absolute path so az and the
+# risk reviewer read the same bytes (DESIGN.md §5 2026-06-15).
+_MAX_AT_FILE_BYTES = 1_048_576
+
+# `--query`/`-q` values are carved out: JMESPath uses a leading `@` for the
+# current node (`--query "@.name"`), which is not a file reference.
+_QUERY_FLAGS = frozenset({"--query", "-q"})
+
+# Render budget that separates the judge LLM (small/finite token budget) from the
+# human approval card / download (large or unbounded). The judge and persisted
+# history get the @file *pointer*; only the human sees resolved @file *content*,
+# so file-borne secrets reach neither the review LLM nor the DB (#16 surface
+# split, §5 2026-06-15). A test guards this against the risk_review windows.
+_JUDGE_RENDER_MAX = 32768
+
+
+def _split_at_token(token: str) -> tuple[str, str] | None:
+    """If `token` carries an `@file` reference, return ``(prefix, relpath)`` where
+    `prefix` is everything up to and including the `@` — so rewriting the token to
+    its resolved path is ``prefix + abspath``. Handles the standalone form
+    ``@path`` (prefix ``@``) and the inline-flag form ``--flag=@path`` (prefix
+    ``--flag=@``). A bare ``@`` (empty remainder) is JMESPath current-node, not a
+    file, so returns None."""
+    if token.startswith("@"):
+        rel = token[1:]
+        return ("@", rel) if rel else None
+    if token.startswith("-") and "=" in token:
+        flag, _, val = token.partition("=")
+        if val.startswith("@"):
+            rel = val[1:]
+            return (f"{flag}=@", rel) if rel else None
+    return None
+
+
+def _iter_at_files(az_args: list[str]) -> Iterator[tuple[int, str, str]]:
+    """Yield ``(index, prefix, relpath)`` for each `@file` arg, skipping
+    ``--query``/``-q`` values (JMESPath owns a leading ``@``). Detection only —
+    no sandbox resolution. Shared by the execute-path rewrite, the fingerprint,
+    and the human-card content render so all three agree on what an @file is."""
+    prev_is_query = False
+    for i, token in enumerate(az_args):
+        s = str(token)
+        flag = s.partition("=")[0].lower()
+        is_query_value = prev_is_query or (flag in _QUERY_FLAGS and "=" in s)
+        prev_is_query = s.lower() in _QUERY_FLAGS
+        if is_query_value:
+            continue
+        split = _split_at_token(s)
+        if split is None:
+            continue
+        prefix, rel = split
+        # Accept both the natural az cwd-relative form (`@output/x.ps1`, since the
+        # backend process cwd is backend/) and the output-relative form
+        # (`@x.ps1`, matching body_file): strip a single leading `output/` so both
+        # resolve to the same sandbox file instead of `output/output/x.ps1`.
+        if rel.replace("\\", "/").startswith("output/"):
+            rel = rel[len("output/"):]
+        yield i, prefix, rel
+
+
+def _resolve_and_rewrite_at_files(
+    az_args: list[str],
+) -> tuple[list[str] | None, list, str | None]:
+    """Resolve every `@file` against the output/ sandbox and rewrite it to an
+    absolute path. Returns ``(rewritten_args, resolved_paths, None)`` on success
+    or ``(None, [], error)`` if any `@file` escapes the sandbox or is unreadable."""
+    out = [str(a) for a in az_args]
+    resolved: list = []
+    for i, prefix, rel in _iter_at_files(az_args):
+        target, err = resolve_output_file(
+            rel, max_bytes=_MAX_AT_FILE_BYTES, label="@file argument",
+        )
+        if err or target is None:
+            return None, [], err
+        out[i] = f"{prefix}{target}"
+        resolved.append(target)
+    return out, resolved, None
+
+
 class AzCliTool(Tool):
     name = "az_cli"
     config_flag = "TOOL_AZ_CLI_ENABLED"
@@ -262,17 +346,93 @@ class AzCliTool(Tool):
             return "safe"
         return "caution"
 
+    def review_fingerprint(self, func_args: dict) -> str | None:
+        """sha256 over the resolved bytes of every `@file` arg — closes the
+        approve→execute TOCTOU for az_cli (hardening #20, §5 2026-06-15). The
+        orchestrator captures this at approval time and re-checks immediately
+        before execution, aborting if a referenced file changed in between.
+
+        Returns None when the command has no `@file` (plain az_cli needs no
+        re-check) or when a referenced file can't be resolved (the execute-path
+        hard-reject is the guard there). Order-independent (paths sorted) so a
+        multi-`@file` command fingerprints stably; bytes are length-delimited so
+        concatenation is unambiguous. Never raises."""
+        az_args = func_args.get("args")
+        if not isinstance(az_args, list):
+            return None
+        paths: list = []
+        for _, _, rel in _iter_at_files(az_args):
+            target, err = resolve_output_file(
+                rel, max_bytes=_MAX_AT_FILE_BYTES, label="@file argument",
+            )
+            if err or target is None:
+                return None
+            paths.append(target)
+        if not paths:
+            return None
+        h = hashlib.sha256()
+        for target in sorted(paths, key=str):
+            try:
+                h.update(target.read_bytes())
+                h.update(b"\x00")
+            except OSError:
+                return None
+        return h.hexdigest()
+
+    def _render_at_file_content(
+        self, az_args: list[str], max_bytes: int | None
+    ) -> tuple[list[str], bool]:
+        """Return ``(sections, truncated)`` inlining each `@file`'s resolved
+        content for the human approval card. Unresolvable files render as a
+        marker (the execute path is the real guard, so this never errors out)."""
+        sections: list[str] = []
+        truncated = False
+        remaining = max_bytes
+        for _, _, rel in _iter_at_files(az_args):
+            target, err = resolve_output_file(
+                rel, max_bytes=_MAX_AT_FILE_BYTES, label="@file argument",
+            )
+            if err or target is None:
+                sections.append(f"--- @{rel} (unreadable) ---")
+                continue
+            try:
+                data = target.read_bytes()
+            except OSError as e:
+                sections.append(f"--- @{rel} (read error: {e}) ---")
+                continue
+            body = data.decode("utf-8", errors="replace")
+            if remaining is not None and len(body) > remaining:
+                body = body[:remaining] + f"\n[truncated: {len(data)} bytes total]"
+                truncated = True
+                remaining = 0
+            elif remaining is not None:
+                remaining -= len(body)
+            sections.append(f"--- @{rel} ({len(data)} bytes) ---\n{body}")
+        return sections, truncated
+
     def render_for_review(
         self, func_args: dict, max_bytes: int | None = None
     ) -> tuple[str, bool]:
         """Render the command for the reviewer / card / download with secret
-        args masked (§5 2026-06-13). `max_bytes` is accepted for signature
-        parity with the resolver but az command lines are short, so it never
-        truncates. Display-only — execution reads `func_args` directly."""
+        args masked (§5 2026-06-13). Display-only — execution reads `func_args`.
+
+        Surface split for `@file` args (§5 2026-06-15): the judge LLM and
+        persisted history (small/finite `max_bytes`) get the `@path` *pointer*
+        so file-borne secrets never reach the review LLM or the DB; the human
+        approval card and download (large/unbounded `max_bytes`) get the resolved
+        `@file` *content* inlined, because the human is the gate and must see
+        what runs."""
         az_args = func_args.get("args")
         if not isinstance(az_args, list):
             return "az (no args)", False
-        return "az " + " ".join(_mask_args(az_args)), False
+        base = "az " + " ".join(_mask_args(az_args))
+        show_content = max_bytes is None or max_bytes > _JUDGE_RENDER_MAX
+        if not show_content:
+            return base, False
+        sections, truncated = self._render_at_file_content(az_args, max_bytes)
+        if not sections:
+            return base, False
+        return base + "\n\n" + "\n\n".join(sections), truncated
 
     def mask_args(self, func_args: dict) -> dict:
         """Return func_args with secret arg values masked, for persistence of
@@ -350,6 +510,17 @@ class AzCliTool(Tool):
             if injection_err:
                 yield injection_err
                 return injection_err
+
+        # Resolve any `@file` args against the output/ sandbox and rewrite them to
+        # absolute paths so az and the risk reviewer read the same bytes; an @file
+        # that escapes the sandbox or is unreadable is a hard reject (§5
+        # 2026-06-15). Runs after check_shell_injection (which validated the raw,
+        # model-supplied tokens) — the rewritten absolute paths are system-built.
+        rewritten, _resolved, at_err = _resolve_and_rewrite_at_files(az_args)
+        if at_err:
+            yield at_err
+            return at_err
+        az_args = rewritten
 
         az_path = _find_az()
         if not az_path:

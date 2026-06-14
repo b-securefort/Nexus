@@ -102,9 +102,19 @@ Status legend: ☐ open · ☑ done · ⊘ demoted
   2026-06-14.
 - ☐ **#23** No structured audit log of executed mutations — no immutable record of
   the *resolved* command/body that ran, who approved, and outcome.
-- ☐ **@file indirection** (spun out of #12): `az vm run-command invoke --scripts
-  @output/x.ps1` — reviewer/card see `@file`, not content. Same render-resolution
-  gap as #13's body_file; fold into the render_for_review resolution.
+- ☑ **@file indirection** (spun out of #12): `az vm run-command invoke --scripts
+  @output/x.ps1` — az loads the arg value from disk at execution. **Re-scoped during
+  design (2026-06-15) from "render gap" to sandbox-boundary fix:** `@file` in az_cli
+  args had NO path guard (`check_shell_injection` blocks only `` ` ``/NUL/%/&), so
+  `@../../backend/.env` was an unsandboxed read + exfil primitive, not just a display
+  gap. Fixed: hard-reject in `execute_streaming` any `@`-token resolving outside
+  `output/` (shared `resolve_output_file` lifted to `_az_base`), rewrite survivor to
+  abs path (az == reviewer bytes, cwd-proof), `--query`/`-q` carve-out (JMESPath owns
+  `@`), accept both `@x.ps1` and `@output/x.ps1`. Adopted #20 `review_fingerprint`
+  (sha256 over resolved bytes, order-independent) for the approve→execute TOCTOU.
+  Surface split (#16): human card sees resolved content, judge LLM + `tool_calls_json`
+  see pointer+fingerprint only. Rejected inlining content (reintroduces large-payload
+  escaping corruption + cmdline limits). DONE 2026-06-15 (§5 2026-06-15).
 
 ## Functional gaps
 

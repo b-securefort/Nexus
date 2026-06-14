@@ -13,9 +13,11 @@ explicitly by the az tool modules that subclass `AzureToolBase`.
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from app.tools.base import (
     SUBPROCESS_FLAGS,
@@ -26,6 +28,51 @@ from app.tools.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Shared output/ sandbox resolver ─────────────────────────────────────────────
+# Both az_rest (`body_file`) and az_cli (`@file` args) resolve a user-supplied
+# path against the same boundary as generate_file/read_file. Lifted here so the
+# guard lives in one place (DESIGN.md §5 2026-06-15). `_OUTPUT_DIR` is read at
+# call time so tests can monkeypatch `_az_base._OUTPUT_DIR`.
+_OUTPUT_DIR = Path("output")
+_DANGEROUS_PATH_PATTERNS = re.compile(r"\.\.|[<>:\"|?*\x00-\x1f]|^/|^\\")
+
+
+def resolve_output_file(
+    raw_path: str, *, max_bytes: int | None = None, label: str = "path",
+) -> tuple[Path | None, str | None]:
+    """Resolve a user-supplied relative path to an absolute path under output/.
+
+    Defence-in-depth mirroring generate_file/read_file: a regex on the raw input
+    (rejects ``..``, absolute paths, shell-special chars) followed by the
+    definitive ``Path.resolve().relative_to(sandbox)`` containment check.
+    ``max_bytes`` (when set) caps the file size. Returns ``(resolved_path, None)``
+    on success or ``(None, error)`` on any guard failure; ``label`` names the
+    offending argument in the error text. Never raises.
+    """
+    if not isinstance(raw_path, str) or not raw_path:
+        return None, f"Error: {label} must be a non-empty path under output/"
+    if _DANGEROUS_PATH_PATTERNS.search(raw_path):
+        return None, f"Error: {label} contains path traversal or special characters."
+    target = (_OUTPUT_DIR / raw_path).resolve()
+    sandbox = _OUTPUT_DIR.resolve()
+    try:
+        target.relative_to(sandbox)
+    except ValueError:
+        return None, f"Error: {label} resolves outside the output/ sandbox."
+    if not target.exists():
+        return None, f"Error: {label} not found: output/{raw_path}"
+    if not target.is_file():
+        return None, f"Error: {label} is not a regular file: output/{raw_path}"
+    if max_bytes is not None:
+        try:
+            size = target.stat().st_size
+        except OSError as e:
+            return None, f"Error: cannot stat {label}: {e}"
+        if size > max_bytes:
+            return None, f"Error: {label} too large ({size} bytes, max {max_bytes})."
+    return target, None
 
 
 _az_executable_path: str | None = None

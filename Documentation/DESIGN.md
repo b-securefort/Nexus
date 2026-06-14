@@ -1008,6 +1008,26 @@ inline — it must decompose into discrete `az_cli` calls — accepted because t
 is exactly what restores per-command review, masking, and user attribution.
 Closes hardening backlog #19.
 
+### 2026-06-15 — az_cli `@file` args are sandbox-bounded, fingerprinted reads
+
+az's `@file` convention lets any `az_cli` argument load its value from disk at
+execution time (`--scripts @output/x.ps1`), so we hard-reject in
+`execute_streaming` any `@`-token that resolves outside `output/` (reusing
+az_rest's `_resolve_body_file`, lifted to `_az_base`), rewrite the survivor to
+its absolute path so az and the reviewer read the same bytes, and carve out
+`--query`/`-q` (JMESPath owns `@`). az_cli gains a `review_fingerprint` hook
+(sha256 over all resolved `@file` bytes) so the #20 pre-execute re-check aborts
+on a swap between approval and run. Resolved content is shown only to the human
+approval card; the judge LLM and stored `tool_calls_json` get the
+pointer + fingerprint, never the bytes — extending the #16 surface split so
+file-borne secrets reach neither the judge nor the DB.
+**Trade-off**: the human card and judge now review *different* renders (content
+vs. pointer), and a post-approval file swap aborts the turn rather than running
+reviewed-but-stale bytes; we rejected inlining the content into the command
+(which would eliminate the TOCTOU outright) because it reintroduces the
+large-payload escaping corruption and command-line-length limits that
+`@file`/`body_file` exist to avoid. Closes hardening backlog "@file indirection".
+
 ---
 
 ## 6. Operations

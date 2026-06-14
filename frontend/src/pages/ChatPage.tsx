@@ -3,7 +3,7 @@ import { ConversationList } from "../components/ConversationList";
 import { SkillPicker } from "../components/SkillPicker";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { APP_ICON } from "../branding";
-import { Settings, PanelLeftClose, PanelLeft, Plus, Brain } from "lucide-react";
+import { Settings, PanelLeftClose, PanelLeft, Plus, Brain, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAppStore } from "../store/useAppStore";
 
@@ -84,6 +84,13 @@ export function ChatPage() {
             >
               <Brain className="w-4 h-4" />
               Agent Learnings
+            </Link>
+            <Link
+              to="/admin/users"
+              className="flex items-center gap-2 text-sm text-base-500 hover:text-base-300 transition-colors"
+            >
+              <Wallet className="w-4 h-4" />
+              Usage Caps
             </Link>
           </div>
         </div>

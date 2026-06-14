@@ -22,6 +22,13 @@ os.environ["ENTRA_API_AUDIENCE"] = "api://test-client"
 # which overrides this via monkeypatch as needed.
 os.environ["NEXUS_PHASE"] = "3"
 
+# Pin spend-cap config so tests don't inherit the developer's real .env (which
+# may set a tiny cap for local "watch it block" testing). Individual tests
+# monkeypatch these as needed (enforcement, disabled-endpoint).
+os.environ["USAGE_CAP_ENABLED"] = "true"
+os.environ["USAGE_CAP_ENFORCED"] = "false"
+os.environ["USAGE_WEEKLY_CAP_USD_DEFAULT"] = "20.0"
+
 
 @pytest.fixture(autouse=True)
 def reset_circuit_breaker():

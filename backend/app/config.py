@@ -99,6 +99,36 @@ class Settings(BaseSettings):
             self.AZURE_OPENAI_DEPLOYMENT, self.AZURE_OPENAI_CONTEXT_WINDOW_TOKENS
         )
 
+    # ── Per-user weekly spend cap (DESIGN.md §5 2026-06-14) ──────────────────
+    # Gates the spend-ledger READ path (the "budget remaining" indicator + the
+    # /api/usage/me endpoint). Enforcement (the pre-flight + per-iteration gate)
+    # is a separate, later concern and not controlled by this flag.
+    USAGE_CAP_ENABLED: bool = True
+    # Hard enforcement: when true (and USAGE_CAP_ENABLED), a user over their
+    # weekly cap is blocked pre-flight and a turn that crosses the cap mid-loop
+    # is stopped gracefully. Default false so showing usage (soft rollout) is
+    # decoupled from blocking — flip this on deliberately once caps are tuned.
+    USAGE_CAP_ENFORCED: bool = False
+    # Default weekly cap (USD) when a user has no per-user override
+    # (users.credit_cap_usd) and no matching role cap.
+    USAGE_WEEKLY_CAP_USD_DEFAULT: float = 20.0
+    # Optional per-Entra-role weekly caps as JSON {role: usd}. A user with
+    # multiple roles gets the highest matching cap. A per-user value wins over
+    # any role cap. Empty = every role uses the default.
+    USAGE_ROLE_CAPS_JSON: str = ""
+    # Price table: USD per 1,000,000 tokens per deployment, as JSON
+    #   {"<deployment>": {"prompt": X, "cached": Y, "completion": Z}}
+    # Tokens+deployment are stored in the ledger; dollars are derived from this
+    # at read time so a price or deployment-tier change never restates history.
+    # `cached` is the cheaper rate for the cached subset of prompt tokens. This
+    # JSON is layered over the built-in defaults in app/agent/spend.py.
+    USAGE_PRICE_TABLE_JSON: str = ""
+    # Ledger retention — the `_usage_ledger_prune` sweeper drops rows older than
+    # this many days (§6). The weekly windows only ever look back two weeks, so
+    # the retention is for reporting, not the cap math.
+    USAGE_LEDGER_RETENTION_DAYS: int = 90
+    USAGE_LEDGER_PRUNE_INTERVAL_SECONDS: int = 86400
+
     # Entra ID
     ENTRA_TENANT_ID: str = ""
     ENTRA_API_CLIENT_ID: str = ""

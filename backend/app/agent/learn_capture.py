@@ -33,6 +33,7 @@ import logging
 import re
 from typing import Optional
 
+from app.agent.usage_ledger import record_usage
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,7 @@ def extract_user_correction(
             max_completion_tokens=300,
             timeout=timeout_seconds,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         raw = resp.choices[0].message.content or "{}"
         parsed = json.loads(raw)
     except Exception as e:
@@ -249,6 +251,7 @@ def detect_supersession(
             max_completion_tokens=50,
             timeout=timeout_seconds,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         parsed = json.loads(resp.choices[0].message.content or "{}")
         return bool(parsed.get("supersedes", False))
     except Exception as e:

@@ -80,6 +80,23 @@ def get_conversation_id() -> int | None:
     return _current_conversation_id.get()
 
 
+# Per-request user identity, set alongside the conversation id at the top of a
+# chat turn. Lets a completions call deep in the stack (aux summaries, judge,
+# rerank) attribute its token usage to the right user for the spend ledger
+# (DESIGN.md §5 2026-06-14) without threading user_oid through every signature.
+_current_user_oid: ContextVar[str | None] = ContextVar("user_oid", default=None)
+
+
+def set_user_oid(user_oid: str | None) -> None:
+    """Store the active user's oid for the current request context so a
+    completions call anywhere in the turn can attribute its usage to them."""
+    _current_user_oid.set(user_oid)
+
+
+def get_user_oid() -> str | None:
+    return _current_user_oid.get()
+
+
 _process_registry_lock = threading.Lock()
 _process_registry: dict[int, set[subprocess.Popen]] = {}
 

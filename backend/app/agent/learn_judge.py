@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from openai import AzureOpenAI
 
+from app.agent.usage_ledger import record_usage
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,7 @@ def judge_proposed_learning(
             max_completion_tokens=300,
             timeout=timeout_seconds,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         raw = resp.choices[0].message.content or "{}"
         parsed = json.loads(raw)
         verdict = JudgeVerdict(
@@ -252,6 +254,7 @@ def rephrase_learning(
             max_completion_tokens=200,
             timeout=timeout_seconds,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         candidate = (resp.choices[0].message.content or "").strip()
         # Strip surrounding quotes the model sometimes adds despite the prompt.
         if len(candidate) >= 2 and candidate[0] in '"\'' and candidate[-1] == candidate[0]:
@@ -344,6 +347,7 @@ def synthesize_learning(
             max_completion_tokens=120,
             timeout=timeout_seconds,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         out = (resp.choices[0].message.content or "").strip()
         # Strip surrounding quotes the model sometimes adds despite the prompt.
         if len(out) >= 2 and out[0] in "\"'" and out[-1] == out[0]:

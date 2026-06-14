@@ -108,6 +108,19 @@ export interface ContextUsage {
   segments?: ContextUsageSegment[];
 }
 
+// Per-user weekly spend cap status (DESIGN.md §5 2026-06-14). Distinct from
+// ContextUsage: this is *spend* against a weekly budget (a running cost), not
+// context-window *occupancy*. `enabled: false` means the feature is off.
+export interface WeeklyBudget {
+  enabled: boolean;
+  cap_usd?: number;
+  spent_this_week_usd?: number;
+  carryover_debt_usd?: number;
+  remaining_usd?: number;
+  remaining_fraction?: number;
+  week_resets_at?: string;
+}
+
 // SSE event types
 export type SSEEvent =
   | { type: "token"; data: { text: string } }

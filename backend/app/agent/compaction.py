@@ -39,6 +39,7 @@ from openai import AzureOpenAI
 from sqlmodel import Session, select
 
 from app.agent.circuit_breaker import check as cb_check, record_failure as cb_failure, record_success as cb_success
+from app.agent.usage_ledger import record_usage
 from app.config import get_settings
 from app.db.models import Conversation, Message
 
@@ -141,6 +142,7 @@ def _summarize_long_paste(
             timeout=float(settings.AOAI_TIMEOUT_SECONDS),
         )
         cb_success()
+        record_usage(getattr(resp, "usage", None), deployment)  # aux spend → ledger (§5 2026-06-14)
     except Exception:
         cb_failure()
         raise
@@ -192,6 +194,7 @@ def _describe_image(
             timeout=float(settings.AOAI_TIMEOUT_SECONDS),
         )
         cb_success()
+        record_usage(getattr(resp, "usage", None), deployment)  # aux spend → ledger (§5 2026-06-14)
     except Exception:
         cb_failure()
         raise
@@ -532,6 +535,7 @@ def _summarize_scaffold(
             timeout=float(settings.AOAI_TIMEOUT_SECONDS),
         )
         cb_success()
+        record_usage(getattr(resp, "usage", None), deployment)  # aux spend → ledger (§5 2026-06-14)
     except Exception:
         cb_failure()
         raise

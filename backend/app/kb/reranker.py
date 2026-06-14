@@ -32,6 +32,7 @@ from app.agent.circuit_breaker import (
     record_failure as cb_record_failure,
     record_success as cb_record_success,
 )
+from app.agent.usage_ledger import record_usage
 from app.config import get_settings
 
 if TYPE_CHECKING:
@@ -171,6 +172,7 @@ def rerank_hits(query: str, hits: list["SearchHit"]) -> list["SearchHit"]:
             response_format={"type": "json_object"},
         )
         cb_record_success()
+        record_usage(getattr(resp, "usage", None), deployment)  # aux spend → ledger (§5 2026-06-14)
     except CircuitOpenError:
         logger.info("KB rerank skipped: AOAI circuit breaker open — using RRF order")
         return hits

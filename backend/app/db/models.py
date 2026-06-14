@@ -21,6 +21,10 @@ class UserRecord(SQLModel, table=True):
     display_name: str = Field(nullable=False)
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     last_seen_at: datetime = Field(default_factory=_utcnow, nullable=False)
+    # Per-user weekly spend cap in USD (DESIGN.md §5 2026-06-14). NULL means
+    # "use the Entra-role default"; a set value overrides the role default for
+    # this individual user. Set by the architect-gated admin API.
+    credit_cap_usd: Optional[float] = Field(default=None)
 
 
 class Conversation(SQLModel, table=True):
@@ -188,6 +192,39 @@ class AgentLearning(SQLModel, table=True):
     last_validated_at: Optional[datetime] = Field(default=None)
     last_retrieved_at: Optional[datetime] = Field(default=None)
     archived_at: Optional[datetime] = Field(default=None)
+
+
+class UsageEvent(SQLModel, table=True):
+    """Append-only ledger of one LLM completion's token usage (DESIGN.md §5 2026-06-14).
+
+    One row per Azure OpenAI completions call — the main agent loop AND every
+    auxiliary call (compaction, judge, rephrase, risk review, rerank) — so a
+    user's true per-turn spend is durable and attributable. Per-user weekly spend
+    is a windowed `SUM` over this table; dollars are derived at read time from a
+    config price table keyed by `deployment`, never stored, so a price change or a
+    deployment-tier swap doesn't strand history (the embed_model lesson, §5
+    2026-05-15). Pruned past the reporting window by `_usage_ledger_prune`.
+
+    Recording is the only concern here; the cap gate reads these rows elsewhere.
+    Like `kb_chunks`, the table itself is created by `SQLModel.metadata.create_all`
+    — no lightweight migration needed for a brand-new table.
+    """
+    __tablename__ = "usage_events"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_oid: str = Field(nullable=False, index=True)
+    conversation_id: Optional[int] = Field(default=None, index=True)
+    deployment: str = Field(nullable=False)  # resolves to a per-tier price at read time
+    prompt_tokens: int = Field(default=0, nullable=False)
+    # cached_tokens is the subset of prompt_tokens served from the prompt cache
+    # (billed at the cheaper cached rate) — kept separate so the price table can
+    # weight it independently of fresh prompt tokens.
+    cached_tokens: int = Field(default=0, nullable=False)
+    completion_tokens: int = Field(default=0, nullable=False)
+    # Indexed: the windowed spend SUM (WHERE created_at >= week_start) and the
+    # prune sweeper both filter on this column.
+    created_at: datetime = Field(default_factory=_utcnow, nullable=False, index=True)
 
 
 class PendingQuestion(SQLModel, table=True):

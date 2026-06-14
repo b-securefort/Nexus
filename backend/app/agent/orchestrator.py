@@ -61,6 +61,7 @@ from app.tools.base import (
     set_user_oid,
 )
 from app.agent.usage_ledger import record_usage
+from app.agent.spend import check_over_cap
 from app.tools.bundle import (
     bundle_context_prompts,
     bundle_prompt_fragments,
@@ -1741,6 +1742,19 @@ async def handle_chat(
     )
     yield sse_message_saved(user_msg.id, "user")
 
+    # 1a. Pre-flight spend cap (DESIGN.md §5 2026-06-14). When enforcement is on
+    # and the user is already over their weekly cap, block before any LLM call.
+    _over = check_over_cap(user.oid, user.roles or [])
+    if _over is not None:
+        _reset = _over.get("week_resets_at", "")
+        _msg = (
+            "You've reached your weekly usage cap, so I can't start this turn. "
+            f"Your budget resets at {_reset}, or an admin can raise your cap."
+        )
+        yield sse_error(_msg)
+        yield sse_done(conversation.id)
+        return
+
     # 2. Build request
     skill = _skill_from_snapshot(conversation.skill_snapshot_json)
     # Propagate the active skill slug into the tool execution context so tools
@@ -1827,6 +1841,10 @@ async def handle_chat(
     # narrating without acting.
     narration_nudges_used: int = 0
 
+    # Set to the budget breakdown when the spend cap is crossed mid-turn; the
+    # loop breaks and the post-loop wrap-up stops the turn gracefully (§5 2026-06-14).
+    budget_stop: dict | None = None
+
     # Context-usage gauge payload. Computed at turn END over the resting context
     # the NEXT turn will load (this turn's saved messages, with compaction
     # applied) so the gauge reflects post-turn occupancy — recent tool outputs
@@ -1845,6 +1863,15 @@ async def handle_chat(
 
     while iteration < MAX_TOOL_ITERATIONS:
         iteration += 1
+
+        # Per-iteration spend cap (DESIGN.md §5 2026-06-14). Re-check from the
+        # 2nd iteration on (the 1st was covered pre-flight); in-turn spend is
+        # already in the ledger because record_usage commits per call. Crossing
+        # the cap breaks into the graceful budget wrap-up after the loop.
+        if iteration > 1:
+            budget_stop = check_over_cap(user.oid, user.roles or [])
+            if budget_stop is not None:
+                break
 
         # Refresh the lease heartbeat. Throttled to the configured interval
         # so we don't slam SQLite with one write per loop iteration on
@@ -2672,6 +2699,37 @@ async def handle_chat(
             logger.error("Agent loop error: %s", str(e), exc_info=True)
             yield sse_error(str(e))
             return
+
+    # Mid-turn spend cap reached (DESIGN.md §5 2026-06-14). Stop gracefully but
+    # WITHOUT another LLM call — spending more while over budget is self-defeating.
+    # Persist a fixed note + any pending render and reuse the iteration_limit
+    # "Continue" affordance so the user can resume after the cap resets.
+    if budget_stop is not None:
+        logger.info(
+            "Spend cap reached mid-turn for conversation %s — stopping", conversation.id
+        )
+        _reset = budget_stop.get("week_resets_at", "")
+        note = (
+            "You've reached your weekly usage cap mid-task, so I've stopped here. "
+            "Everything completed so far is saved. Your budget resets at "
+            f"{_reset} — say 'continue' afterward, or ask an admin to raise your cap."
+        )
+        yield sse_token(note)
+        attachments_json = None
+        if pending_render_attachments:
+            attachments_json = json.dumps(list(pending_render_attachments.values()))
+            pending_render_attachments.clear()
+        assistant_msg = _save_message(
+            session, conversation.id, role="assistant", content=note,
+            attachments_json=attachments_json,
+        )
+        yield sse_message_saved(assistant_msg.id, "assistant")
+        yield sse_iteration_limit(conversation.id, MAX_TOOL_ITERATIONS)
+        yield sse_done(conversation.id, usage=resting_usage)
+        for _work_fn in _deferred_compaction:
+            asyncio.ensure_future(asyncio.to_thread(_work_fn))
+        _deferred_compaction.clear()
+        return
 
     # Exceeded max iterations — graceful wrap-up, not a dead error. The turn's
     # tool results are already persisted; what a hard error loses is (a) the

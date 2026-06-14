@@ -16,6 +16,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolCallCard } from "./ToolCallCard";
 import { ContextUsageIndicator } from "./ContextUsageIndicator";
+import { WeeklyBudgetIndicator } from "./WeeklyBudgetIndicator";
 import type {
   Message,
   ApprovalInfo,
@@ -38,6 +39,8 @@ const SUGGESTIONS = [
 
 export function ChatWindow() {
   const [input, setInput] = useState("");
+  // Bumped after each completed turn to refresh the weekly spend indicator.
+  const [budgetRefresh, setBudgetRefresh] = useState(0);
   // Set when the backend ends a turn via `iteration_limit` (tool budget used
   // up, wrap-up summary persisted). Renders a "Continue" affordance instead
   // of the old dead-end error banner.
@@ -261,6 +264,8 @@ export function ChatWindow() {
           if (d.usage) {
             setContextUsage(d.usage as ContextUsage);
           }
+          // A turn just completed — refresh the weekly spend indicator.
+          setBudgetRefresh((n) => n + 1);
           // Refresh messages from server to get final state
           if (d.conversation_id) {
             setConversationId(d.conversation_id as number);
@@ -635,6 +640,7 @@ export function ChatWindow() {
           <Paperclip className="w-[18px] h-[18px]" />
         </button>
         <div className="ml-auto flex items-center gap-3">
+          <WeeklyBudgetIndicator refreshSignal={budgetRefresh} />
           <ContextUsageIndicator usage={contextUsage} />
           {isStreaming ? (
             <button

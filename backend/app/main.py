@@ -186,6 +186,16 @@ def _apply_lightweight_migrations(engine):
             ))
             conn.commit()
 
+        # Per-user weekly spend cap (DESIGN.md §5 2026-06-14). NULL → role
+        # default; the usage_events ledger table itself is created by
+        # create_all (a brand-new table needs no ALTER).
+        try:
+            conn.execute(sqlalchemy.text("SELECT credit_cap_usd FROM users LIMIT 0"))
+        except Exception:
+            logger.info("Adding credit_cap_usd column to users table")
+            conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN credit_cap_usd REAL"))
+            conn.commit()
+
         # Agent learnings vec0 companion (procedural + semantic memory).
         # The regular `agent_learnings` table is created by SQLModel; the
         # vec0 virtual table holds embeddings used for top-K retrieval.
@@ -522,6 +532,7 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     sync_task = asyncio.create_task(start_periodic_sync())
     approval_task = asyncio.create_task(_approval_sweeper())
+    usage_prune_task = asyncio.create_task(_usage_ledger_prune())
     backup_task = None
     if settings.BACKUP_ENABLED:
         backup_task = asyncio.create_task(_backup_loop())
@@ -531,6 +542,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     sync_task.cancel()
     approval_task.cancel()
+    usage_prune_task.cancel()
     if backup_task:
         backup_task.cancel()
     # Tear down the dedicated tool executor (A2). cancel_futures stops anything
@@ -557,6 +569,42 @@ async def _approval_sweeper():
                 await expire_stale_questions(session)
         except Exception as e:
             logger.error("Approval/question sweeper error: %s", str(e))
+
+
+async def _usage_ledger_prune():
+    """Background task: drop usage_events older than the retention window.
+
+    Keeps the spend ledger bounded (DESIGN.md §5/§6 2026-06-14). The weekly cap
+    math only ever looks back two weeks, so anything past the retention window is
+    reporting-only. Runs regardless of the cap flags, since record_usage writes
+    rows unconditionally. Sleeps first, like _backup_loop.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import delete as sa_delete
+
+    from app.db.engine import get_session
+    from app.db.models import UsageEvent
+
+    settings = get_settings()
+    interval = max(3600, settings.USAGE_LEDGER_PRUNE_INTERVAL_SECONDS)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                days=settings.USAGE_LEDGER_RETENTION_DAYS
+            )
+            with get_session() as session:
+                result = session.execute(
+                    sa_delete(UsageEvent).where(UsageEvent.created_at < cutoff)
+                )
+                session.commit()
+                if result.rowcount:
+                    logger.info(
+                        "Pruned %d usage_events older than %d days",
+                        result.rowcount, settings.USAGE_LEDGER_RETENTION_DAYS,
+                    )
+        except Exception as e:
+            logger.error("Usage ledger prune error: %s", str(e))
 
 
 async def _backup_loop():
@@ -622,12 +670,16 @@ def create_app() -> FastAPI:
     from app.api.skills import router as skills_router
     from app.api.conversations import router as conversations_router
     from app.api.learnings import router as learnings_router
+    from app.api.usage import router as usage_router
+    from app.api.users import router as users_router
 
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(skills_router)
     app.include_router(conversations_router)
     app.include_router(learnings_router)
+    app.include_router(usage_router)
+    app.include_router(users_router)
 
     # Prometheus metrics endpoint — gated to the `architect` Entra App Role.
     # Metrics expose request volumes and tool usage; treat them like other

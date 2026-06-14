@@ -54,6 +54,9 @@
 | **Diagram IR** | The structural, coordinate-free description of a diagram (nested containers, nodes, edges, adornments, with style/layout tokens) consumed by the `diagram_ir` engine; positions are computed by its layout engine, not stated in the IR. | "diagram spec", "DSL", "drawio model" |
 | **Adornment** | A fixed-corner glyph/badge on a container or node (NSG on a subnet, WAF on a gateway) that the layout engine does not place on the grid. | "child icon", "decoration node" |
 | **`align_to` (layout hint)** | An optional Diagram-IR field naming another box whose center a satellite should sit over (a Storage account above the App Service it serves). Applied as a post-placement shift perpendicular to flow, with same-parent de-collision. It is an *author hint*, never inferred from edges — keeping the "positions never come from edges" rule intact. | "anchor", "pin above", "snap-to" |
+| **Usage cap** | A per-user hard ceiling on Azure OpenAI spend over a fixed weekly window, stored as `users.credit_cap_usd` (NULL → Entra-role default), enforced pre-flight and at the top of each agent-loop iteration. | "quota", "rate limit", "credits" |
+| **Usage ledger** | The append-only `usage_events` table — one row per LLM call recording `user_oid`, deployment, and prompt/cached/completion token counts; current-window spend is a `SUM` over it, dollars derived at read time from a config price table. | "usage counter", "billing table", "token log" |
+| **Debt carryover** | The one-week rule that a user's prior-week overspend reduces the current week's available budget (`remaining = cap − last_week_overspend − this_week_spend`); debt-only — surplus never rolls forward. | "rollover", "banked credit" |
 
 ---
 
@@ -72,6 +75,8 @@
 - One **Learning** → one **Tool** (the tool it relates to, or `general`)
 - One **ARM token** → one **User** per request (attached to `User.arm_token`; never stored in DB)
 - One **Approval** → one **Risk assessment** (advisory; the review LLM verdict shown on the card, never a gate)
+- One **User** → one **Usage cap** (weekly; NULL → role default) → many **Usage ledger** rows
+- Current-window spend = `SUM` over a User's **Usage ledger** rows since the week start
 
 ---
 
@@ -97,3 +102,5 @@
 | "tool" vs "tool call" | A **tool** is the registered Python class. A **tool call** is a specific invocation of it by the LLM, represented as JSON in `messages.tool_calls_json`. |
 | "approval" vs "question" | Both pause execution and wait for the user. **Approval** is binary (allow/deny a specific command). **Question** is multi-choice (gather intent before starting work). |
 | "reason" vs risk description | **`reason`** is the *generator's* stated intent, persisted on `pending_approvals` for audit only. The user-facing "what this command does" line on the Approval card is the **Risk assessment** description from the independent reviewer — not `reason`. |
+| "credit" / "AI credit" | The display unit for remaining **Usage cap** budget; spend is stored as tokens+deployment in the **Usage ledger** and converted to a dollar total at read time — there is no stored "credit" quantity. |
+| "usage" (cap vs gauge) | The **Usage cap** bounds *spend* (persisted, dollar-derived). The context gauge (§5 2026-06-06) shows *occupancy* (an unpersisted tiktoken estimate). Different numbers — never conflate. |

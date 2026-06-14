@@ -295,7 +295,7 @@ migration path (see §5 decision log).
 
 | Table | Columns (short) | Who writes | Who reads | Retention |
 |---|---|---|---|---|
-| `users` | oid, email, display_name, last_seen_at | auth middleware | everywhere | forever |
+| `users` | oid, email, display_name, last_seen_at, credit_cap_usd | auth middleware; admin API (`credit_cap_usd`) | everywhere | forever |
 | `conversations` | user_oid, title, skill_id, skill_snapshot_json, summary_text, summary_through_message_id | api/conversations, compaction | orchestrator | until user deletes |
 | `messages` | conversation_id, role, content, tool_calls_json, tool_call_id, attachments_json, text_summary, image_summary | orchestrator, compaction | orchestrator (history + compaction) | until conversation deleted |
 | `pending_approvals` | tool_name, tool_args_json, reason, status | orchestrator | api/chat | expire via sweeper after 10 min |
@@ -306,6 +306,7 @@ migration path (see §5 decision log).
 | **`kb_chunks_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==kb_chunks.id — 1536 dims matches Azure OpenAI `text-embedding-3-small` | reindexer (explicit) | search_kb_hybrid (vector stage) | n/a |
 | **`agent_learnings`** | type (semantic\|procedural), category, tool_name, summary, details, status (provisional\|active\|archived\|rejected), validation_count, failure_count, judge_verdict_json, originating_conversation_id, content_hash, embed_model, last_validated_at, last_retrieved_at | orchestrator success-after-failure path (via `app/agent/learnings.py`) | `retrieve_relevant_learnings` (system-prompt build), `mark_learning_outcome` (post-tool-call) | active forever; archived rows retained for audit |
 | **`agent_learnings_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==agent_learnings.id — same Azure OpenAI embedding deployment as KB | `learnings.reembed_dirty()` (inline after writes + lifespan sweep) | `retrieve_relevant_learnings` (vector stage) | n/a |
+| **`usage_events`** *(spend ledger)* | user_oid, conversation_id, deployment, prompt_tokens, cached_tokens, completion_tokens, created_at — one append-only row per LLM call; per-user spend is a windowed `SUM`, dollars derived at read time from a config price table (tokens+deployment stored, not dollars) | orchestrator (per LLM call, on `done`) | pre-flight cap gate + per-iteration check; admin/reporting API | **prune > 90 days** (sweeper) |
 
 WAL mode is enabled on every new SQLite connection by
 [sqlite_vec_loader.py](../backend/app/db/sqlite_vec_loader.py) so periodic
@@ -964,6 +965,27 @@ The floor's az-specific knowledge (`_AZ_DESTRUCTIVE_TOKENS` / `_AZ_READ_VERBS`, 
 
 Credential material reached three sinks unmasked: secret-bearing args (`--value` / `--password` / `--admin-password` / connection strings) flowed verbatim to the review LLM and the approval card via `render_command`, and credential-read *output* (`keyvault secret show`) was persisted to the `messages` table and replayed to later turns. Two duck-typed Tool hooks fix this with no core→bundle import: `AzCliTool.render_for_review` masks sensitive args (display-only — execution reads `func_args` directly), covering judge LLM + card + download + stored `tool_calls` (via `mask_args` at the `tool_calls_json` write); a new `redact_output` hook, triggered by the same `_CREDENTIAL_READ_PREFIXES` set that drives the ⚠ floor, replaces credential-read results with a marker before they are saved or replayed. The live SSE stream and the current turn's in-memory history keep the real value, so the user receives the secret they asked for and the agent can chain within the turn; only the persisted and judge-facing copies are masked, and future turns rebuild masked history from the DB. **Trade-off**: future turns can't replay a previously-fetched secret (the agent re-fetches, re-approving) — accepted because persisting credentials plaintext is the larger risk; rejected field-level JSON masking (format-dependent on `-o json`) in favour of whole-body redaction, since a credential-read's entire output is the secret.
 
+### 2026-06-14 — Per-user weekly spend cap via an append-only usage ledger
+
+**Extends the 2026-05-18 "token usage piggy-backs on the done event, not persisted"
+decision** — the `usage` object is now also written per LLM call to a new
+`usage_events` ledger (`user_oid, conversation_id, deployment, prompt/cached/completion
+tokens, created_at`), making cumulative per-user spend durable. A hard per-user weekly
+cap (nullable `users.credit_cap_usd`, NULL → Entra-role default from §5 2026-05-17, set
+via an architect-gated `PATCH /api/users/{oid}` mirroring §5 2026-05-20) is enforced
+pre-flight and at the top of each agent-loop iteration; crossing it stops the turn via
+the §5 2026-06-11 graceful-checkpoint path, bounding overspend to one iteration. Remaining
+budget is two windowed SUMs over the ledger — `cap − max(0, last_week_overspend) −
+this_week_spend` — so the fixed weekly period needs no reset job and debt carries exactly
+one week forward; tokens+deployment are stored (not dollars) so a price or deployment-tier
+change doesn't strand history (the §5 2026-05-15 embed_model lesson). A turn-start block
+reuses the existing `error` SSE event with a distinct code — no new event type, per §5
+2026-05-18 / 2026-05-21. **Trade-off**: rejected a mutable counter column (reset race, no
+attribution) and a debit/credit wallet (reintroduces a periodic grant job, banks surplus
+unless clamped); accepted that underspend never rolls forward and multi-week compounding
+debt is unrepresentable — both immaterial because the graceful stop keeps overspend to one
+iteration.
+
 ---
 
 ## 6. Operations
@@ -1012,6 +1034,7 @@ cd frontend && npm test                       # 109 tests
 | `_backup_loop` | Snapshot `app.db` to `app-db-<ts>.db` | `BACKUP_INTERVAL_SECONDS` (default 24 h); off by default |
 | KB reindex (Phase 2) | Diff per file by sha256; chunk + embed + upsert changed files | After each `sync_repo()` + on startup (background) |
 | Agent-learnings reembed | Embed any `agent_learnings` row with `embed_model IS NULL` (after orchestrator writes; also one batch sweep at startup after the legacy-learn.md migration) | Inline after each write (limit=1); batch of 200 at startup |
+| `_usage_ledger_prune` | Delete `usage_events` rows older than the longest reporting window (default 90 days) so the spend ledger doesn't grow unbounded | `USAGE_LEDGER_PRUNE_INTERVAL_SECONDS` (default 24 h) |
 
 ### Health endpoints
 
@@ -1081,6 +1104,14 @@ in-process `threading.Lock` to prevent overlapping runs. If we ever scale
 to multiple workers, we'll need a DB-level advisory lock or to pin reindex
 to worker 0. Logged here so a future change doesn't quietly break
 indexing.
+
+The per-user spend cap (§5 2026-06-14) also leans on this assumption: the
+pre-flight `SUM` + ledger write is only atomic under one process. Multi-worker
+would let two concurrent turns each read "under cap" and both spend past it —
+the same process-local-state gap already flagged for the circuit breaker
+(§5 2026-05-21). A scale-out needs a shared/transactional read-then-write
+(e.g. a SQLite `BEGIN IMMEDIATE` around the gate, or a shared store) or the
+budget leaks per concurrent turn.
 
 ### Logs to watch
 - `Token usage — prompt: N (cached: M, X%), completion: K` — Azure OpenAI cache hit rate per turn

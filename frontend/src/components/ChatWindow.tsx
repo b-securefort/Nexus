@@ -42,6 +42,10 @@ export function ChatWindow() {
   // up, wrap-up summary persisted). Renders a "Continue" affordance instead
   // of the old dead-end error banner.
   const [iterationLimitHit, setIterationLimitHit] = useState(false);
+  // Seconds elapsed while the model reasons before its first visible token.
+  // gpt-5.4 reasons internally (hidden tokens) for several seconds at medium
+  // effort; surfacing an elapsed counter keeps the wait from feeling frozen.
+  const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -144,6 +148,22 @@ export function ChatWindow() {
     // fight each other and briefly read as "not at bottom".
     if (isAtBottomRef.current) scrollToBottom("auto");
   }, [messages, streamingContent, streamingSegments, toolCalls, pendingApproval, scrollToBottom]);
+
+  // The "Thinking…" indicator covers the gap between sending and the first
+  // visible token — which on a reasoning model is mostly the model thinking.
+  const showThinking = isStreaming && streamingSegments.length === 0;
+  useEffect(() => {
+    if (!showThinking) {
+      setThinkingSeconds(0);
+      return;
+    }
+    const start = Date.now();
+    setThinkingSeconds(0);
+    const id = window.setInterval(() => {
+      setThinkingSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [showThinking]);
 
   // Load conversation messages when conversationId changes. Track the
   // previous id so we can distinguish "new conversation just got an id
@@ -336,6 +356,7 @@ export function ChatWindow() {
       textareaRef.current.style.height = "auto";
     }
     setError(null);
+    smoother.cancel();
     setStreamingContent("");
     clearToolCalls();
     clearPendingAttachments();
@@ -392,6 +413,7 @@ export function ChatWindow() {
     if (isStreaming || !conversationId) return;
     setIterationLimitHit(false);
     setError(null);
+    smoother.cancel();
     setStreamingContent("");
     clearToolCalls();
     setIsStreaming(true);
@@ -714,17 +736,23 @@ export function ChatWindow() {
           />
         ))}
 
-        {/* Thinking indicator — fills the gap between sending a prompt and
-            the first token/tool event, so the user sees the request landed. */}
-        {isStreaming && streamingSegments.length === 0 && (
+        {/* Thinking indicator — fills the gap between sending a prompt and the
+            first token/tool event. On a reasoning model this gap is mostly the
+            model thinking, so we label it and count up to show it's alive. */}
+        {showThinking && (
           <div
-            className="flex items-center gap-1.5 py-1 animate-fade-in-up"
+            className="flex items-center gap-2.5 py-1 animate-fade-in-up"
             role="status"
             aria-label="Nexus is thinking"
           >
-            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" />
-            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "160ms" }} />
-            <span className="w-2 h-2 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "320ms" }} />
+            <div className="flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-base-400 animate-typing-dot" />
+              <span className="w-1.5 h-1.5 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "160ms" }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-base-400 animate-typing-dot" style={{ animationDelay: "320ms" }} />
+            </div>
+            <span className="text-sm text-base-400">
+              Thinking{thinkingSeconds >= 1 ? ` ${thinkingSeconds}s` : "…"}
+            </span>
           </div>
         )}
 

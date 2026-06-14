@@ -20,18 +20,56 @@ const WORD_RE = /^\s*\S+/;
 export class StreamSmoother {
   private queue = "";
   private timer: number | null = null;
+  private readonly emit: (text: string) => void;
+  private readonly intervalMs: number;
+  /** Backlog size (chars) that adds one extra word per tick. */
+  private readonly catchupChars: number;
+  /** Hard ceiling on words emitted per tick. Without it, a reply delivered in
+   *  big network-coalesced bursts reveals as multi-word slabs (reads as
+   *  flicker); the cap keeps the reveal even and lets `flush()` on turn-end
+   *  absorb any residual backlog in one go instead. */
+  private readonly maxWordsPerTick: number;
+  /** Fast start: the opening of each turn is revealed immediately (unpaced) up
+   *  to this many characters, then draining switches to paced word-by-word.
+   *  Without it the first sentence — which the backend often delivers as a
+   *  rapid burst of small SSE events — would drip out at the paced rate and
+   *  make the response feel slow to begin. Set 0 to disable (pace from char
+   *  one). Reset per turn in `cancel()`. */
+  private readonly primeChars: number;
+  private primeRemaining: number;
 
+  // Parameter properties (`private x` in the signature) are disallowed here
+  // by `erasableSyntaxOnly`, so fields are declared above and assigned here.
   constructor(
-    private emit: (text: string) => void,
-    private intervalMs = 30,
-    /** Backlog size (chars) that adds one extra word per tick. */
-    private catchupChars = 240,
-  ) {}
+    emit: (text: string) => void,
+    intervalMs = 110,
+    catchupChars = 280,
+    maxWordsPerTick = 3,
+    primeChars = 200,
+  ) {
+    this.emit = emit;
+    this.intervalMs = intervalMs;
+    this.catchupChars = catchupChars;
+    this.maxWordsPerTick = maxWordsPerTick;
+    this.primeChars = primeChars;
+    this.primeRemaining = primeChars;
+  }
 
   push(text: string) {
     if (!text) return;
-    const wasIdle = this.timer === null;
     this.queue += text;
+    // Fast start: while the turn's prime budget remains, reveal text the moment
+    // it arrives (network-speed, unpaced) so the opening doesn't drip. Pacing
+    // begins once the budget is spent. Overshoot is fine — prime is a floor on
+    // how much to reveal fast, not a hard cap.
+    if (this.primeRemaining > 0) {
+      const out = this.queue;
+      this.queue = "";
+      this.primeRemaining -= out.length;
+      this.emit(out);
+      return;
+    }
+    const wasIdle = this.timer === null;
     if (wasIdle) {
       // Emit the first word synchronously — time-to-first-word matters more
       // for perceived responsiveness than perfectly even pacing.
@@ -51,10 +89,13 @@ export class StreamSmoother {
     }
   }
 
-  /** Discard everything still queued (stream aborted) and stop the timer. */
+  /** Discard everything still queued (stream aborted) and stop the timer. Also
+   *  rearms the fast-start budget — callers invoke this at the start of each
+   *  turn, so the next turn's opening reveals fast again. */
   cancel() {
     this.stopTimer();
     this.queue = "";
+    this.primeRemaining = this.primeChars;
   }
 
   private stopTimer() {
@@ -69,7 +110,10 @@ export class StreamSmoother {
       this.stopTimer();
       return;
     }
-    const words = 1 + Math.floor(this.queue.length / this.catchupChars);
+    const words = Math.min(
+      this.maxWordsPerTick,
+      1 + Math.floor(this.queue.length / this.catchupChars),
+    );
     let out = "";
     for (let i = 0; i < words && this.queue; i++) {
       const m = WORD_RE.exec(this.queue);

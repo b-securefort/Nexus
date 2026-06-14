@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useAppStore } from '../store/useAppStore';
 
@@ -88,6 +88,24 @@ describe('ChatWindow', () => {
     });
     render(<ChatWindow />);
     expect(screen.getByRole('status', { name: /thinking/i })).toBeInTheDocument();
+  });
+
+  it('shows a "Thinking" label and counts up while reasoning', () => {
+    vi.useFakeTimers();
+    useAppStore.setState({
+      isStreaming: true,
+      streamingContent: '',
+      streamingSegments: [],
+      messages: [{ id: 1, role: 'user', content: 'Hello', created_at: '' }],
+    });
+    render(<ChatWindow />);
+    const status = screen.getByRole('status', { name: /thinking/i });
+    expect(status.textContent).toMatch(/Thinking…/);
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(status.textContent).toMatch(/Thinking 3s/);
+    vi.useRealTimers();
   });
 
   it('hides thinking indicator once streaming content arrives', () => {

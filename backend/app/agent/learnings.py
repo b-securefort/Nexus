@@ -471,6 +471,20 @@ def retrieve_relevant_learnings(
     if top_k <= 0:
         return []
 
+    engine = get_engine()
+
+    # Fast path: when there are no learnings to retrieve, skip the embedding
+    # network round-trip entirely. This call sits on the critical path of every
+    # chat turn (inside _compose_system_prompt, before the model streams), so on
+    # an empty table — common in dev and early in a deployment — it was adding a
+    # full Azure embeddings RTT to time-to-first-token for nothing.
+    with engine.connect() as conn:
+        learning_count = conn.execute(
+            text("SELECT COUNT(*) FROM agent_learnings")
+        ).scalar() or 0
+    if learning_count == 0:
+        return []
+
     # ── Dense via vec0 (best-effort) ──────────────────────────────────────
     qvec = None
     try:
@@ -478,7 +492,6 @@ def retrieve_relevant_learnings(
     except Exception as e:
         logger.warning("Learnings retrieval — embed_query failed: %s", e)
 
-    engine = get_engine()
     with engine.connect() as conn:
         vec_rowids: list[int] = []
         vec_distances: dict[int, float] = {}

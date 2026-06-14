@@ -76,19 +76,26 @@ export function WeeklyBudgetIndicator({ refreshSignal }: Props) {
     return null;
   }
 
-  const frac = budget.remaining_fraction ?? 0;
-  const pct = frac * 100;
+  // Consumption gauge: progress INCREASES as usage is spent (fills up), like
+  // the context-usage gauge. usedFrac = 1 − remaining; clamped so overspend
+  // shows a full ring rather than overflowing.
+  const usedFrac = Math.max(0, Math.min(1, 1 - (budget.remaining_fraction ?? 0)));
+  const pct = usedFrac * 100;
   const pctRounded = Math.round(pct);
+  // Credits consumed against the cap (= spend + carried-over debt).
+  const usedUsd = (budget.cap_usd ?? 0) - (budget.remaining_usd ?? 0);
 
   // SVG circular progress (mirrors ContextUsageIndicator's geometry for a
   // consistent look in the composer row).
   const radius = 7;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (frac * circumference);
+  const offset = circumference - (usedFrac * circumference);
 
-  // Inverted bands: low remaining = bad.
+  // More consumed = warmer colour (matches the context-usage gauge convention).
   const ringColor =
-    frac <= 0.1 ? "stroke-danger" : frac <= 0.3 ? "stroke-warning" : "stroke-accent-light";
+    usedFrac >= 0.9 ? "stroke-danger" : usedFrac >= 0.7 ? "stroke-warning" : "stroke-accent-light";
+  const barColor =
+    usedFrac >= 0.9 ? "bg-danger" : usedFrac >= 0.7 ? "bg-warning" : "bg-accent-light";
 
   return (
     <div ref={containerRef} className="relative inline-block">
@@ -114,7 +121,7 @@ export function WeeklyBudgetIndicator({ refreshSignal }: Props) {
             style={{ transition: "stroke-dashoffset 300ms ease" }}
           />
         </svg>
-        <span>{credits(budget.remaining_usd)} credits left</span>
+        <span>{credits(usedUsd)} / {credits(budget.cap_usd)} credits used</span>
       </button>
 
       {open && (
@@ -141,21 +148,16 @@ export function WeeklyBudgetIndicator({ refreshSignal }: Props) {
           </div>
 
           <p className="text-xs text-base-300 mb-1">
-            {credits(budget.remaining_usd)} of {credits(budget.cap_usd)} credits remaining ({pctRounded}%)
+            {credits(usedUsd)} of {credits(budget.cap_usd)} credits used ({pctRounded}%)
           </p>
           <p className="text-[11px] text-base-500 mb-2">
-            Usage credits drawn from your weekly cap — not context usage.
+            Usage credits consumed against your weekly cap — not context usage.
             Overspend carries into next week.
           </p>
 
-          {/* Remaining bar (fills with what's LEFT) */}
+          {/* Consumption bar (fills as usage is spent) */}
           <div className="flex h-2 w-full rounded-full overflow-hidden bg-base-800 mb-3">
-            <div
-              style={{ width: `${pct}%` }}
-              className={
-                frac <= 0.1 ? "bg-danger" : frac <= 0.3 ? "bg-warning" : "bg-accent-light"
-              }
-            />
+            <div style={{ width: `${pct}%` }} className={barColor} />
           </div>
 
           <div className="space-y-1 text-xs">

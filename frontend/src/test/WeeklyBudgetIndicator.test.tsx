@@ -41,13 +41,13 @@ describe('WeeklyBudgetIndicator', () => {
     const user = userEvent.setup();
     render(<WeeklyBudgetIndicator />);
 
-    // $15 remaining → 1,500 credits; $20 cap → 2,000 credits (1 credit = $0.01)
-    expect(await screen.findByText(/1,500 credits left/)).toBeInTheDocument();
+    // $5 used of $20 cap → 500 / 2,000 credits used, 25% (1 credit = $0.01)
+    expect(await screen.findByText(/500 \/ 2,000 credits used/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /show weekly budget/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Weekly budget')).toBeInTheDocument();
-    expect(screen.getByText(/1,500 of 2,000 credits remaining \(75%\)/)).toBeInTheDocument();
+    expect(screen.getByText(/500 of 2,000 credits used \(25%\)/)).toBeInTheDocument();
     expect(screen.getByText('Spent this week')).toBeInTheDocument();
   });
 
@@ -55,7 +55,7 @@ describe('WeeklyBudgetIndicator', () => {
     vi.mocked(usageApi.fetchWeeklyBudget).mockResolvedValue(enabled);
     const user = userEvent.setup();
     render(<WeeklyBudgetIndicator />);
-    await screen.findByText(/credits left/);
+    await screen.findByText(/credits used/);
     await user.click(screen.getByRole('button', { name: /show weekly budget/i }));
     expect(screen.queryByText('Carried-over debt')).not.toBeInTheDocument();
   });
@@ -69,7 +69,7 @@ describe('WeeklyBudgetIndicator', () => {
     });
     const user = userEvent.setup();
     render(<WeeklyBudgetIndicator />);
-    await screen.findByText(/credits left/);
+    await screen.findByText(/credits used/);
     await user.click(screen.getByRole('button', { name: /show weekly budget/i }));
     expect(screen.getByText('Carried-over debt')).toBeInTheDocument();
     expect(screen.getByText(/−250/)).toBeInTheDocument();  // $2.50 → 250 credits

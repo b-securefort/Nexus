@@ -986,6 +986,28 @@ unless clamped); accepted that underspend never rolls forward and multi-week com
 debt is unrepresentable — both immaterial because the graceful stop keeps overspend to one
 iteration.
 
+### 2026-06-14 — execute_script is an Azure-credential-free zone
+
+`execute_script` deliberately keeps the user's ARM token out of its subprocess
+env (unlike `az_cli`'s `_az_env`) and sets `AZURE_CONFIG_DIR` to a fresh
+per-invocation throwaway dir, so a script's `az` finds no cached login and fails
+closed identically in dev and prod — Azure work must flow through `az_cli`, the
+only path that carries identity behind the blocked-prefix / risk-floor /
+credential-masking guards. The rejected alternative, symmetric injection (hand
+scripts the user token like `az_cli`), was unacceptable because an approved
+script is an opaque blob that could exfiltrate the bearer token to the output
+sandbox or run `az role assignment create`, bypassing every `az_cli` guard —
+expanding the token's blast radius from one reviewed command to anything an
+approved script does. A test guard asserts `AZURE_ACCESS_TOKEN` never enters the
+script env so a future "make it symmetric" PR can't silently regress it; and
+because `AZURE_CONFIG_DIR` cannot stop `az login --identity` from reaching IMDS,
+any server managed identity added later (e.g. for a separate Azure vector DB)
+must be data-plane-scoped only, never granted ARM/management rights.
+**Trade-off**: a script that genuinely needs multi-step `az` work can't do it
+inline — it must decompose into discrete `az_cli` calls — accepted because that
+is exactly what restores per-command review, masking, and user attribution.
+Closes hardening backlog #19.
+
 ---
 
 ## 6. Operations

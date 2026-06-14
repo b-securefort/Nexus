@@ -14,10 +14,12 @@ abuse passed an inline command. Removing the inline surface removes the
 abuse class structurally.
 """
 
+import hashlib
 import logging
 import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Generator
 
@@ -139,9 +141,21 @@ def _build_cmd(script_path: Path) -> list[str]:
     raise RuntimeError(f"unsupported script extension: {ext}")
 
 
-def _shell_env() -> dict[str, str]:
+def _shell_env(az_config_dir: str | None = None) -> dict[str, str]:
     """Minimal env for the script subprocess. Matches the spirit of the §5
     2026-05-21 _run_az allowlist — strip everything that isn't necessary.
+
+    Azure-credential-free zone (DESIGN.md §5 2026-06-14, hardening #19):
+    execute_script is intentionally NOT an Azure-auth path. Unlike the az tools'
+    `_az_env()`, the user's ARM token is never injected here — a script is an
+    opaque approved blob that could exfiltrate the bearer token or run guard-free
+    `az role assignment create`. Azure work must flow through `az_cli`, the only
+    path carrying identity behind the blocked-prefix / risk-floor / masking
+    guards. To make that fail-closed identically in dev and prod (not merely
+    because the prod box happens to be credential-free), `AZURE_CONFIG_DIR` is
+    pointed at a fresh per-invocation throwaway dir so a script's `az` finds no
+    cached login — and any login a script *does* perform (e.g. `az login
+    --identity` against a future server MI) cannot leak into the next script.
     """
     keys = (
         "PATH", "PATHEXT", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
@@ -151,6 +165,8 @@ def _shell_env() -> dict[str, str]:
     )
     env = {k: v for k, v in os.environ.items() if k in keys}
     env["TERM"] = "dumb"
+    if az_config_dir is not None:
+        env["AZURE_CONFIG_DIR"] = az_config_dir
     return env
 
 
@@ -197,6 +213,26 @@ class ExecuteScriptTool(Tool):
         text = data[:max_bytes].decode("utf-8", errors="replace")
         text += _review_truncation_marker(max_bytes, len(data))
         return f"execute script {label}:\n{text}", True
+
+    def review_fingerprint(self, func_args: dict) -> str | None:
+        """sha256 of the FULL resolved script bytes — the approve→execute TOCTOU
+        guard (hardening #20). The orchestrator captures this at approval time and
+        re-checks it just before execution; a mismatch means the file under
+        output/scripts/ changed in the window (a later generate_file overwrite, a
+        concurrent turn, or an injection swapping the reviewed script) and the run
+        is aborted. Full bytes, not the 16 KB reviewer / 64 KB human window, so a
+        change in the un-displayed tail is still caught. Returns None on any
+        resolution/read error — the execute path's own _resolve_script surfaces a
+        clean 'not found' instead, and a None approval-time fingerprint disables
+        the check rather than false-aborting."""
+        raw_path = func_args.get("path") or func_args.get("script") or func_args.get("file") or ""
+        script_path, err = _resolve_script(raw_path)
+        if err or script_path is None:
+            return None
+        try:
+            return hashlib.sha256(script_path.read_bytes()).hexdigest()
+        except OSError:
+            return None
 
     def risk_floor(self, func_args: dict) -> str | None:
         """Floor an over-window (unreviewable-length) script to the literal tier
@@ -283,7 +319,12 @@ class ExecuteScriptTool(Tool):
             return err
 
         cmd = _build_cmd(script_path)
-        env = _shell_env()
+        # Fresh throwaway AZURE_CONFIG_DIR per run (DESIGN.md §5 2026-06-14):
+        # an empty config dir makes a script's `az` find no cached login, and a
+        # per-invocation dir means no login performed by one script survives to
+        # the next. Removed in the finally below regardless of outcome.
+        az_config_dir = tempfile.mkdtemp(prefix="nexus-script-az-")
+        env = _shell_env(az_config_dir=az_config_dir)
 
         try:
             # The shared runner owns the lifecycle: killable process group,
@@ -302,6 +343,8 @@ class ExecuteScriptTool(Tool):
             err = f"Error: {e}"
             yield err
             return err
+        finally:
+            shutil.rmtree(az_config_dir, ignore_errors=True)
 
         # returncode!=0 guard: a clean exit that races the watchdog is a success.
         if res.timed_out and res.returncode != 0:

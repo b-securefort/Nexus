@@ -72,6 +72,16 @@ class TestDenialIsTerminal:
         assert status == "success"
         assert is_error is False
 
+    def test_integrity_failure_is_terminal_not_retryable(self):
+        # #20: a fingerprint mismatch is terminal/non-retryable (is_error=False)
+        # like a denial, so it can neither feed the retry escalation nor be
+        # mistaken for a success-after-failure learning trigger.
+        status, is_error = _tool_control_outcome(
+            approval_denied=False, tool_result="ok-looking text", integrity_failed=True
+        )
+        assert status == "denied"
+        assert is_error is False
+
 
 class TestRetryNeverFiresOnDenial:
     def test_retry_block_condition_excludes_denial(self):

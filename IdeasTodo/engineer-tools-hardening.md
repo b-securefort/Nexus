@@ -75,13 +75,31 @@ Status legend: ☐ open · ☑ done · ⊘ demoted
   `render_for_human` (64 KB) / `render_command_full` (uncapped); new
   `GET /api/approvals/{id}/command`. DONE 2026-06-12. (Reason-line on the card was
   reverted — contradicts "reason is audit-only" decision, models.py:103.)
-- ☐ **#19** Identity confusion — `execute_script`'s `az` calls run as the SERVER's
+- ☑ **#19** Identity confusion — `execute_script`'s `az` calls ran as the SERVER's
   `az login`, not the user's ARM token (`_shell_env` omits `AZURE_ACCESS_TOKEN`),
-  while `az_cli` injects it. Privilege-escalation + audit-attribution gap. NEEDS A
-  DESIGN DECISION before code.
-- ☐ **#20** TOCTOU between review and execution — reviewer reads script body at
-  approval time, executor re-reads from disk at run time. Cheap fix: hash the
-  reviewed bytes on the approval, re-check before execute.
+  while `az_cli` injects it. **Decided 2026-06-14 (§5): Option B — execute_script is
+  an Azure-credential-free zone, NOT symmetric injection.** Rejected handing scripts
+  the user token (opaque blob → token exfil + guard-free `role assignment create`,
+  bypassing blocked-prefix/floor/masking). Code: `_shell_env` still omits the ARM
+  token (now intentional + test-guarded) AND sets a fresh per-invocation throwaway
+  `AZURE_CONFIG_DIR` so a script's `az` fails closed identically in dev/prod. Binding
+  constraint on future-you: a server MI (e.g. separate Azure vector DB) must be
+  data-plane-scoped only — `AZURE_CONFIG_DIR` can't block `az login --identity` via
+  IMDS. DONE 2026-06-14.
+- ☑ **#20** TOCTOU between review and execution — reviewer reads script body at
+  approval time, executor re-reads from disk at run time. **Fixed 2026-06-14:**
+  duck-typed `review_fingerprint(func_args)` hook (sha256 of FULL script bytes),
+  resolved via `get_tool()` in `risk_review.py` (no core→bundle import, mirrors
+  `render_for_review`). Orchestrator captures the fingerprint at approval time in
+  the same coroutine frame as `render_for_human` and re-checks immediately before
+  `_gated_tool_execute`; mismatch → terminal NON-retryable abort
+  (`_INTEGRITY_FEEDBACK`, `integrity_failed` flag → `_tool_control_outcome`
+  returns `"denied"`/`is_error=False`, and skips the retry+learning chain so no
+  bogus success-learning fires). **In-memory, NO DB column** — execute resumes in
+  the create-coroutine, the approve action only signals an event, so no schema
+  change (stays reversible, below the §5 threshold). az_rest_api `body_file` (#13
+  surface) and the `@file` item can adopt the same hook as their own steps. DONE
+  2026-06-14.
 - ☐ **#23** No structured audit log of executed mutations — no immutable record of
   the *resolved* command/body that ran, who approved, and outcome.
 - ☐ **@file indirection** (spun out of #12): `az vm run-command invoke --scripts

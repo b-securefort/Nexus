@@ -430,6 +430,64 @@ class TestExecuteScriptTool:
         assert isinstance(result, str)
         assert "must be a positive integer" in result
 
+    def test_shell_env_never_carries_arm_token(self, monkeypatch):
+        """Regression lock for hardening #19 / DESIGN.md §5 2026-06-14:
+        execute_script is an Azure-credential-free zone. The user's ARM token
+        must NEVER reach a script's env (unlike az_cli's _az_env), even if the
+        token happens to be present in the process environment. A future
+        'make it symmetric with az_cli' change must trip this test."""
+        from app.tools.generic.execute_script import _shell_env
+
+        monkeypatch.setenv("AZURE_ACCESS_TOKEN", "eyJleaked")
+        env = _shell_env()
+        assert "AZURE_ACCESS_TOKEN" not in env, (
+            "#19: ARM token leaked into execute_script env — it must stay an "
+            "Azure-credential-free zone (use az_cli for Azure work)"
+        )
+
+    def test_shell_env_points_az_config_at_throwaway_dir(self):
+        """#19: AZURE_CONFIG_DIR must be redirected to a fresh empty dir so a
+        script's `az` finds no cached login (fails closed identically in dev and
+        prod). When a dir is supplied it must be honoured and start empty."""
+        import tempfile
+        from pathlib import Path
+        from app.tools.generic.execute_script import _shell_env
+
+        # Default (no dir passed) must not silently inherit the real ~/.azure.
+        assert "AZURE_CONFIG_DIR" not in _shell_env()
+
+        throwaway = tempfile.mkdtemp(prefix="nexus-test-az-")
+        try:
+            env = _shell_env(az_config_dir=throwaway)
+            assert env["AZURE_CONFIG_DIR"] == throwaway
+            assert not any(Path(throwaway).iterdir()), "az config dir must start empty"
+        finally:
+            import shutil
+            shutil.rmtree(throwaway, ignore_errors=True)
+
+    def test_review_fingerprint_tracks_body_changes(self):
+        """#20 approve→execute TOCTOU guard: review_fingerprint is a sha256 of the
+        FULL script bytes; rewriting the file changes the fingerprint, and a
+        missing file yields None (disables the check rather than false-aborting)."""
+        import hashlib
+        tool = get_tool("execute_script")
+
+        # Missing file -> None (no fingerprint to compare against).
+        assert tool.review_fingerprint({"path": "ghost.ps1", "reason": "t"}) is None
+
+        self._write_script("fp.ps1", "Write-Output 'A'")
+        try:
+            fp_a = tool.review_fingerprint({"path": "fp.ps1", "reason": "t"})
+            assert fp_a == hashlib.sha256(b"Write-Output 'A'").hexdigest()
+            # Overwrite in the approve->execute window: fingerprint must change.
+            self._write_script("fp.ps1", "Write-Output 'A'; Remove-Item -Recurse C:\\")
+            fp_b = tool.review_fingerprint({"path": "fp.ps1", "reason": "t"})
+            assert fp_b is not None and fp_b != fp_a, (
+                "#20: a body swap in the window must produce a different fingerprint"
+            )
+        finally:
+            self._cleanup("fp.ps1")
+
 
 class TestReadFileTool:
     """ReadFileTool — sandboxed to output/. Symmetric with generate_file."""

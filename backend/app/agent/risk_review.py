@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from openai import AzureOpenAI
 
 from app.agent import circuit_breaker
+from app.agent.usage_ledger import record_usage
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,30 @@ def _tool_render_for_review(
         return None
 
 
+def review_fingerprint(tool_name: str, func_args: dict) -> str | None:
+    """Return a tool-owned content fingerprint of what the reviewer/human approved,
+    or None if the tool exposes no `review_fingerprint` hook (hardening #20).
+
+    Used to close the approve→execute TOCTOU: a tool whose review resolves
+    *external mutable state* (a script body / `body_file` under the output/
+    sandbox) hashes those bytes so the orchestrator can re-check them immediately
+    before execution and abort if they changed. Reached through the registry —
+    no core→bundle import — mirroring `render_for_review`. Tools with in-memory-only
+    args (plain `az_cli`) return None → no check. Never raises."""
+    try:
+        from app.tools.base import get_tool
+
+        tool = get_tool(tool_name)
+        hook = getattr(tool, "review_fingerprint", None)
+        if hook is None:
+            return None
+        fp = hook(func_args)
+        return fp if isinstance(fp, str) and fp else None
+    except Exception as e:  # noqa: BLE001 — fingerprinting must never break the gate
+        logger.warning("review_fingerprint hook failed for %s: %s", tool_name, str(e)[:120])
+        return None
+
+
 def render_for_human(tool_name: str, func_args: dict) -> tuple[str, bool]:
     """Deterministic command for the human approval card (NO LLM): the resolved
     content up to `_HUMAN_COMMAND_WINDOW`, plus whether it was truncated (which
@@ -346,6 +371,7 @@ def assess_risk(tool_name: str, func_args: dict) -> RiskVerdict:
             timeout=settings.RISK_REVIEW_TIMEOUT_SECONDS,
         )
         circuit_breaker.record_success()
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         raw = resp.choices[0].message.content or "{}"
         parsed = json.loads(raw)
         llm_tier = str(parsed.get("risk", CAUTION)).lower()

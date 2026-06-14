@@ -20,7 +20,7 @@ from app.agent.circuit_breaker import CircuitOpenError, check as cb_check, recor
 from app.agent.compaction import get_original_task, load_compacted_history
 from app.agent.concurrency import get_user_semaphore, run_in_tool_executor
 from app.agent.questions import create_pending_question, wait_for_answer
-from app.agent.risk_review import assess_risk, render_for_human
+from app.agent.risk_review import assess_risk, render_for_human, review_fingerprint
 from app.agent.streaming import (
     sse_approval_required,
     sse_done,
@@ -58,7 +58,9 @@ from app.tools.base import (
     set_arm_token,
     set_conversation_id,
     set_skill_name,
+    set_user_oid,
 )
+from app.agent.usage_ledger import record_usage
 from app.tools.bundle import (
     bundle_context_prompts,
     bundle_prompt_fragments,
@@ -192,8 +194,22 @@ _DENIAL_AUTODENY_FEEDBACK = (
     "to accomplish this."
 )
 
+# Fed back when the approve→execute integrity check (hardening #20) fails: the
+# reviewed/approved bytes no longer match what is on disk at execution time. This
+# is terminal and NON-retryable — auto-retrying would just race the changed file
+# again. The model must regenerate the artifact and obtain a fresh approval, which
+# re-fingerprints from scratch.
+_INTEGRITY_FEEDBACK = (
+    "ABORTED — the approved content changed before it ran. The bytes you had "
+    "approved no longer match what is on disk, so execution was blocked to honour "
+    "exactly what the user reviewed. Do NOT reuse the prior approval. Re-generate "
+    "the artifact deterministically and request approval again."
+)
 
-def _tool_control_outcome(approval_denied: bool, tool_result: str) -> tuple[str, bool]:
+
+def _tool_control_outcome(
+    approval_denied: bool, tool_result: str, integrity_failed: bool = False
+) -> tuple[str, bool]:
     """Decide the control-flow outcome of a tool result.
 
     Returns ``(envelope_status, is_error)`` where ``envelope_status`` is one of
@@ -202,8 +218,14 @@ def _tool_control_outcome(approval_denied: bool, tool_result: str) -> tuple[str,
     ``is_error=False``, so it can never feed the retry escalation that routes the
     model around a refusal via another tool/path. (Approval timeouts remain
     errors but are not denials.)
+
+    An ``integrity_failed`` outcome (the #20 approve→execute fingerprint mismatch)
+    is likewise terminal/non-retryable — ``is_error=False`` so the retry escalation
+    can't re-race the changed file — but reuses the ``"denied"`` status since the
+    user-gated action did not proceed; the distinct ``_INTEGRITY_FEEDBACK`` text
+    in ``data`` tells the model *why* (changed, not refused).
     """
-    if approval_denied:
+    if approval_denied or integrity_failed:
         return "denied", False
     is_error = (
         tool_result.strip().startswith("Error")
@@ -339,6 +361,7 @@ def _summarize_tool_result_with_llm(tool_name: str, enveloped_result: str) -> st
             temperature=0.0,
             max_completion_tokens=600,
         )
+        record_usage(getattr(resp, "usage", None), settings.AZURE_OPENAI_DEPLOYMENT)  # aux spend → ledger
         compressed = (resp.choices[0].message.content or "").strip()
         if not compressed:
             return None
@@ -1707,6 +1730,9 @@ async def handle_chat(
     # Propagate the conversation id so a tool running in the executor thread can
     # register its subprocess for the Stop / disconnect kill switch (§5 2026-06-04).
     set_conversation_id(conversation.id)
+    # Propagate the user's oid so every completions call this turn (main loop +
+    # aux) can attribute its token usage to them in the spend ledger (§5 2026-06-14).
+    set_user_oid(user.oid)
 
     # 1. Persist user message
     user_msg = _save_message(
@@ -1946,6 +1972,14 @@ async def handle_chat(
                     "Token usage — prompt: %d (cached: %d, %.1f%%), completion: %d, total: %d",
                     prompt_tokens, cached, cache_pct, completion_tokens,
                     prompt_tokens + completion_tokens,
+                )
+                # Spend ledger: one row per main-loop completion, on the high
+                # deployment (§5 2026-06-14). Fail-soft — never breaks the turn.
+                record_usage(
+                    stream_usage,
+                    settings.chat_deployment,
+                    user_oid=user.oid,
+                    conversation_id=conversation.id,
                 )
                 if resting_usage is None:
                     # First LLM call: seed (1) a fallback gauge payload reflecting
@@ -2202,6 +2236,9 @@ async def handle_chat(
                 # refuses this approval-gated call. A denial is terminal — it
                 # must not feed the multi-strategy retry or the learning path.
                 approval_denied = False
+                # Per-call flag: set when the #20 approve→execute integrity check
+                # trips (approved bytes changed before they ran). Also terminal.
+                integrity_failed = False
 
                 if json_parse_error:
                     # Skip tool execution — feed the parse error back so the model
@@ -2277,6 +2314,14 @@ async def handle_chat(
                         # emits so the human sees the full payload immediately,
                         # independent of the review LLM (§5 2026-06-12).
                         rendered_command, command_truncated = render_for_human(func_name, func_args)
+                        # #20 approve→execute integrity: snapshot a fingerprint of
+                        # any external mutable state the review resolved (the script
+                        # body under output/scripts/). Captured here, in this same
+                        # coroutine frame, alongside the human-visible render; the
+                        # approve action only signals an event — execution resumes
+                        # below with these locals intact, so no DB column is needed.
+                        # None ⇒ tool exposes no such state (plain az_cli) ⇒ no check.
+                        approved_fingerprint = review_fingerprint(func_name, func_args)
                         approval = create_pending_approval(
                             session=session,
                             conversation_id=conversation.id,
@@ -2310,15 +2355,34 @@ async def handle_chat(
                         status = await wait_for_approval(approval.id)
 
                         if status == "approved":
-                            yield sse_tool_executing(call_id, func_name)
-                            tool_result = await _gated_tool_execute(
-                                user_oid=user.oid or "anonymous",
-                                tool=tool,
-                                func_args=func_args,
-                                user=user,
-                                call_id=call_id,
-                                chunk_sink=_stream_chunks,
-                            )
+                            # #20: re-fingerprint immediately before executing and
+                            # abort if the approved bytes changed in the window (a
+                            # later generate_file overwrite, a concurrent turn, or an
+                            # injection swapping the script). Only enforced when an
+                            # approval-time fingerprint existed; a None there leaves
+                            # the execute path's own resolution to surface a clean
+                            # 'not found' rather than a false abort.
+                            if (
+                                approved_fingerprint is not None
+                                and review_fingerprint(func_name, func_args) != approved_fingerprint
+                            ):
+                                logger.warning(
+                                    "Integrity check failed for %s (conv=%s): approved "
+                                    "content changed before execution — aborting.",
+                                    func_name, conversation.id,
+                                )
+                                integrity_failed = True
+                                tool_result = _INTEGRITY_FEEDBACK
+                            else:
+                                yield sse_tool_executing(call_id, func_name)
+                                tool_result = await _gated_tool_execute(
+                                    user_oid=user.oid or "anonymous",
+                                    tool=tool,
+                                    func_args=func_args,
+                                    user=user,
+                                    call_id=call_id,
+                                    chunk_sink=_stream_chunks,
+                                )
                         elif status == "denied":
                             # Terminal user refusal — not a retryable failure.
                             approval_denied = True
@@ -2357,10 +2421,13 @@ async def handle_chat(
                 for chunk in _stream_chunks:
                     yield sse_tool_output_chunk(call_id, chunk)
 
-                # Standardise output envelope. A user denial is its own terminal
-                # status — never "error" — so it cannot feed the multi-strategy
-                # retry (which routes around errors by trying other tools/paths).
-                envelope_status, is_error = _tool_control_outcome(approval_denied, tool_result)
+                # Standardise output envelope. A user denial and a #20 integrity
+                # abort are each terminal — never "error" — so neither can feed the
+                # multi-strategy retry (which routes around errors by trying other
+                # tools/paths, or here would just re-race the changed file).
+                envelope_status, is_error = _tool_control_outcome(
+                    approval_denied, tool_result, integrity_failed=integrity_failed
+                )
 
                 try:
                     parsed_data = json.loads(tool_result)
@@ -2483,10 +2550,13 @@ async def handle_chat(
                             drawio_attempt_count.pop(diag_filename, None)
 
                 # Multi-strategy retry: track failures and escalate
-                if approval_denied:
-                    # A user refusal is terminal: not a failure to retry (that
-                    # would route the model around the denial), and not a
-                    # success to learn from. Skip both paths entirely.
+                if approval_denied or integrity_failed:
+                    # A user refusal — or a #20 integrity abort — is terminal:
+                    # not a failure to retry (retrying would route around the
+                    # denial / re-race the changed file), and NOT a success to
+                    # learn from (nothing ran). Skip both paths entirely; the
+                    # is_error=False outcome must not reach the success-learning
+                    # branch below and schedule a bogus learning.
                     pass
                 elif _tool_has(func_name, "learning_eligible") and is_error:
                     # Let each enabled bundle react to the tool error (e.g. the
@@ -2641,6 +2711,7 @@ async def handle_chat(
                 **wrap_tuning,
             )
         resp = await asyncio.to_thread(_wrap_call)
+        record_usage(getattr(resp, "usage", None), settings.chat_deployment)  # wrap-up spend → ledger
         wrap_content = (resp.choices[0].message.content or "").strip()
     except Exception:
         logger.exception("Iteration-cap wrap-up call failed")

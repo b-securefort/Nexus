@@ -307,6 +307,7 @@ migration path (see §5 decision log).
 | **`agent_learnings`** | type (semantic\|procedural), category, tool_name, summary, details, status (provisional\|active\|archived\|rejected), validation_count, failure_count, judge_verdict_json, originating_conversation_id, content_hash, embed_model, last_validated_at, last_retrieved_at | orchestrator success-after-failure path (via `app/agent/learnings.py`) | `retrieve_relevant_learnings` (system-prompt build), `mark_learning_outcome` (post-tool-call) | active forever; archived rows retained for audit |
 | **`agent_learnings_vec`** *(virtual)* | vec0(float[1536]), joined by rowid==agent_learnings.id — same Azure OpenAI embedding deployment as KB | `learnings.reembed_dirty()` (inline after writes + lifespan sweep) | `retrieve_relevant_learnings` (vector stage) | n/a |
 | **`usage_events`** *(spend ledger)* | user_oid, conversation_id, deployment, prompt_tokens, cached_tokens, completion_tokens, created_at — one append-only row per LLM call; per-user spend is a windowed `SUM`, dollars derived at read time from a config price table (tokens+deployment stored, not dollars) | orchestrator (per LLM call, on `done`) | pre-flight cap gate + per-iteration check; admin/reporting API | **prune > 90 days** (sweeper) |
+| **`tool_executions`** *(audit log)* | user_oid, user_email, conversation_id *(plain nullable, **no cascade**)*, tool_name, rendered_command *(masked)*, review_fingerprint, outcome *(`success\|error\|denied\|blocked\|integrity_failed`)*, risk_level, reason, created_at — one append-only forensic row per terminal approval-gated tool attempt; denormalized so it stands alone after the conversation/user is deleted | orchestrator (terminal gated outcome, **fail-open**, `app/agent/audit.py`) | `superadmin`-gated `GET /api/audit` (read-only; **no update/delete API**) | **prune > `AUDIT_LOG_RETENTION_DAYS` (default 90)** (`_audit_log_prune`, the only deleter) |
 
 WAL mode is enabled on every new SQLite connection by
 [sqlite_vec_loader.py](../backend/app/db/sqlite_vec_loader.py) so periodic
@@ -1028,6 +1029,41 @@ reviewed-but-stale bytes; we rejected inlining the content into the command
 large-payload escaping corruption and command-line-length limits that
 `@file`/`body_file` exist to avoid. Closes hardening backlog "@file indirection".
 
+### 2026-06-15 — Append-only audit log of gated tool executions
+
+One `tool_executions` table records one row per terminal approval-gated tool attempt
+(`success|error|denied|blocked|integrity_failed`) with the masked rendered command,
+`review_fingerprint`, `risk_level`, the agent `reason`, and denormalized
+`user_oid`/`user_email`/`conversation_id`. The existing stores can't serve as a forensic
+record — `pending_approvals` is swept after 10 min and `messages.tool_calls_json` is masked,
+compacted, and cascade-deleted when the audited user deletes their own conversation — so the
+table denormalizes who/what/when to stand alone, keeps `conversation_id` as a plain nullable
+column (no cascade), and exposes no update/delete API (the `AUDIT_LOG_RETENTION_DAYS`-default-90
+prune is the only deleter). Writes are fail-open at the terminal outcome (a failed INSERT logs a
+WARNING, never blocks the tool) because this is a forensic aid for internal reviewers, not a
+compliance control anyone attests to.
+**Trade-off**: a crash between ARM dispatch and the post-execution INSERT loses that one
+`success`/`error` row (denials/blocks never dispatch, so they're crash-safe) and an incident
+surfacing past retention is unrecoverable — both accepted over a fail-closed write-ahead path
+that would turn an audit-DB hiccup into a mutation outage; rejected reusing
+`messages`/`pending_approvals` (mutable/ephemeral) and storing raw resolved bytes (reintroduces
+the §5 2026-06-13 plaintext-secret-at-rest sink).
+
+### 2026-06-15 — Superadmin Entra App Role gates audit-log read
+
+Add a `superadmin` Entra App Role — architect's full skill/tool set plus audit-log read — gated by
+a new `require_superadmin` dependency, extending (not replacing) the §5 2026-05-17 RoleAccessMap
+model through its hardcoded-defaults + App-Config seam. The reviewers who read the log must be a
+distinct, higher tier than the architects who can run destructive commands, and `superadmin` stays
+fail-closed (absent the explicit Entra role, no audit access — preserving "a config outage can only
+restrict, never escalate"); the read capability is checked against the JWT `roles` claim directly,
+so it survives an App Config map that omits the role.
+**Trade-off**: because `superadmin ⊇ architect ⊇ engineer`, a superadmin who runs a destructive
+command audits themselves (weak separation of duties) — accepted for a 2-person trusted team doing
+forensic, not compliance, review; rejected an audit-only capability decoupled from the tool ladder
+(true separation, more machinery than a 2-person team needs) and reusing `require_architect` (every
+architect-operator would become an auditor, erasing the reviewer/operator distinction).
+
 ---
 
 ## 6. Operations
@@ -1077,6 +1113,7 @@ cd frontend && npm test                       # 109 tests
 | KB reindex (Phase 2) | Diff per file by sha256; chunk + embed + upsert changed files | After each `sync_repo()` + on startup (background) |
 | Agent-learnings reembed | Embed any `agent_learnings` row with `embed_model IS NULL` (after orchestrator writes; also one batch sweep at startup after the legacy-learn.md migration) | Inline after each write (limit=1); batch of 200 at startup |
 | `_usage_ledger_prune` | Delete `usage_events` rows older than the longest reporting window (default 90 days) so the spend ledger doesn't grow unbounded | `USAGE_LEDGER_PRUNE_INTERVAL_SECONDS` (default 24 h) |
+| `_audit_log_prune` | Delete `tool_executions` rows older than `AUDIT_LOG_RETENTION_DAYS` (default 90) — the audit log's **only** deleter (no update/delete API); own window, separate from the usage ledger's | `AUDIT_LOG_PRUNE_INTERVAL_SECONDS` (default 24 h) |
 
 ### Health endpoints
 

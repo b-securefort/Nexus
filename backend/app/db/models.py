@@ -227,6 +227,59 @@ class UsageEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, nullable=False, index=True)
 
 
+class ToolExecution(SQLModel, table=True):
+    """Append-only forensic audit log of approval-gated tool attempts (DESIGN.md §5 2026-06-15).
+
+    One immutable row per *terminal* approval-gated tool call — whatever passed
+    through the `requires_approval` gate, whether it ran (`success`/`error`), was
+    `denied`, `blocked` by a safety prefix, or `integrity_failed` (#20 approve→execute
+    mismatch). This is the durable record the other stores cannot be: `pending_approvals`
+    is swept after ~10 min, and `messages.tool_calls_json` is masked, compacted, and
+    cascade-deleted when the audited user deletes their own conversation. So who/what/
+    when/outcome are denormalized onto the row and it stands alone — `conversation_id`
+    is a plain nullable column, NOT a cascading FK, so deleting the conversation (or the
+    user) never removes the evidence.
+
+    Forensic aid for the 1-2 `superadmin` reviewers reconstructing an incident
+    ("who deleted the DB, with what command"), NOT a compliance control: writes are
+    fail-open (a failed INSERT never blocks the tool, see app/agent/audit.py). There
+    is deliberately NO update or delete API — the ONLY deleter is the time-based
+    `_audit_log_prune` sweeper (AUDIT_LOG_RETENTION_DAYS), so an audited operator
+    cannot strip their own trail. Like `usage_events`, the table is created by
+    `SQLModel.metadata.create_all` — no lightweight migration for a brand-new table.
+    """
+    __tablename__ = "tool_executions"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    # Actor == self-approver: Nexus's approval gate is the same user clicking Allow
+    # on their own command under their own ARM token (§5 2026-05-15). There is no
+    # separate approver. `user_email` is denormalized because `user_oid` is an
+    # unreadable GUID and the `users` row may be gone by review time.
+    user_oid: str = Field(nullable=False, index=True)
+    user_email: str = Field(nullable=False)
+    # Plain nullable column, NOT a cascading FK — the row outlives the conversation.
+    conversation_id: Optional[int] = Field(default=None, index=True)
+    tool_name: str = Field(nullable=False, index=True)
+    # The MASKED human-card render (render_for_human → render_for_review hook), so
+    # secrets never land here in plaintext — the audit log is not a new
+    # credential-at-rest sink (§5 2026-06-13).
+    rendered_command: str = Field(nullable=False)
+    # #20/@file sha256 of resolved body/script bytes — proves WHICH file ran when
+    # the command is a pointer. None when the tool exposes no fingerprint hook.
+    review_fingerprint: Optional[str] = Field(default=None)
+    # Coarse outcome: success | error | denied | blocked | integrity_failed.
+    outcome: str = Field(nullable=False, index=True)
+    # Advisory risk verdict at approval time (§5 2026-06-04): safe|caution|destructive,
+    # or None when never assessed (e.g. auto-denied before the review ran).
+    risk_level: Optional[str] = Field(default=None)
+    # The generator's stated intent — the durable home the "reason is audit-only"
+    # claim always needed (pending_approvals.reason is swept after 10 min).
+    reason: Optional[str] = Field(default=None)
+    # Indexed: list queries order by it and the prune sweeper filters on it.
+    created_at: datetime = Field(default_factory=_utcnow, nullable=False, index=True)
+
+
 class PendingQuestion(SQLModel, table=True):
     """Persistent record of an `ask_user` tool call awaiting the user's answer.
 

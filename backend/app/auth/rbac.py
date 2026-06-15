@@ -42,6 +42,9 @@ class RoleAccess(TypedDict):
 #   engineer     → Default + Azure Engineer, full Azure execute access
 #   architect    → all shared skills, including both drawio specialists and the
 #                  structural-IR diagram persona + specialist
+#   superadmin   → architect's full skill/tool set PLUS forensic audit-log read
+#                  (the audit capability is gated by require_superadmin, not by a
+#                  tool/skill entry — see the superadmin entry added below the map)
 DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
     "__default__": {
         "skills": ["kb-searcher"],
@@ -137,6 +140,18 @@ DEFAULT_ACCESS_MAP: dict[str, RoleAccess] = {
             "patch_drawio_cell",
         ],
     },
+}
+
+# superadmin (DESIGN.md §5 2026-06-15) is a strict superset of architect: the same
+# skills/tools, so the reviewer tier can do everything an architect can. The audit
+# READ capability is enforced by `require_superadmin` in app/deps.py against the JWT
+# `roles` claim — independent of this map — so audit access survives even an App
+# Config map that omits superadmin. Built from architect to stay in sync by
+# construction. Deployers overriding DEFAULT_ACCESS_MAP via App Config should add a
+# superadmin entry so these users keep tool/skill access there too.
+DEFAULT_ACCESS_MAP["superadmin"] = {
+    "skills": list(DEFAULT_ACCESS_MAP["architect"]["skills"]),
+    "tools": list(DEFAULT_ACCESS_MAP["architect"]["tools"]),
 }
 
 # Sentinel key for users with no Entra App Role assigned.

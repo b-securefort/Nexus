@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from app.agent.approvals import create_pending_approval, update_approval_risk, wait_for_approval
 from app.agent.circuit_breaker import CircuitOpenError, check as cb_check, record_failure as cb_failure, record_success as cb_success
+from app.agent.audit import record_tool_execution
 from app.agent.compaction import get_original_task, load_compacted_history
 from app.agent.concurrency import get_user_semaphore, run_in_tool_executor
 from app.agent.questions import create_pending_question, wait_for_answer
@@ -2266,6 +2267,11 @@ async def handle_chat(
                 # Per-call flag: set when the #20 approve→execute integrity check
                 # trips (approved bytes changed before they ran). Also terminal.
                 integrity_failed = False
+                # Forensic audit context (§5 2026-06-15). Set ONLY inside the
+                # approval-gated branch (masked render + fingerprint + reason +
+                # risk verdict); stays None for non-gated tools so they write no
+                # audit row. Consumed once the terminal outcome is known, below.
+                audit_ctx: Optional[dict] = None
 
                 if json_parse_error:
                     # Skip tool execution — feed the parse error back so the model
@@ -2329,6 +2335,14 @@ async def handle_chat(
                             "Auto-denied %s (conv=%s) — denial limit reached this turn",
                             func_name, conversation.id,
                         )
+                        # Still a gated attempt — audit it. No review ran (risk
+                        # never assessed), so risk_level/fingerprint are None.
+                        audit_ctx = {
+                            "rendered_command": render_for_human(func_name, func_args)[0],
+                            "review_fingerprint": None,
+                            "reason": func_args.get("reason", "No reason provided"),
+                            "risk_level": None,
+                        }
                     else:
                         # Render the card immediately (risk "pending"), then run the
                         # independent advisory risk review off the event loop and
@@ -2377,6 +2391,17 @@ async def handle_chat(
                             rendered_command=rendered_command,
                             command_truncated=command_truncated,
                         )
+
+                        # Snapshot the forensic audit context now that the verdict
+                        # is known (§5 2026-06-15). The masked render + approval-time
+                        # fingerprint + reason + risk verdict are all in hand; the
+                        # row is written once the terminal outcome resolves below.
+                        audit_ctx = {
+                            "rendered_command": rendered_command,
+                            "review_fingerprint": approved_fingerprint,
+                            "reason": reason,
+                            "risk_level": verdict.risk_level,
+                        }
 
                         # Wait for approval
                         status = await wait_for_approval(approval.id)
@@ -2455,6 +2480,37 @@ async def handle_chat(
                 envelope_status, is_error = _tool_control_outcome(
                     approval_denied, tool_result, integrity_failed=integrity_failed
                 )
+
+                # Forensic audit log (§5 2026-06-15): one append-only row per
+                # terminal approval-gated attempt — whatever passed the
+                # requires_approval gate, whether it ran, was denied, blocked by a
+                # safety prefix, or aborted on an integrity mismatch. audit_ctx is
+                # set ONLY in the approval branch, so non-gated calls write nothing.
+                # Fail-open (record_tool_execution never raises).
+                if audit_ctx is not None:
+                    if integrity_failed:
+                        audit_outcome = "integrity_failed"
+                    elif approval_denied:
+                        audit_outcome = "denied"
+                    elif "is blocked for safety" in tool_result:
+                        # Safety-prefix rejection (§5 2026-05-15) — runs post-approval
+                        # and returns an Error; record it as its own forensic outcome
+                        # rather than a generic error (a credential-wipe attempt is
+                        # exactly what a reviewer wants flagged).
+                        audit_outcome = "blocked"
+                    else:
+                        audit_outcome = envelope_status  # "success" | "error"
+                    record_tool_execution(
+                        user_oid=user.oid or "anonymous",
+                        user_email=user.email or "",
+                        conversation_id=conversation.id,
+                        tool_name=func_name,
+                        rendered_command=audit_ctx["rendered_command"],
+                        outcome=audit_outcome,
+                        review_fingerprint=audit_ctx["review_fingerprint"],
+                        risk_level=audit_ctx["risk_level"],
+                        reason=audit_ctx["reason"],
+                    )
 
                 try:
                     parsed_data = json.loads(tool_result)

@@ -2,7 +2,7 @@
 # (2 slides · 4-minute talk · 16:9 widescreen)
 
 > Handoff note for the PPT-generating session:
-> Build a 2-slide 16:9 PowerPoint from this markdown using python-pptx, including the speaker notes.
+> Build a 2-slide 16:9 PowerPoint from this markdown, including the speaker notes.
 > Save as `Nexus_Executive_Overview.pptx`.
 
 # Design guidance for PPT

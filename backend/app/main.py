@@ -533,6 +533,7 @@ async def lifespan(app: FastAPI):
     sync_task = asyncio.create_task(start_periodic_sync())
     approval_task = asyncio.create_task(_approval_sweeper())
     usage_prune_task = asyncio.create_task(_usage_ledger_prune())
+    audit_prune_task = asyncio.create_task(_audit_log_prune())
     backup_task = None
     if settings.BACKUP_ENABLED:
         backup_task = asyncio.create_task(_backup_loop())
@@ -543,6 +544,7 @@ async def lifespan(app: FastAPI):
     sync_task.cancel()
     approval_task.cancel()
     usage_prune_task.cancel()
+    audit_prune_task.cancel()
     if backup_task:
         backup_task.cancel()
     # Tear down the dedicated tool executor (A2). cancel_futures stops anything
@@ -605,6 +607,43 @@ async def _usage_ledger_prune():
                     )
         except Exception as e:
             logger.error("Usage ledger prune error: %s", str(e))
+
+
+async def _audit_log_prune():
+    """Background task: drop tool_executions older than the retention window.
+
+    This sweeper is the audit log's ONLY deleter (DESIGN.md §5/§6 2026-06-15) —
+    there is no update/delete API, so an audited operator cannot strip their own
+    trail. Its window (`AUDIT_LOG_RETENTION_DAYS`) is deliberately separate from
+    the usage ledger's, so the audit trail can be retained independently of
+    spend telemetry. Sleeps first, like `_usage_ledger_prune`.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import delete as sa_delete
+
+    from app.db.engine import get_session
+    from app.db.models import ToolExecution
+
+    settings = get_settings()
+    interval = max(3600, settings.AUDIT_LOG_PRUNE_INTERVAL_SECONDS)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                days=settings.AUDIT_LOG_RETENTION_DAYS
+            )
+            with get_session() as session:
+                result = session.execute(
+                    sa_delete(ToolExecution).where(ToolExecution.created_at < cutoff)
+                )
+                session.commit()
+                if result.rowcount:
+                    logger.info(
+                        "Pruned %d tool_executions older than %d days",
+                        result.rowcount, settings.AUDIT_LOG_RETENTION_DAYS,
+                    )
+        except Exception as e:
+            logger.error("Audit log prune error: %s", str(e))
 
 
 async def _backup_loop():
@@ -672,6 +711,7 @@ def create_app() -> FastAPI:
     from app.api.learnings import router as learnings_router
     from app.api.usage import router as usage_router
     from app.api.users import router as users_router
+    from app.api.audit import router as audit_router
 
     app.include_router(health_router)
     app.include_router(chat_router)
@@ -680,6 +720,7 @@ def create_app() -> FastAPI:
     app.include_router(learnings_router)
     app.include_router(usage_router)
     app.include_router(users_router)
+    app.include_router(audit_router)
 
     # Prometheus metrics endpoint — gated to the `architect` Entra App Role.
     # Metrics expose request volumes and tool usage; treat them like other

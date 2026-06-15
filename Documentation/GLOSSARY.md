@@ -57,6 +57,8 @@
 | **Usage cap** | A per-user hard ceiling on Azure OpenAI spend over a fixed weekly window, stored as `users.credit_cap_usd` (NULL → Entra-role default), enforced pre-flight and at the top of each agent-loop iteration. | "quota", "rate limit", "credits" |
 | **Usage ledger** | The append-only `usage_events` table — one row per LLM call recording `user_oid`, deployment, and prompt/cached/completion token counts; current-window spend is a `SUM` over it, dollars derived at read time from a config price table. | "usage counter", "billing table", "token log" |
 | **Debt carryover** | The one-week rule that a user's prior-week overspend reduces the current week's available budget (`remaining = cap − last_week_overspend − this_week_spend`); debt-only — surplus never rolls forward. | "rollover", "banked credit" |
+| **Audit log** | The append-only `tool_executions` table — one immutable row per terminal approval-gated tool attempt (actor, masked command, outcome, risk verdict, fingerprint) — written fail-open and read only by `superadmin`, for post-incident forensic review. It has no update/delete API; the only deleter is the time-based prune. | "activity log", "approval history", `tool_calls_json` |
+| **Superadmin** | The top Entra App Role: architect's full tool/skill access plus audit-log read, held by the 1–2 designated incident reviewers. Enforced by `require_superadmin` against the JWT `roles` claim. | "admin", "architect", "approver", "superuser" |
 
 ---
 
@@ -77,6 +79,8 @@
 - One **Approval** → one **Risk assessment** (advisory; the review LLM verdict shown on the card, never a gate)
 - One **User** → one **Usage cap** (weekly; NULL → role default) → many **Usage ledger** rows
 - Current-window spend = `SUM` over a User's **Usage ledger** rows since the week start
+- One **User** → many **Audit log** rows (denormalized; the rows survive the User and the Conversation being deleted)
+- One **Approval** → at most one **Audit log** row (written at the gated call's terminal outcome; denials and blocks are logged too)
 
 ---
 
@@ -101,6 +105,7 @@
 | "skill" vs "command" | A **skill** is a Nexus agent persona (lives in KB, shown in UI). A **command** (`.claude/commands/*.md`) is a Claude Code IDE slash command. These are different systems serving different users — agent users vs developers. |
 | "tool" vs "tool call" | A **tool** is the registered Python class. A **tool call** is a specific invocation of it by the LLM, represented as JSON in `messages.tool_calls_json`. |
 | "approval" vs "question" | Both pause execution and wait for the user. **Approval** is binary (allow/deny a specific command). **Question** is multi-choice (gather intent before starting work). |
-| "reason" vs risk description | **`reason`** is the *generator's* stated intent, persisted on `pending_approvals` for audit only. The user-facing "what this command does" line on the Approval card is the **Risk assessment** description from the independent reviewer — not `reason`. |
+| "reason" vs risk description | **`reason`** is the *generator's* stated intent. It is copied to the **Audit log** (`tool_executions.reason`) as the durable forensic record; the copy on `pending_approvals.reason` is ephemeral (that row is swept after 10 min). Either way `reason` is audit-only — the user-facing "what this command does" line on the Approval card is the **Risk assessment** description from the independent reviewer, not `reason`. |
+| "audit" / "audit log" | Means a row in the append-only **Audit log** (`tool_executions`), the durable forensic store. Not the swept-after-10-min `pending_approvals` row, and not Azure's own activity log. |
 | "credit" / "AI credit" | The display unit for remaining **Usage cap** budget: USD × 100 (1 credit = $0.01), shown as whole numbers in the UI. Spend is stored as tokens+deployment in the **Usage ledger** and the cap is configured in USD — there is no stored "credit" quantity; the ×100 conversion is frontend-only. |
 | "usage" (cap vs gauge) | The **Usage cap** bounds *spend* (persisted, dollar-derived). The context gauge (§5 2026-06-06) shows *occupancy* (an unpersisted tiktoken estimate). Different numbers — never conflate. |

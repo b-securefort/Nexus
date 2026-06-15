@@ -129,6 +129,14 @@ class Settings(BaseSettings):
     USAGE_LEDGER_RETENTION_DAYS: int = 90
     USAGE_LEDGER_PRUNE_INTERVAL_SECONDS: int = 86400
 
+    # Forensic audit log (DESIGN.md §5/§6 2026-06-15) — one row per terminal
+    # approval-gated tool attempt. Its OWN retention window, deliberately decoupled
+    # from USAGE_LEDGER_* so telemetry can prune at 90d while the audit trail is
+    # raised independently. The `_audit_log_prune` sweeper is the table's ONLY
+    # deleter — there is no update/delete API.
+    AUDIT_LOG_RETENTION_DAYS: int = 90
+    AUDIT_LOG_PRUNE_INTERVAL_SECONDS: int = 86400
+
     # Entra ID
     ENTRA_TENANT_ID: str = ""
     ENTRA_API_CLIENT_ID: str = ""
